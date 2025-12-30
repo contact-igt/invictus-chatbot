@@ -104,8 +104,8 @@ export const deleteAiPromptService = async (id) => {
   try {
     const [result] = await db.sequelize.query(
       `
-    DELETE FROM ${tableNames.PROPMT}
-    WHERE source_id = ?
+    DELETE FROM ${tableNames.AIPROMPT}
+    WHERE id = ?
     `,
       { replacements: [id] }
     );

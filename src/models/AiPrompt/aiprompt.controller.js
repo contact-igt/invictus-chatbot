@@ -85,12 +85,13 @@ export const updatePromptActive = async (req, res) => {
       return res.status(400).json({ message: "prompt id required" });
     }
 
-    const activelist = await checkIsAnyActivePromptService();
-
-    if (activelist?.active_count > 0) {
-      return res.status(400).send({
-        message: "Only one prompt can be active",
-      });
+    if (is_active === "true") {
+      const activelist = await checkIsAnyActivePromptService();
+      if (activelist?.active_count > 0) {
+        return res.status(400).send({
+          message: "Only one prompt can be active",
+        });
+      }
     }
 
     await updatePromptActiveService(id, is_active);
