@@ -8,12 +8,13 @@ export const processKnowledgeUpload = async (
   type,
   source_url,
   text,
-  file,
   file_name
 ) => {
+  console.log("hhhhhhhhhhhhhhhh", text);
+
   const Query = `
   INSERT INTO ${tableNames?.KNOWLEDGESOURCE} 
-  (title , type , file_url , source_url , raw_text , file_name)
+  (title , type , source_url , raw_text , file_name)
   VALUES (?,?,?,?,?,?)`;
 
   const Query2 = ` 
@@ -23,7 +24,7 @@ export const processKnowledgeUpload = async (
 
   try {
     const [result] = await db.sequelize.query(Query, {
-      replacements: [title, type, file, source_url, text, file_name],
+      replacements: [title, type, source_url, text, file_name],
     });
 
     const sourceId = result;
@@ -43,7 +44,7 @@ export const processKnowledgeUpload = async (
 export const listKnowledgeService = async () => {
   try {
     const [result] = await db.sequelize.query(`
-    SELECT id, title, type, source_url, file_url, file_name , created_at
+    SELECT id, title, type, source_url,  file_name , created_at
     FROM ${tableNames.KNOWLEDGESOURCE}
     ORDER BY created_at DESC
     `);

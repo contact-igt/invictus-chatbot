@@ -23,10 +23,10 @@ export const KnowledgeSourcesTable = (sequelize, Sequelize) => {
       allowNull: true,
     },
 
-    file_url: {
-      type: Sequelize.TEXT,
-      allowNull: true, // cloudinary
-    },
+    // file_url: {
+    //   type: Sequelize.TEXT,
+    //   allowNull: true, // cloudinary
+    // },
 
     source_url: {
       type: Sequelize.TEXT,
@@ -37,6 +37,8 @@ export const KnowledgeSourcesTable = (sequelize, Sequelize) => {
       type: Sequelize.TEXT,
       allowNull: false, // extracted content
     },
+
+
 
     status: {
       type: Sequelize.ENUM("active", "inactive"),
