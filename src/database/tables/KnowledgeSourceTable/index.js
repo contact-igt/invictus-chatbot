@@ -25,12 +25,12 @@ export const KnowledgeSourcesTable = (sequelize, Sequelize) => {
 
     source_url: {
       type: Sequelize.TEXT,
-      allowNull: true, // website
+      allowNull: true,
     },
 
     raw_text: {
       type: Sequelize.TEXT,
-      allowNull: false, // extracted content
+      allowNull: false,
     },
 
     status: {
