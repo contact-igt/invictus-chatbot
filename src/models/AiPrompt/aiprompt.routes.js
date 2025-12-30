@@ -10,6 +10,7 @@ import {
 
 const router = express.Router();
 
+
 router.post("/prompt", uploadAiPrompt);
 router.get("/prompts", listAiPrompt);
 router.get("/prompt/:id", getAiPromptById);
