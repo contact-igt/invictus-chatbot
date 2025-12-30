@@ -42,6 +42,9 @@ app.get("/", (req, res) => {
 await db.sequelize.sync();
 console.log("DB connected");
 
-app.listen(8000, "0.0.0.0", () => {
-  console.log("🚀 Server running on 8000");
+
+
+const PORT = process.env.PORT || 8000;
+app.listen(PORT, () => {
+  console.log("✅ Server running on", PORT);
 });
