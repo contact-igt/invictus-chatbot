@@ -2,6 +2,7 @@ import { cleanText } from "../../utils/cleanText.js";
 import {
   checkIsAnyActivePromptService,
   deleteAiPromptService,
+  getActivePromptService,
   getAiPromptByIdService,
   listAiPromptService,
   processAiPromptUpload,
@@ -108,5 +109,19 @@ export const deleteAiPrompt = async (req, res) => {
     res.json({ message: "Propmt deleted successfully" });
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+};
+
+export const getActivePromptController = async (req, res) => {
+  try {
+    const statuspropmt = await getActivePromptService();
+    return res.status(200).send({
+      message: "sucess",
+      data: statuspropmt,
+    });
+  } catch (err) {
+    return res.status(500).send({
+      message: err?.message,
+    });
   }
 };

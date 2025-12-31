@@ -75,8 +75,6 @@ export const checkIsAnyActivePromptService = async () => {
       { replacements: ["true"] }
     );
 
-    
-
     return result[0];
   } catch (err) {
     throw err;
@@ -111,6 +109,19 @@ export const deleteAiPromptService = async (id) => {
     );
 
     return result;
+  } catch (err) {
+    throw err;
+  }
+};
+
+export const getActivePromptService = async () => {
+  const Query = `SELECT prompt FROM ${tableNames?.AIPROMPT} WHERE is_active = ? LIMIT 1`;
+
+  try {
+    const [result] = await db.sequelize.query(Query, {
+      replacements: ["true"],
+    });
+    return result[0]?.prompt;
   } catch (err) {
     throw err;
   }

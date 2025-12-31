@@ -5,6 +5,7 @@ import { searchKnowledgeChunks } from "../Knowledge/knowledge.search.js";
 import { getConversationMemory } from "../Messages/messages.memory.js";
 import { detectLanguageStyle } from "../../utils/detectLanguageStyle.js";
 import { buildChatHistory } from "../../utils/buildChatHistory.js";
+import { getActivePromptService } from "../AiPrompt/aiprompt.service.js";
 
 // const groq = new Groq({
 //   apiKey: process.env.GROQ_API_KEY,
@@ -151,77 +152,46 @@ export const getOpenAIReply = async (phone, userMessage) => {
       return "Hello. How can I help you?";
     }
 
+    const DEFAULT_SYSTEM_PROMPT = `  You are a WhatsApp support assistant.Reply briefly.Use the same language and typing style as the user.Be polite, calm, and helpful.If the required information is not available, say so politely.`;
+
+    // 1️⃣ Detect user style
     const style = detectLanguageStyle(userMessage);
+
+    // 2️⃣ Load conversation memory
     const memory = await getConversationMemory(phone, 4);
     const chatHistory = buildChatHistory(memory);
+
+    // 3️⃣ Get ACTIVE AI prompt from DB (or fallback)
+    const activePromptText = await getActivePromptService();
+
+    const basePrompt =
+      activePromptText && activePromptText.trim().length
+        ? activePromptText
+        : DEFAULT_SYSTEM_PROMPT;
+
     const chunks = await searchKnowledgeChunks(userMessage);
-    const context = chunks.join("\n\n");
+    const context =
+      chunks && chunks.length
+        ? chunks.join("\n\n")
+        : "No relevant knowledge available.";
 
+    // 5️⃣ Build FINAL system prompt
     const systemPrompt = `
-You are a WhatsApp support assistant.
+    ${basePrompt}
 
-CORE PRINCIPLE (NON-NEGOTIABLE):
-You are NOT a teacher or presenter.
-You are a human staff member chatting on WhatsApp.
+    UPLOADED KNOWLEDGE:
+    ${context} `;
 
-LANGUAGE & STYLE RULES (VERY IMPORTANT):
-- Reply in the EXACT SAME language and typing style as the user.
-- If the user types in English letters (Tanglish / Tenglish / Hinglish),
-  reply ONLY in English letters.
-- If the user types using native language letters,
-  reply ONLY using the same script.
-- NEVER translate.
-- NEVER switch scripts.
-- Mirror the user’s tone (casual → casual, polite → polite).
-
-ANSWER STYLE RULES:
-- WhatsApp spoken style only.
-- Short sentences.
-- 1–3 lines maximum.
-- No bullet points unless the user explicitly asks for a list.
-- No formal explanations.
-- No brochure / presentation tone.
-- Sound like a staff member helping, not an AI explaining.
-
-INTENT HANDLING RULES:
-- If user asks WHAT / DETAILS → give basic info only.
-- If user asks WHO → say who it is meant for.
-- If user asks WHY / USE / BENEFIT → explain value in simple terms.
-- If user asks HOW → explain steps briefly.
-- If it is a follow-up question → answer even shorter.
-- Do NOT repeat information already given unless asked again.
-
-KNOWLEDGE USAGE RULES:
-- Use ONLY the uploaded knowledge provided below.
-- Pick ONLY the part relevant to the question.
-- Do NOT dump all information.
-- Do NOT invent or assume anything.
-- If the exact answer is not available, politely say you don’t have that information.
-
-SENSITIVE TOPICS RULE:
-- If the user asks about price, payment, money, discounts, or budget:
-  → Say that the team/admin will assist.
-  → Keep it short and in the same language style.
-
-BEHAVIOR RULES:
-- No emojis.
-- No marketing language.
-- No over-explaining.
-- Be calm, helpful, and human.
-
-UPLOADED KNOWLEDGE:
-${context || "No relevant knowledge available."}
-`;
-
+    // 6️⃣ OpenAI call
     const response = await openai.chat.completions.create({
-      model: "gpt-4o-mini", // ✅ BEST
+      model: "gpt-4o-mini",
       messages: [
         { role: "system", content: systemPrompt },
         ...chatHistory,
         { role: "user", content: userMessage },
       ],
       temperature: 0.05,
-      max_tokens: 120, // 🔥 saves money
+      max_tokens: 120,
     });
 
     return response.choices[0].message.content.trim();
