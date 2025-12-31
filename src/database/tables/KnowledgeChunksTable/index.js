@@ -23,8 +23,16 @@ export const KnowledgeChunksTable = (sequelize, Sequelize) => {
 
     createdAt: {
       type: "TIMESTAMP",
+      allowNull: true,
       defaultValue: sequelize.literal("CURRENT_TIMESTAMP"),
       field: "created_at",
+    },
+
+    updatedAt: {
+      type: "TIMESTAMP",
+      allowNull: true,
+      defaultValue: sequelize.literal("CURRENT_TIMESTAMP"),
+      field: "updated_at",
     },
   });
 };
