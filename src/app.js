@@ -6,6 +6,7 @@ import db from "./database/index.js";
 import AuthWhatsappRouter from "./models/AuthWhatsapp/AuthWhatsapp.routes.js";
 import WhatsappMessageRouter from "./models/Messages/messages.routes.js";
 import KnowledgeRouter from "./models/Knowledge/knowledge.routes.js";
+import AiPropmtRouter from "./models/AiPrompt/aiprompt.routes.js"
 
 import dns from "dns";
 dns.setDefaultResultOrder("ipv4first");
@@ -32,7 +33,8 @@ app.use(
   "/api/whatsapp",
   AuthWhatsappRouter,
   WhatsappMessageRouter,
-  KnowledgeRouter
+  KnowledgeRouter,
+  AiPropmtRouter
 );
 
 app.get("/", (req, res) => {
@@ -42,10 +44,7 @@ app.get("/", (req, res) => {
 await db.sequelize.sync();
 console.log("DB connected");
 
-
-
 const PORT = process.env.PORT || 8000;
 app.listen(PORT, () => {
   console.log("✅ Server running on", PORT);
 });
-

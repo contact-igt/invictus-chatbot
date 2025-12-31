@@ -96,6 +96,7 @@ export const uploadKnowledge = async (req, res) => {
     }
 
     let finalText = "";
+    let sourceUrl = null;
 
     if (type === "text" || type === "file") {
       if (!text || text.trim().length < 10) {
@@ -109,6 +110,7 @@ export const uploadKnowledge = async (req, res) => {
         return res.status(400).json({ message: "URL required" });
       }
       finalText = await scrapeWebsiteText(source_url);
+      sourceUrl = source_url;
     }
 
     const cleanedText = cleanText(finalText);
@@ -116,7 +118,7 @@ export const uploadKnowledge = async (req, res) => {
     await processKnowledgeUpload(
       title,
       type,
-      source_url || null,
+      sourceUrl,
       cleanedText,
       file_name
     );

@@ -14,7 +14,7 @@ export const KnowledgeSourcesTable = (sequelize, Sequelize) => {
     },
 
     type: {
-      type: Sequelize.ENUM("text", "pdf", "doc", "docx", "url"),
+      type: Sequelize.ENUM("file", "text", "url"),
       allowNull: false,
     },
 
@@ -23,22 +23,15 @@ export const KnowledgeSourcesTable = (sequelize, Sequelize) => {
       allowNull: true,
     },
 
-    // file_url: {
-    //   type: Sequelize.TEXT,
-    //   allowNull: true, // cloudinary
-    // },
-
     source_url: {
       type: Sequelize.TEXT,
-      allowNull: true, // website
+      allowNull: true,
     },
 
     raw_text: {
       type: Sequelize.TEXT,
-      allowNull: false, // extracted content
+      allowNull: false,
     },
-
-
 
     status: {
       type: Sequelize.ENUM("active", "inactive"),

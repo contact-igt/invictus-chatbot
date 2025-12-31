@@ -10,12 +10,10 @@ export const processKnowledgeUpload = async (
   text,
   file_name
 ) => {
-  console.log("hhhhhhhhhhhhhhhh", text);
-
   const Query = `
   INSERT INTO ${tableNames?.KNOWLEDGESOURCE} 
   (title , type , source_url , raw_text , file_name)
-  VALUES (?,?,?,?,?,?)`;
+  VALUES (?,?,?,?,?)`;
 
   const Query2 = ` 
   INSERT INTO ${tableNames.KNOWLEDGECHUNKS}

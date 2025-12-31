@@ -5,6 +5,7 @@ import { whatsappAccountTable } from "./tables/WhatsappAccountTable/index.js";
 import { MessagesTable } from "./tables/MessagesTable/index.js";
 import { KnowledgeSourcesTable } from "./tables/KnowledgeSourceTable/index.js";
 import { KnowledgeChunksTable } from "./tables/KnowledgeChunksTable/index.js";
+import { AiPromptTable} from "./tables/AiPropmtTable/index.js";
 
 const dbconfig =
   ServerEnvironmentConfig?.server?.line === "production"
@@ -31,7 +32,8 @@ db.sequelize = sequelize;
 
 db.Whatsappaccount = whatsappAccountTable(sequelize, Sequelize);
 db.Messages = MessagesTable(sequelize, Sequelize);
-db.Messages = KnowledgeSourcesTable(sequelize, Sequelize);
-db.Messages = KnowledgeChunksTable(sequelize, Sequelize);
+db.KnowledgeSources = KnowledgeSourcesTable(sequelize, Sequelize);
+db.KnowledgeChunks = KnowledgeChunksTable(sequelize, Sequelize);
+db.AiPrompt = AiPromptTable(sequelize, Sequelize);
 
 export default db;
