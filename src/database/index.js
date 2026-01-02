@@ -5,7 +5,7 @@ import { whatsappAccountTable } from "./tables/WhatsappAccountTable/index.js";
 import { MessagesTable } from "./tables/MessagesTable/index.js";
 import { KnowledgeSourcesTable } from "./tables/KnowledgeSourceTable/index.js";
 import { KnowledgeChunksTable } from "./tables/KnowledgeChunksTable/index.js";
-import { AiPromptTable} from "./tables/AiPropmtTable/index.js";
+import { AiPromptTable } from "./tables/AiPropmtTable/index.js";
 
 const dbconfig =
   ServerEnvironmentConfig?.server?.line === "production"
@@ -13,6 +13,17 @@ const dbconfig =
     : ServerEnvironmentConfig?.server?.line === "development"
     ? DatabaseEnvironmentConfig?.development
     : DatabaseEnvironmentConfig?.local;
+
+// const sequelize = new Sequelize(
+//   dbconfig?.databse,
+//   dbconfig?.user,
+//   dbconfig?.password,
+//   {
+//     host: dbconfig?.host,
+//     dialect: "mysql",
+//     timezone: "+05:30",
+//   }
+// );
 
 const sequelize = new Sequelize(
   dbconfig?.databse,
@@ -22,8 +33,21 @@ const sequelize = new Sequelize(
     host: dbconfig?.host,
     dialect: "mysql",
     timezone: "+05:30",
+
+    dialectOptions: {
+      charset: "utf8mb4",
+    },
+
+    define: {
+      charset: "utf8mb4",
+      collate: "utf8mb4_unicode_ci",
+    },
+
+    logging: false,
   }
 );
+
+
 
 const db = {};
 
