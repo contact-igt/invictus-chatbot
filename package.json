@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "start:dev": "nodemon src/app.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "postinstall": "npx playwright install --with-deps"
   },
   "dependencies": {
     "@google-cloud/vision": "^5.3.4",
