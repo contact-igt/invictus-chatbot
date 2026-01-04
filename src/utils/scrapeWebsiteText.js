@@ -1,32 +1,43 @@
-import { chromium } from "playwright";
-import { cleanText } from "./cleanText.js";
+import axios from "axios";
+import * as cheerio from "cheerio";
 
 export const scrapeWebsiteText = async (url) => {
-  const browser = await chromium.launch({
-    headless: true,
-    args: [
-      "--no-sandbox",
-      "--disable-setuid-sandbox",
-      "--disable-dev-shm-usage",
-      "--disable-gpu",
-      "--single-process",
-    ],
+  const { data } = await axios.get(url, {
+    headers: {
+      "User-Agent": "Mozilla/5.0",
+    },
+    timeout: 30000,
   });
 
-  const page = await browser.newPage();
+  const $ = cheerio.load(data);
 
-  try {
-    await page.goto(url, {
-      waitUntil: "domcontentloaded", // safer than networkidle
-      timeout: 60000,
-    });
+  // 1️⃣ OpenGraph data (best for image + summary)
+  const og = {
+    title: $('meta[property="og:title"]').attr("content") || $("title").text(),
+    description:
+      $('meta[property="og:description"]').attr("content") ||
+      $('meta[name="description"]').attr("content") ||
+      "",
+    image: $('meta[property="og:image"]').attr("content") || "",
+  };
 
-    const text = await page.evaluate(() => {
-      return document.body.innerText;
-    });
+  // 2️⃣ Full page text
+  const text = $("body").text().replace(/\s+/g, " ").trim();
 
-    return cleanText(text);
-  } finally {
-    await browser.close();
-  }
+  // 3️⃣ Images
+  const images = [];
+  $("img").each((_, img) => {
+    const src = $(img).attr("src");
+    if (src && !src.startsWith("data:")) {
+      images.push(src.startsWith("http") ? src : new URL(src, url).href);
+    }
+  });
+
+  return {
+    title: og.title,
+    description: og.description,
+    mainImage: og.image,
+    text,
+    images,
+  };
 };
