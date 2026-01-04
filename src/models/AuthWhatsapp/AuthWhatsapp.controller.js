@@ -1,6 +1,8 @@
 import { sendTypingIndicator } from "../../utils/sendTypingIndicator.js";
 import { createUserMessageService } from "../Messages/messages.service.js";
 import { getOpenAIReply, sendWhatsAppMessage } from "./AuthWhatsapp.service.js";
+import { getAppSettingByKeyService } from "../AppSettings/appsetting.service.js";
+import { processConversationService } from "../Conversation/conversation.service.js";
 
 export const verifyWebhook = (req, res) => {
   const mode = req.query["hub.mode"];
@@ -38,7 +40,18 @@ export const receiveMessage = async (req, res) => {
     await sendTypingIndicator(messageId);
 
     // 3️⃣ Get AI reply (this takes time)
-    const reply = await getOpenAIReply(phone, text);
+
+    const isDetailsRequired = await getAppSettingByKeyService(
+      "contact_details"
+    );
+
+    let reply;
+
+    if (isDetailsRequired === "true") {
+      reply = await processConversationService(phone, text);
+    } else {
+      reply = await getOpenAIReply(phone, text);
+    }
 
     // 4️⃣ Save bot reply
     await createUserMessageService(null, phone, "bot", reply);

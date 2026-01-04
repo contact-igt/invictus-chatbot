@@ -2,10 +2,10 @@ import { tableNames } from "../../tableName.js";
 
 export const MessagesTable = (sequelize, Sequelize) => {
   return sequelize.define(tableNames?.MESSAGES, {
-    id: {
+
+    conversation_id: {
       type: Sequelize.INTEGER,
-      autoIncrement: true,
-      primaryKey: true,
+      allowNull: false,
     },
 
     wa_id: {
@@ -27,11 +27,13 @@ export const MessagesTable = (sequelize, Sequelize) => {
       type: Sequelize.TEXT,
       allowNull: false,
     },
+
     seen: {
       type: Sequelize.STRING,
       allowNull: false,
       defaultValue: "false",
     },
+
     createdAt: {
       type: "TIMESTAMP",
       allowNull: true,

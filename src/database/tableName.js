@@ -3,6 +3,11 @@ export const tableNames = {
   MESSAGES : "messages",
   KNOWLEDGESOURCE : "knowledge_sources",
   KNOWLEDGECHUNKS : "knowledge_chunks",
-  AIPROMPT : "ai_prompts"
+  AIPROMPT : "ai_prompts",
+  CONVERSATION : "conversations",
+  CONTACTS : "contacts",
+  APPSETTINGS : "app_settings"
+
+
 
 };

@@ -1,37 +1,26 @@
+import { type } from "os";
 import { tableNames } from "../../tableName.js";
 
-export const KnowledgeSourcesTable = (sequelize, Sequelize) => {
-  return sequelize.define(tableNames.KNOWLEDGESOURCE, {
-    title: {
+export const AppSettingTable = (sequelize, Sequelize) => {
+  return sequelize.define(tableNames.APPSETTINGS, {
+    label: {
       type: Sequelize.STRING,
       allowNull: false,
     },
-
-    type: {
-      type: Sequelize.ENUM("file", "text", "url"),
-      allowNull: false,
-    },
-
-    file_name: {
+    setting_key: {
       type: Sequelize.STRING,
-      allowNull: true,
-    },
-
-    source_url: {
-      type: Sequelize.TEXT,
-      allowNull: true,
-    },
-
-    raw_text: {
-      type: Sequelize.TEXT,
       allowNull: false,
+      unique: true,
     },
-
-    status: {
-      type: Sequelize.ENUM("active", "inactive"),
-      defaultValue: "active",
+    setting_value: {
+      type: Sequelize.STRING,
+      allowNull: false,
+      defaultValue: "false",
     },
-
+    description: {
+      type: Sequelize.TEXT,
+      allowNull: true,
+    },
     createdAt: {
       type: "TIMESTAMP",
       allowNull: true,

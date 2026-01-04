@@ -6,7 +6,7 @@ export const whatsappAccountTable = (sequelize, Sequelize) => {
       type: Sequelize.INTEGER,
       allowNull: true,
     },
-
+    
     phone_number_id: {
       type: Sequelize.STRING,
       allowNull: true,

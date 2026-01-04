@@ -1,35 +1,26 @@
 import { tableNames } from "../../tableName.js";
 
-export const KnowledgeSourcesTable = (sequelize, Sequelize) => {
-  return sequelize.define(tableNames.KNOWLEDGESOURCE, {
-    title: {
+export const ContactTable = (sequelize, Sequelize) => {
+  return sequelize.define(tableNames?.CONTACTS, {
+    phone: {
       type: Sequelize.STRING,
       allowNull: false,
+      unique: true,
     },
 
-    type: {
-      type: Sequelize.ENUM("file", "text", "url"),
-      allowNull: false,
-    },
-
-    file_name: {
+    name: {
       type: Sequelize.STRING,
       allowNull: true,
     },
 
-    source_url: {
-      type: Sequelize.TEXT,
+    email: {
+      type: Sequelize.STRING,
       allowNull: true,
     },
 
-    raw_text: {
-      type: Sequelize.TEXT,
-      allowNull: false,
-    },
-
-    status: {
-      type: Sequelize.ENUM("active", "inactive"),
-      defaultValue: "active",
+    clinic_name: {
+      type: Sequelize.STRING,
+      allowNull: true,
     },
 
     createdAt: {
