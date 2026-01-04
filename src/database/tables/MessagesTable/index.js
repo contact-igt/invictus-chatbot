@@ -2,11 +2,16 @@ import { tableNames } from "../../tableName.js";
 
 export const MessagesTable = (sequelize, Sequelize) => {
   return sequelize.define(tableNames?.MESSAGES, {
+    // id: {
+    //   type: Sequelize.INTEGER,
+    //   autoIncrement: true,
+    //   primaryKey: true,
+    // },
 
-    conversation_id: {
-      type: Sequelize.INTEGER,
-      allowNull: false,
-    },
+    // conversation_id: {
+    //   type: Sequelize.INTEGER,
+    //   allowNull: true,
+    // },
 
     wa_id: {
       type: Sequelize.STRING,

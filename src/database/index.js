@@ -17,16 +17,6 @@ const dbconfig =
     ? DatabaseEnvironmentConfig?.development
     : DatabaseEnvironmentConfig?.local;
 
-// const sequelize = new Sequelize(
-//   dbconfig?.databse,
-//   dbconfig?.user,
-//   dbconfig?.password,
-//   {
-//     host: dbconfig?.host,
-//     dialect: "mysql",
-//     timezone: "+05:30",
-//   }
-// );
 
 const sequelize = new Sequelize(
   dbconfig?.databse,
@@ -61,8 +51,7 @@ db.KnowledgeSources = KnowledgeSourcesTable(sequelize, Sequelize);
 db.KnowledgeChunks = KnowledgeChunksTable(sequelize, Sequelize);
 db.AiPrompt = AiPromptTable(sequelize, Sequelize);
 db.Conversation = ConversationsTable(sequelize, Sequelize);
-db.Contact = ContactTable(sequelize , Sequelize)
-db.AppSettings = AppSettingTable(sequelize , Sequelize)
-
+db.Contact = ContactTable(sequelize, Sequelize);
+db.AppSettings = AppSettingTable(sequelize, Sequelize);
 
 export default db;

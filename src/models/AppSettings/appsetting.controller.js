@@ -2,8 +2,9 @@ import {
   createAppSettingService,
   getAllAppSettingService,
   getAppSettingByIdService,
+  getAppSettingByKeyService,
   toggelAppSettingService,
-  updateAppSettingService,
+  // updateAppSettingService,
 } from "./appsetting.service.js";
 
 export const createAppSettingController = async (req, res) => {
@@ -31,36 +32,36 @@ export const createAppSettingController = async (req, res) => {
   }
 };
 
-export const updateAppSettingController = async (req, res) => {
-  const { setting_value, label, description } = req.body;
-  const { id } = req.params;
+// export const updateAppSettingController = async (req, res) => {
+//   const { setting_value, label, description } = req.body;
+//   const { id } = req.params;
 
-  if (!setting_value || !label) {
-    return res.status(400).send({
-      message: "Setting value or label required",
-    });
-  }
+//   if (!setting_value || !label) {
+//     return res.status(400).send({
+//       message: "Setting value or label required",
+//     });
+//   }
 
-  if (!id) {
-    return res.status(400).send({
-      message: "Setting id required",
-    });
-  }
+//   if (!id) {
+//     return res.status(400).send({
+//       message: "Setting id required",
+//     });
+//   }
 
-  try {
-    await updateAppSettingService(setting_value, label, description, id);
+//   try {
+//     await updateAppSettingService(setting_value, label, description, id);
 
-    return res.status(200).send({
-      message: "Setting updated successfully",
-    });
-  } catch (err) {
-    return res.status(500).send({
-      message: err?.message,
-    });
-  }
-};
+//     return res.status(200).send({
+//       message: "Setting updated successfully",
+//     });
+//   } catch (err) {
+//     return res.status(500).send({
+//       message: err?.message,
+//     });
+//   }
+// };
 
-export const getAllAppSettingController = async (req, res) => {
+export const getAllAppSettingsController = async (req, res) => {
   try {
     const response = await getAllAppSettingService();
 
@@ -91,7 +92,7 @@ export const getAppSettingByIdController = async (req, res) => {
   }
 };
 
-export const toggelAppSettingController = async (req, res) => {
+export const toggleAppSettingController = async (req, res) => {
   const { setting_value } = req.body;
   const { id } = req.params;
 
@@ -117,5 +118,20 @@ export const toggelAppSettingController = async (req, res) => {
     return res.status(500).send({
       message: err?.message,
     });
+  }
+};
+
+export const getAppSettingByKeyController = async (req, res) => {
+  const { setting_key } = req.query;
+
+  try {
+    const values = await getAppSettingByKeyService(setting_key);
+
+    return res.status(200).send({
+      message: "success",
+      data: values,
+    });
+  } catch (err) {
+    throw err;
   }
 };
