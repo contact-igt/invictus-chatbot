@@ -14,46 +14,46 @@ export const createAppSettingService = async (label, keyname, description) => {
   }
 };
 
-export const updateAppSettingService = async (
-  setting_value,
-  label,
-  description,
-  id
-) => {
-  const updateValues = [];
-  const updateFields = [];
+// export const updateAppSettingService = async (
+//   setting_value,
+//   label,
+//   description,
+//   id
+// ) => {
+//   const updateValues = [];
+//   const updateFields = [];
 
-  if (setting_value) {
-    updateFields.push(`setting_value = ?`);
-    updateValues.push(setting_value);
-  }
+//   if (setting_value) {
+//     updateFields.push(`setting_value = ?`);
+//     updateValues.push(setting_value);
+//   }
 
-  if (label) {
-    updateFields.push(`label = ?`);
-    updateValues.push(label);
-  }
+//   if (label) {
+//     updateFields.push(`label = ?`);
+//     updateValues.push(label);
+//   }
 
-  if (description) {
-    updateFields.push(`description = ?`);
-    updateValues.push(description);
-  }
+//   if (description) {
+//     updateFields.push(`description = ?`);
+//     updateValues.push(description);
+//   }
 
-  updateValues.push(id);
+//   updateValues.push(id);
 
-  const Query = `UPDATE ${tableNames?.APPSETTINGS} SET ${updateFields.join(
-    ", "
-  )} WHERE id = ? `;
+//   const Query = `UPDATE ${tableNames?.APPSETTINGS} SET ${updateFields.join(
+//     ", "
+//   )} WHERE id = ? `;
 
-  try {
-    const [result] = await db.sequelize.query(Query, {
-      replacements: updateValues,
-    });
+//   try {
+//     const [result] = await db.sequelize.query(Query, {
+//       replacements: updateValues,
+//     });
 
-    return result;
-  } catch (err) {
-    throw err;
-  }
-};
+//     return result;
+//   } catch (err) {
+//     throw err;
+//   }
+// };
 
 export const toggelAppSettingService = async (setting_value, id) => {
   const Query = `UPDATE ${tableNames?.APPSETTINGS} SET setting_value = ? WHERE id  = ?`;
@@ -97,7 +97,7 @@ export const getAppSettingByKeyService = async (setting_key) => {
     const [result] = await db.sequelize.query(Query, {
       replacements: [setting_key],
     });
-    return result[0];
+    return result[0]?.setting_value;
   } catch (err) {
     throw err;
   }
