@@ -152,7 +152,7 @@ export const getOpenAIReply = async (phone, userMessage) => {
       return "Hello. How can I help you?";
     }
 
-    const DEFAULT_SYSTEM_PROMPT = `  You are a WhatsApp support assistant.Reply briefly.Use the same language and typing style as the user.Be polite, calm, and helpful.If the required information is not available, say so politely.`;
+    const DEFAULT_SYSTEM_PROMPT = `You are a WhatsApp support assistant.Reply briefly.Use the same language and typing style as the user.Be polite, calm, and helpful.If the required information is not available, say so politely.`;
 
     // 1️⃣ Detect user style
     const style = detectLanguageStyle(userMessage);

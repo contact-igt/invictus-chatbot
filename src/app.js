@@ -6,7 +6,9 @@ import db from "./database/index.js";
 import AuthWhatsappRouter from "./models/AuthWhatsapp/AuthWhatsapp.routes.js";
 import WhatsappMessageRouter from "./models/Messages/messages.routes.js";
 import KnowledgeRouter from "./models/Knowledge/knowledge.routes.js";
-import AiPropmtRouter from "./models/AiPrompt/aiprompt.routes.js"
+import AiPropmtRouter from "./models/AiPrompt/aiprompt.routes.js";
+import ConversationRouter from "./models/Conversation/conversation.routes.js";
+import AppSettingRouter from "./models/AppSettings/appsetting.routes.js"
 
 import dns from "dns";
 dns.setDefaultResultOrder("ipv4first");
@@ -34,7 +36,9 @@ app.use(
   AuthWhatsappRouter,
   WhatsappMessageRouter,
   KnowledgeRouter,
-  AiPropmtRouter
+  AiPropmtRouter,
+  ConversationRouter,
+  AppSettingRouter
 );
 
 app.get("/", (req, res) => {

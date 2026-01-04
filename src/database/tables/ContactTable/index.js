@@ -1,42 +1,32 @@
 import { tableNames } from "../../tableName.js";
 
-export const MessagesTable = (sequelize, Sequelize) => {
-  return sequelize.define(tableNames?.MESSAGES, {
+export const ContactTable = (sequelize, Sequelize) => {
+  return sequelize.define(tableNames?.CONTACTS, {
     id: {
       type: Sequelize.INTEGER,
       autoIncrement: true,
       primaryKey: true,
     },
 
-    conversation_id: {
-      type: Sequelize.INTEGER,
+    phone: {
+      type: Sequelize.STRING,
       allowNull: false,
+      unique: true,
     },
 
-    wa_id: {
+    name: {
       type: Sequelize.STRING,
       allowNull: true,
     },
 
-    phone: {
+    email: {
       type: Sequelize.STRING,
-      allowNull: false,
+      allowNull: true,
     },
 
-    sender: {
-      type: Sequelize.ENUM("user", "bot", "admin"),
-      allowNull: false,
-    },
-
-    message: {
-      type: Sequelize.TEXT,
-      allowNull: false,
-    },
-
-    seen: {
+    clinic_name: {
       type: Sequelize.STRING,
-      allowNull: false,
-      defaultValue: "false",
+      allowNull: true,
     },
 
     createdAt: {

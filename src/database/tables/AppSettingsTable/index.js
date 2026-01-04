@@ -1,44 +1,26 @@
+import { type } from "os";
 import { tableNames } from "../../tableName.js";
 
-export const MessagesTable = (sequelize, Sequelize) => {
-  return sequelize.define(tableNames?.MESSAGES, {
-    id: {
-      type: Sequelize.INTEGER,
-      autoIncrement: true,
-      primaryKey: true,
-    },
-
-    conversation_id: {
-      type: Sequelize.INTEGER,
-      allowNull: false,
-    },
-
-    wa_id: {
-      type: Sequelize.STRING,
-      allowNull: true,
-    },
-
-    phone: {
+export const AppSettingTable = (sequelize, Sequelize) => {
+  return sequelize.define(tableNames.APPSETTINGS, {
+    label: {
       type: Sequelize.STRING,
       allowNull: false,
     },
-
-    sender: {
-      type: Sequelize.ENUM("user", "bot", "admin"),
-      allowNull: false,
-    },
-
-    message: {
+    setting_key: {
       type: Sequelize.TEXT,
       allowNull: false,
+      unique: true,
     },
-
-    seen: {
+    setting_value: {
       type: Sequelize.STRING,
       allowNull: false,
       defaultValue: "false",
     },
-
+    description: {
+      type: Sequelize.TEXT,
+      allowNull: true,
+    },
     createdAt: {
       type: "TIMESTAMP",
       allowNull: true,
