@@ -42,7 +42,7 @@ export const receiveMessage = async (req, res) => {
     // 3️⃣ Get AI reply (this takes time)
 
     const isDetailsRequired = await getAppSettingByKeyService(
-      "contact_details"
+      "collect_details"
     );
 
     let reply;

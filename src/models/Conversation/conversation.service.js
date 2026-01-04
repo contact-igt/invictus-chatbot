@@ -1,7 +1,7 @@
 import db from "../../database/index.js";
 import { tableNames } from "../../database/tableName.js";
 import { findUserMessageService } from "../Ai/ai.service.js";
-import { updateAppSettingService } from "../AppSettings/appsetting.service.js";
+import { toggelAppSettingService } from "../AppSettings/appsetting.service.js";
 import { addContactDetailService } from "../Contacts/contacts.service.js";
 
 const PROFESSIONAL_SYSTEM_PROMPT = `
@@ -43,7 +43,7 @@ const createConversation = async (phone) => {
 
 const updateState = async (phone, state) => {
   if (state === "CHAT_MODE") {
-    await updateAppSettingService("false", null, null, 1);
+    await toggelAppSettingService("false", 1);
   }
 
   await db.sequelize.query(

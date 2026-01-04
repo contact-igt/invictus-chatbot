@@ -55,8 +55,21 @@ export const updateAppSettingService = async (
   }
 };
 
+export const toggelAppSettingService = async (setting_value, id) => {
+  const Query = `UPDATE ${tableNames?.APPSETTINGS} SET setting_value = ? WHERE id  = ?`;
+
+  try {
+    const [result] = await db.sequelize.query(Query, {
+      replacements: [setting_value, id],
+    });
+    return result;
+  } catch (err) {
+    throw err;
+  }
+};
+
 export const getAllAppSettingService = async () => {
-  const Query = `SELECT label , setting_value , description , created_at FROM ${tableNames?.APPSETTINGS}`;
+  const Query = `SELECT id , label , setting_value , description , created_at FROM ${tableNames?.APPSETTINGS}`;
 
   try {
     const [result] = await db.sequelize.query(Query);
@@ -67,7 +80,7 @@ export const getAllAppSettingService = async () => {
 };
 
 export const getAppSettingByIdService = async (id) => {
-  const Query = `SELECT label , setting_value , description , created_at  FROM ${tableNames?.APPSETTINGS} WHERE id = ?`;
+  const Query = `SELECT id , label , setting_value , description , created_at  FROM ${tableNames?.APPSETTINGS} WHERE id = ?`;
 
   try {
     const [result] = await db.sequelize.query(Query, { replacements: [id] });

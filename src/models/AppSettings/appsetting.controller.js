@@ -2,6 +2,7 @@ import {
   createAppSettingService,
   getAllAppSettingService,
   getAppSettingByIdService,
+  toggelAppSettingService,
   updateAppSettingService,
 } from "./appsetting.service.js";
 
@@ -82,6 +83,35 @@ export const getAppSettingByIdController = async (req, res) => {
     return res.status(200).send({
       message: "Setting listed successfully",
       data: response,
+    });
+  } catch (err) {
+    return res.status(500).send({
+      message: err?.message,
+    });
+  }
+};
+
+export const toggelAppSettingController = async (req, res) => {
+  const { setting_value } = req.body;
+  const { id } = req.params;
+
+  if (!setting_value) {
+    return res.status(400).send({
+      message: "Setting value required",
+    });
+  }
+
+  if (!id) {
+    return res.status(400).send({
+      message: "Setting id required",
+    });
+  }
+
+  try {
+    await toggelAppSettingService(setting_value, id);
+
+    return res.status(200).send({
+      message: "Setting updated successfully",
     });
   } catch (err) {
     return res.status(500).send({
