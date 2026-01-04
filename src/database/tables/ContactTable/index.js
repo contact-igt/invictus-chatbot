@@ -2,12 +2,6 @@ import { tableNames } from "../../tableName.js";
 
 export const ContactTable = (sequelize, Sequelize) => {
   return sequelize.define(tableNames?.CONTACTS, {
-    id: {
-      type: Sequelize.INTEGER,
-      autoIncrement: true,
-      primaryKey: true,
-    },
-
     phone: {
       type: Sequelize.STRING,
       allowNull: false,

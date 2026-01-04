@@ -2,12 +2,6 @@ import { tableNames } from "../../tableName.js";
 
 export const ConversationsTable = (sequelize, Sequelize) => {
   return sequelize.define(tableNames?.CONVERSATION, {
-    id: {
-      type: Sequelize.INTEGER,
-      autoIncrement: true,
-      primaryKey: true,
-    },
-
     phone: {
       type: Sequelize.STRING,
       allowNull: false,

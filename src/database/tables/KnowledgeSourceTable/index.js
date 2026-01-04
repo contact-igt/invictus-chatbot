@@ -2,12 +2,6 @@ import { tableNames } from "../../tableName.js";
 
 export const KnowledgeSourcesTable = (sequelize, Sequelize) => {
   return sequelize.define(tableNames.KNOWLEDGESOURCE, {
-    id: {
-      type: Sequelize.INTEGER,
-      autoIncrement: true,
-      primaryKey: true,
-    },
-
     title: {
       type: Sequelize.STRING,
       allowNull: false,

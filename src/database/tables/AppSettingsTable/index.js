@@ -8,7 +8,7 @@ export const AppSettingTable = (sequelize, Sequelize) => {
       allowNull: false,
     },
     setting_key: {
-      type: Sequelize.TEXT,
+      type: Sequelize.STRING,
       allowNull: false,
       unique: true,
     },
