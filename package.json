@@ -4,10 +4,9 @@
   "main": "app.js",
   "type": "module",
   "scripts": {
-    "start:dev": "nodemon src/app.js",
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "postinstall": "npx playwright install --with-deps"
-  },
+    "build": "npm install && npx playwright install --with-deps",
+    "start:dev": "nodemon src/app.js"
+     },
   "dependencies": {
     "@google-cloud/vision": "^5.3.4",
     "@xenova/transformers": "^2.17.2",
