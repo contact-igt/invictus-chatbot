@@ -1,6 +1,6 @@
 import db from "../../database/index.js";
 import { tableNames } from "../../database/tableName.js";
-import { findUserMessageService } from "../Ai/ai.service.js";
+import { AiService } from "../Ai/ai.service.js";
 import { toggelAppSettingService } from "../AppSettings/appsetting.service.js";
 import { addContactDetailService } from "../Contacts/contacts.service.js";
 
@@ -84,7 +84,7 @@ Is the user confirming YES or NO?
 Reply with exactly one word:
 YES or NO
 `;
-  const result = await findUserMessageService("system", prompt);
+  const result = await AiService("system", prompt);
   return result.trim().toUpperCase() === "YES" ? "YES" : "NO";
 };
 
@@ -100,7 +100,7 @@ UNKNOWN
 Sentence:
 "${text}"
 `;
-  const result = await findUserMessageService("system", prompt);
+  const result = await AiService("system", prompt);
   return result.trim();
 };
 

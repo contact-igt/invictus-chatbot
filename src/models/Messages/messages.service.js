@@ -1,16 +1,18 @@
 import db from "../../database/index.js";
 import { tableNames } from "../../database/tableName.js";
+import { AiService } from "../Ai/ai.service.js";
 
 export const createUserMessageService = async (
   wa_id,
   phone,
   sender,
-  message
+  message,
+  name
 ) => {
-  const Query = `INSERT INTO ${tableNames?.MESSAGES} (wa_id , phone , sender , message ) VALUES (?,?,?,?) `;
+  const Query = `INSERT INTO ${tableNames?.MESSAGES} (wa_id , phone , sender , message, name ) VALUES (?,?,?,?,?) `;
 
   try {
-    const values = [wa_id, phone, sender, message];
+    const values = [wa_id, phone, sender, message, name];
 
     const [result] = await db.sequelize.query(Query, { replacements: values });
     return result[0];
@@ -22,7 +24,7 @@ export const createUserMessageService = async (
 export const getChatListService = async () => {
   try {
     const Query = ` 
-  SELECT phone , message , seen , created_at 
+  SELECT phone , message , seen , name , created_at 
   FROM messages as m1
   WHERE id = (
   SELECT MAX(id) FROM messages as m2
@@ -64,4 +66,91 @@ export const markSeenMessageService = async (phone) => {
   } catch (err) {
     throw err;
   }
+};
+
+export const suggestReplyService = async (phone) => {
+  const ADMIN_SYSTEM_PROMPT = `
+
+  You are a professional customer support executive.
+
+Rules:
+- Reply in professional English only.
+- Do not use emojis.
+- Do not use symbols.
+- Be clear, concise, and helpful.
+- Do not mention internal systems.
+`;
+
+  const [messages] = await db.sequelize.query(
+    `
+    SELECT sender, message
+    FROM ${tableNames.MESSAGES}
+    WHERE phone = ?
+    ORDER BY created_at ASC
+    `,
+    { replacements: [phone] }
+  );
+
+  const chatHistory = messages
+    .map((m) => `${m.sender.toUpperCase()}: ${m.message}`)
+    .join("\n");
+
+  const [lastMsg] = await db.sequelize.query(
+    `
+    SELECT message
+    FROM ${tableNames.MESSAGES}
+    WHERE phone = ?
+      AND sender = 'user'
+    ORDER BY created_at DESC
+    LIMIT 1
+    `,
+    { replacements: [phone] }
+  );
+
+  if (!lastMsg.length) {
+    return "No recent customer message found.";
+  }
+
+  const lastUserMessage = lastMsg[0].message;
+
+  /* 3️⃣ Knowledge base search */
+  const keywords = lastUserMessage.split(" ").slice(0, 6).join(" ");
+
+  const [knowledge] = await db.sequelize.query(
+    `
+    SELECT chunk_text
+    FROM ${tableNames.KNOWLEDGECHUNKS}
+    WHERE chunk_text LIKE ?
+    LIMIT 5
+    `,
+    { replacements: [`%${keywords}%`] }
+  );
+
+  const knowledgeText =
+    knowledge.length > 0
+      ? knowledge.map((k) => k.chunk_text).join("\n")
+      : "No relevant knowledge found.";
+
+  /* 4️⃣ AI prompt */
+  const prompt = `
+${ADMIN_SYSTEM_PROMPT}
+
+Conversation history:
+${chatHistory}
+
+Last customer message:
+${lastUserMessage}
+
+Relevant knowledge:
+${knowledgeText}
+
+Task:
+Write a professional reply to the last customer message.
+
+Reply:
+`;
+
+  const reply = await AiService("system", prompt);
+
+  return reply.trim();
 };

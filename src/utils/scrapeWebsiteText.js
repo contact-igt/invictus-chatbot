@@ -2,42 +2,51 @@ import axios from "axios";
 import * as cheerio from "cheerio";
 
 export const scrapeWebsiteText = async (url) => {
-  const { data } = await axios.get(url, {
+  if (!url || !url.startsWith("http")) {
+    throw new Error("Invalid URL");
+  }
+
+  const response = await axios.get(url.trim(), {
     headers: {
-      "User-Agent": "Mozilla/5.0",
+      "User-Agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0",
+      Accept: "text/html"
     },
     timeout: 30000,
+    validateStatus: () => true
   });
 
-  const $ = cheerio.load(data);
+  if (response.status !== 200 || !response.data) {
+    throw new Error("Website not accessible");
+  }
 
-  // 1️⃣ OpenGraph data (best for image + summary)
-  const og = {
-    title: $('meta[property="og:title"]').attr("content") || $("title").text(),
-    description:
-      $('meta[property="og:description"]').attr("content") ||
-      $('meta[name="description"]').attr("content") ||
-      "",
-    image: $('meta[property="og:image"]').attr("content") || "",
-  };
+  const $ = cheerio.load(response.data);
 
-  // 2️⃣ Full page text
-  const text = $("body").text().replace(/\s+/g, " ").trim();
+  $("script, style, noscript, iframe").remove();
 
-  // 3️⃣ Images
-  const images = [];
-  $("img").each((_, img) => {
-    const src = $(img).attr("src");
-    if (src && !src.startsWith("data:")) {
-      images.push(src.startsWith("http") ? src : new URL(src, url).href);
-    }
-  });
+  const title =
+    $('meta[property="og:title"]').attr("content") ||
+    $("title").text() ||
+    "";
 
-  return {
-    title: og.title,
-    description: og.description,
-    mainImage: og.image,
-    text,
-    images,
-  };
+  const description =
+    $('meta[property="og:description"]').attr("content") ||
+    $('meta[name="description"]').attr("content") ||
+    "";
+
+  let content = "";
+
+  if ($("article").length) {
+    content = $("article").text();
+  } else if ($("main").length) {
+    content = $("main").text();
+  } else if ($("section").length) {
+    content = $("section").text();
+  } else {
+    content = $("body").text();
+  }
+
+  content = content.replace(/\s+/g, " ").trim();
+
+  return { title, description, content };
 };

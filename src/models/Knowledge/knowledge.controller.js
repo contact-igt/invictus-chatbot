@@ -110,6 +110,7 @@ export const uploadKnowledge = async (req, res) => {
         return res.status(400).json({ message: "URL required" });
       }
       finalText = await scrapeWebsiteText(source_url);
+      console.log("jjjj" , finalText)
       sourceUrl = source_url;
     }
 

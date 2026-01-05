@@ -4,6 +4,7 @@ import {
   getChatByPhoneService,
   getChatListService,
   markSeenMessageService,
+  suggestReplyService,
 } from "./messages.service.js";
 
 export const getChatList = async (req, res) => {
@@ -62,6 +63,31 @@ export const markSeenMessage = async (req, res) => {
   } catch (err) {
     return res.status(500).send({
       message: err?.message,
+    });
+  }
+};
+
+export const suggestReplyController = async (req, res) => {
+  try {
+    const { phone } = req.body;
+
+    if (!phone) {
+      return res.status(400).json({
+        success: false,
+        message: "phone is required",
+      });
+    }
+
+    const reply = await suggestReplyService(phone);
+
+    return res.status(200).json({
+      success: true,
+      data: reply,
+    });
+  } catch (err) {
+    return res.status(500).json({
+      success: false,
+      message: err.message,
     });
   }
 };

@@ -38,7 +38,7 @@ app.use(
   KnowledgeRouter,
   AiPropmtRouter,
   ConversationRouter,
-  AppSettingRouter
+  AppSettingRouter,
 );
 
 app.get("/", (req, res) => {

@@ -1,10 +1,14 @@
 import OpenAI from "openai";
 
+import db from "../../database/index.js";
+import { tableNames } from "../../database/tableName.js";
+import { getOpenAIReply } from "../AuthWhatsapp/AuthWhatsapp.service.js";
+
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-export const findUserMessageService = async (system, propmt) => {
+export const AiService = async (system, propmt) => {
   try {
     const response = await openai.chat.completions.create({
       model: "gpt-4o-mini",
@@ -19,5 +23,9 @@ export const findUserMessageService = async (system, propmt) => {
     return "Please try again later.";
   }
 };
+
+
+
+
 
 
