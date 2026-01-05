@@ -29,12 +29,20 @@ export const receiveMessage = async (req, res) => {
     const msg = req.body?.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
     if (!msg) return res.sendStatus(200);
 
+    const name =
+      req.body?.entry?.[0]?.changes?.[0]?.value.contacts[0].profile.name;
     const phone = msg.from;
     const text = msg.text?.body || "";
     const messageId = msg.id; // 🔥 VERY IMPORTANT
 
     // 1️⃣ Save user message
-    await createUserMessageService(messageId, phone, "user", text);
+    await createUserMessageService(
+      messageId,
+      phone,
+      "user",
+      text,
+      name ? name : null
+    );
 
     // 2️⃣ Mark read + show typing indicator (OFFICIAL)
     await sendTypingIndicator(messageId);
@@ -54,7 +62,7 @@ export const receiveMessage = async (req, res) => {
     }
 
     // 4️⃣ Save bot reply
-    await createUserMessageService(null, phone, "bot", reply);
+    await createUserMessageService(null, phone, "bot", reply , name);
 
     // 5️⃣ Send reply
     await sendWhatsAppMessage(phone, reply, messageId);
