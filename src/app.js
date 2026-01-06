@@ -9,6 +9,7 @@ import KnowledgeRouter from "./models/Knowledge/knowledge.routes.js";
 import AiPropmtRouter from "./models/AiPrompt/aiprompt.routes.js";
 import ConversationRouter from "./models/Conversation/conversation.routes.js";
 import AppSettingRouter from "./models/AppSettings/appsetting.routes.js";
+import ManagementRouter from "./models/Management/management.routes.js"
 
 import dns from "dns";
 dns.setDefaultResultOrder("ipv4first");
@@ -38,7 +39,8 @@ app.use(
   KnowledgeRouter,
   AiPropmtRouter,
   ConversationRouter,
-  AppSettingRouter
+  AppSettingRouter,
+  ManagementRouter
 );
 
 app.get("/", (req, res) => {

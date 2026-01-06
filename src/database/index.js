@@ -9,6 +9,7 @@ import { AiPromptTable } from "./tables/AiPropmtTable/index.js";
 import { ConversationsTable } from "./tables/ConversationTable/index.js";
 import { ContactTable } from "./tables/ContactTable/index.js";
 import { AppSettingTable } from "./tables/AppSettingsTable/index.js";
+import { ManagementTable } from "./tables/ManagementTable/index.js";
 
 const dbconfig =
   ServerEnvironmentConfig?.server?.line === "production"
@@ -53,5 +54,6 @@ db.AiPrompt = AiPromptTable(sequelize, Sequelize);
 db.Conversation = ConversationsTable(sequelize, Sequelize);
 db.Contact = ContactTable(sequelize, Sequelize);
 db.AppSettings = AppSettingTable(sequelize, Sequelize);
+db.Management = ManagementTable(sequelize , Sequelize)
 
 export default db;

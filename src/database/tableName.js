@@ -6,7 +6,8 @@ export const tableNames = {
   AIPROMPT : "ai_prompts",
   CONVERSATION : "conversations",
   CONTACTS : "contacts",
-  APPSETTINGS : "app_settings"
+  APPSETTINGS : "app_settings",
+  MANAGEMENT : "managements"
 
 
 
