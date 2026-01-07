@@ -22,6 +22,11 @@ export const MessagesTable = (sequelize, Sequelize) => {
       allowNull: false,
     },
 
+    sender_id: {
+      type: Sequelize.STRING,
+      allowNull: true,
+    },
+
     message: {
       type: Sequelize.TEXT,
       allowNull: false,

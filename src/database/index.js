@@ -10,6 +10,8 @@ import { ConversationsTable } from "./tables/ConversationTable/index.js";
 import { ContactTable } from "./tables/ContactTable/index.js";
 import { AppSettingTable } from "./tables/AppSettingsTable/index.js";
 import { ManagementTable } from "./tables/ManagementTable/index.js";
+import { AdminAlertTable } from "./tables/AdminAlertTable/index.js";
+import { ChatStateTable } from "./tables/ChatStateTable/index.js";
 
 const dbconfig =
   ServerEnvironmentConfig?.server?.line === "production"
@@ -17,7 +19,6 @@ const dbconfig =
     : ServerEnvironmentConfig?.server?.line === "development"
     ? DatabaseEnvironmentConfig?.development
     : DatabaseEnvironmentConfig?.local;
-
 
 const sequelize = new Sequelize(
   dbconfig?.databse,
@@ -54,6 +55,8 @@ db.AiPrompt = AiPromptTable(sequelize, Sequelize);
 db.Conversation = ConversationsTable(sequelize, Sequelize);
 db.Contact = ContactTable(sequelize, Sequelize);
 db.AppSettings = AppSettingTable(sequelize, Sequelize);
-db.Management = ManagementTable(sequelize , Sequelize)
+db.Management = ManagementTable(sequelize, Sequelize);
+db.AdminAlert = AdminAlertTable(sequelize, Sequelize);
+db.ChatState = ChatStateTable(sequelize, Sequelize);
 
 export default db;
