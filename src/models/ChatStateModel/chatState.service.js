@@ -27,7 +27,7 @@ export const getChatStateByPhoneService = async (phone) => {
 };
 
 export const updateChatStateToNeedAdminService = async (phone) => {
-  const Query = `UPDATE INTO ${tableNames?.CHATSTATE} SET state = ? WHERE phone = ?`;
+  const Query = `UPDATE  ${tableNames?.CHATSTATE} SET state = ? WHERE phone = ?`;
 
   try {
     const [result] = await db.sequelize.query(Query, {
