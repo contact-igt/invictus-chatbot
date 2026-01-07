@@ -5,14 +5,15 @@ import { AiService } from "../Ai/ai.service.js";
 export const createUserMessageService = async (
   wa_id,
   phone,
+  name,
   sender,
-  message,
-  name
+  sender_id,
+  message
 ) => {
-  const Query = `INSERT INTO ${tableNames?.MESSAGES} (wa_id , phone , sender , message, name ) VALUES (?,?,?,?,?) `;
+  const Query = `INSERT INTO ${tableNames?.MESSAGES} ( wa_id,	 phone,	name,	sender,	sender_id,	message ) VALUES (?,?,?,?,?,?) `;
 
   try {
-    const values = [wa_id, phone, sender, message, name];
+    const values = [wa_id, phone, name, sender, sender_id, message];
 
     const [result] = await db.sequelize.query(Query, { replacements: values });
     return result[0];
