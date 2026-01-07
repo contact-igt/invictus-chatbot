@@ -38,11 +38,13 @@ export const getChatByPhone = async (req, res) => {
 };
 
 export const sendAdminMessage = async (req, res) => {
-  const { phone, message } = req.body;
+  const { phone, name, message } = req.body;
 
   try {
     await sendWhatsAppMessage(phone, message);
-    await createUserMessageService(null, phone, "admin", message);
+    // await createUserMessageService(null, phone, "admin", message);
+
+    await createUserMessageService(null, phone, null, "admin", null, message);
 
     return res.status(200).send({
       message: "Message sended successfully",
