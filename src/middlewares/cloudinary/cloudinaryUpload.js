@@ -6,7 +6,6 @@ export const uploadToCloudinary = (
   mode = "public",
   folder = "pets"
 ) => {
-  
   return new Promise((resolve, reject) => {
     const stream = cloudinary.v2.uploader.upload_stream(
       {
