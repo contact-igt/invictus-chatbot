@@ -2,12 +2,7 @@ import { tableNames } from "../../tableName.js";
 
 export const ManagementTable = (sequelize, Sequelize) => {
   return sequelize.define(tableNames.MANAGEMENT, {
-    title: {
-      type: Sequelize.ENUM("Dr", "Mr", "Ms", "Mrs"),
-      allowNull: false,
-    },
-
-    username: {
+    name: {
       type: Sequelize.STRING,
       allowNull: false,
     },
@@ -21,20 +16,10 @@ export const ManagementTable = (sequelize, Sequelize) => {
       },
     },
 
-    country_code: {
-      type: Sequelize.STRING,
-      allowNull: true,
-    },
-
     mobile: {
       type: Sequelize.STRING,
       allowNull: false,
       unique: true,
-    },
-
-    profile_picture: {
-      type: Sequelize.STRING,
-      allowNull: true,
     },
 
     password: {
@@ -51,11 +36,6 @@ export const ManagementTable = (sequelize, Sequelize) => {
     status: {
       type: Sequelize.ENUM("active", "inactive", "suspended"),
       defaultValue: "active",
-    },
-
-    last_login_at: {
-      type: Sequelize.DATE,
-      allowNull: true,
     },
 
     createdAt: {
@@ -76,3 +56,11 @@ export const ManagementTable = (sequelize, Sequelize) => {
 
 
 
+// id
+// name
+// email
+// mobile
+// password
+// role        → super-admin | admin | agent
+// status      → active / inactive
+// created_at

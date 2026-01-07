@@ -7,8 +7,8 @@ export const tableNames = {
   CONVERSATION : "conversations",
   CONTACTS : "contacts",
   APPSETTINGS : "app_settings",
-  MANAGEMENT : "managements"
-
-
+  MANAGEMENT : "managements",
+  CHATSTATE : "chat_states",
+  ADMINALERT : "admin_alerts"
 
 };

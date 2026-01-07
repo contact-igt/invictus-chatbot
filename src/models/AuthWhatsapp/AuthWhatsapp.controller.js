@@ -3,6 +3,11 @@ import { createUserMessageService } from "../Messages/messages.service.js";
 import { getOpenAIReply, sendWhatsAppMessage } from "./AuthWhatsapp.service.js";
 import { getAppSettingByKeyService } from "../AppSettings/appsetting.service.js";
 import { processConversationService } from "../Conversation/conversation.service.js";
+import {
+  createChatStateService,
+  getChatStateByPhoneService,
+  updateChatStateToNeedAdminService,
+} from "../ChatStateModel/chatState.service.js";
 
 export const verifyWebhook = (req, res) => {
   const mode = req.query["hub.mode"];
@@ -30,45 +35,76 @@ export const receiveMessage = async (req, res) => {
     if (!msg) return res.sendStatus(200);
 
     const name =
-      req.body?.entry?.[0]?.changes?.[0]?.value.contacts[0].profile.name;
+      req.body?.entry?.[0]?.changes?.[0]?.value?.contacts?.[0]?.profile?.name ||
+      null;
+
     const phone = msg.from;
     const text = msg.text?.body || "";
-    const messageId = msg.id; // 🔥 VERY IMPORTANT
+    const messageId = msg.id;
 
-    // 1️⃣ Save user message
-    await createUserMessageService(
-      messageId,
-      phone,
-      "user",
-      text,
-      name ? name : null
-    );
+    // 1️⃣ Save USER message
+    await createUserMessageService(messageId, phone, "user", text, name);
 
-    // 2️⃣ Mark read + show typing indicator (OFFICIAL)
-    await sendTypingIndicator(messageId);
+    // 2️⃣ Get chat state
+    let state = await getChatStateByPhoneService(phone);
 
-    // 3️⃣ Get AI reply (this takes time)
+    // 3️⃣ If new user → create chat state
+    if (!state || state.length === 0) {
+      await createChatStateService(name, phone);
 
-    const isDetailsRequired = await getAppSettingByKeyService(
-      "collect_details"
-    );
-
-    let reply;
-
-    if (isDetailsRequired === "true") {
-      reply = await processConversationService(phone, text);
-    } else {
-      reply = await getOpenAIReply(phone, text);
+      // fetch again after create
+      state = await getChatStateByPhoneService(phone);
     }
 
-    // 4️⃣ Save bot reply
-    await createUserMessageService(null, phone, "bot", reply , name);
+    const chatState = state[0];
 
-    // 5️⃣ Send reply
-    await sendWhatsAppMessage(phone, reply, messageId);
+    // 4️⃣ STATE HANDLING (MOST IMPORTANT)
+
+    // 🔴 Case 1: Waiting for admin → DO NOTHING
+    if (chatState.state === "need_admin") {
+      return res.sendStatus(200);
+    }
+
+    // 🔴 Case 2: Admin is chatting → DO NOTHING
+    if (chatState.state === "admin_active") {
+      return res.sendStatus(200);
+    }
+
+    // 🟢 Case 3: AI is active
+    if (chatState.state === "ai_active" && chatState.ai_enable === "true") {
+      await sendTypingIndicator(messageId);
+
+      const reply = await getOpenAIReply(phone, text);
+
+      // 🧠 OPTIONAL: if AI fails, switch to need_admin
+      if (!reply || reply === "I don't know") {
+        await updateChatStateToNeedAdminService(phone);
+        return res.sendStatus(200);
+      }
+
+      await createUserMessageService(null, phone, "bot", reply, name);
+
+      await sendWhatsAppMessage(phone, reply, messageId);
+    }
+
+
+
+    
   } catch (err) {
     console.error("Webhook error:", err.message);
   }
 
   res.sendStatus(200);
 };
+
+// const isDetailsRequired = await getAppSettingByKeyService(
+//   "collect_details"
+// );
+
+// let reply
+
+// if (isDetailsRequired === "true") {
+//   reply = await processConversationService(phone, text);
+// } else {
+//   reply = await getOpenAIReply(phone, text);
+// }
