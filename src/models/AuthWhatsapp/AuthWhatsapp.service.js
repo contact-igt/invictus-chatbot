@@ -80,7 +80,7 @@ export const getOpenAIReply = async (phone, userMessage) => {
         { role: "user", content: userMessage },
       ],
       temperature: 0.05,
-      max_tokens: 120,
+       max_completion_tokens: 120,
     });
 
     return response.choices[0].message.content.trim();
