@@ -9,6 +9,8 @@ export const tableNames = {
   APPSETTINGS : "app_settings",
   MANAGEMENT : "managements",
   CHATSTATE : "chat_states",
-  ADMINALERT : "admin_alerts"
+  ADMINALERT : "admin_alerts",
+  PROCESSEDMESSAGE : "processed_messages",
+  CHATLOCKS : "chat_locks"
 
 };

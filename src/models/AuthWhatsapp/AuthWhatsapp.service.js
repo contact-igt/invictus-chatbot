@@ -5,6 +5,9 @@ import { getConversationMemory } from "../Messages/messages.memory.js";
 import { detectLanguageStyle } from "../../utils/detectLanguageStyle.js";
 import { buildChatHistory } from "../../utils/buildChatHistory.js";
 import { getActivePromptService } from "../AiPrompt/aiprompt.service.js";
+import { tableNames } from "../../database/tableName.js";
+import { sendTypingIndicator } from "../../utils/sendTypingIndicator.js";
+import { createUserMessageService } from "../Messages/messages.service.js";
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -73,14 +76,14 @@ export const getOpenAIReply = async (phone, userMessage) => {
 
     const response = await openai.chat.completions.create({
       // model: "gpt-4o-mini",
-       model: "gpt-5.2",
+      model: "gpt-5.2",
       messages: [
         { role: "system", content: systemPrompt },
         ...chatHistory,
         { role: "user", content: userMessage },
       ],
       temperature: 0.05,
-       max_completion_tokens: 120,
+      max_completion_tokens: 120,
     });
 
     return response.choices[0].message.content.trim();
@@ -89,3 +92,66 @@ export const getOpenAIReply = async (phone, userMessage) => {
     return "Please try again later.";
   }
 };
+
+export const isMessageProcessed = async (messageId) => {
+  const [rows] = await db.sequelize.query(
+    `SELECT message_id FROM ${tableNames?.PROCESSEDMESSAGE} WHERE message_id = ?`,
+    { replacements: [messageId] }
+  );
+  return rows.length > 0;
+};
+
+export const markMessageProcessed = async (messageId, phone) => {
+  await db.sequelize.query(
+    `INSERT IGNORE INTO ${tableNames?.PROCESSEDMESSAGE} (message_id, phone) VALUES (?, ?)`,
+    { replacements: [messageId, phone] }
+  );
+};
+
+export const isChatLocked = async (phone) => {
+  const [rows] = await db.sequelize.query(
+    `SELECT phone FROM ${tableNames?.CHATLOCKS}
+     WHERE phone = ?
+     AND locked_at > NOW() - INTERVAL 10 SECOND`,
+    { replacements: [phone] }
+  );
+  return rows.length > 0;
+};
+
+export const lockChat = async (phone) => {
+  await db.sequelize.query(
+    `INSERT INTO ${tableNames?.CHATLOCKS} (phone, locked_at)
+     VALUES (?, NOW())
+     ON DUPLICATE KEY UPDATE locked_at = NOW()`,
+    { replacements: [phone] }
+  );
+};
+
+export const unlockChat = async (phone) => {
+  await db.sequelize.query(
+    `DELETE FROM ${tableNames?.CHATLOCKS} WHERE phone = ?`,
+    {
+      replacements: [phone],
+    }
+  );
+};
+
+// export const processAIReplyInBackground = async (
+//   phone,
+//   name,
+//   text,
+//   messageId
+// ) => {
+//   try {
+//     await sendTypingIndicator(messageId);
+
+//     const reply = await getOpenAIReply(phone, text);
+//     if (!reply) return;
+
+//     await createUserMessageService(null, phone, name, "bot", null, reply);
+
+//     await sendWhatsAppMessage(phone, reply, messageId);
+//   } catch (err) {
+//     console.error("Background AI error:", err.message);
+//   }
+// };
