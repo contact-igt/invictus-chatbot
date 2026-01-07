@@ -1,5 +1,5 @@
-import { tableNames } from "../../database/tableName.js";
 import db from "../../database/index.js";
+import { tableNames } from "../../database/tableName.js";
 
 export const createChatStateService = async (name, phone) => {
   const Query = `INSERT INTO ${tableNames?.CHATSTATE} (name , phone) VALUES (?,?)`;
