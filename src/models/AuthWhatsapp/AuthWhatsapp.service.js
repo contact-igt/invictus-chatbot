@@ -6,8 +6,7 @@ import { detectLanguageStyle } from "../../utils/detectLanguageStyle.js";
 import { buildChatHistory } from "../../utils/buildChatHistory.js";
 import { getActivePromptService } from "../AiPrompt/aiprompt.service.js";
 import { tableNames } from "../../database/tableName.js";
-import { sendTypingIndicator } from "../../utils/sendTypingIndicator.js";
-import { createUserMessageService } from "../Messages/messages.service.js";
+import db from "../../database/index.js";
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
