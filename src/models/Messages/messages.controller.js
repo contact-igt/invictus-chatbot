@@ -44,7 +44,7 @@ export const sendAdminMessage = async (req, res) => {
     await sendWhatsAppMessage(phone, message);
     // await createUserMessageService(null, phone, "admin", message);
 
-    await createUserMessageService(null, phone, null, "admin", null, message);
+    await createUserMessageService(null, phone, name, "admin", null, message);
 
     return res.status(200).send({
       message: "Message sended successfully",

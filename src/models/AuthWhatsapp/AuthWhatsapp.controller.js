@@ -43,7 +43,7 @@ export const receiveMessage = async (req, res) => {
     const messageId = msg.id;
 
     // 1️⃣ Save USER message
-    await createUserMessageService(messageId, phone, "user", text, name);
+    await createUserMessageService(messageId, phone, name, "user", null, text);
 
     // 2️⃣ Get chat state
     let state = await getChatStateByPhoneService(phone);
@@ -82,14 +82,10 @@ export const receiveMessage = async (req, res) => {
         return res.sendStatus(200);
       }
 
-      await createUserMessageService(null, phone, "bot", reply, name);
+      await createUserMessageService(null, phone, name, "bot", null, reply);
 
       await sendWhatsAppMessage(phone, reply, messageId);
     }
-
-
-
-    
   } catch (err) {
     console.error("Webhook error:", err.message);
   }
