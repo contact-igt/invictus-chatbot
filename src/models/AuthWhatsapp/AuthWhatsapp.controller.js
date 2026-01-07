@@ -9,13 +9,13 @@ import {
   sendWhatsAppMessage,
   unlockChat,
 } from "./AuthWhatsapp.service.js";
-import { getAppSettingByKeyService } from "../AppSettings/appsetting.service.js";
-import { processConversationService } from "../Conversation/conversation.service.js";
-import {
-  createChatStateService,
-  getChatStateByPhoneService,
-  updateChatStateToNeedAdminService,
-} from "../ChatStateModel/chatState.service.js";
+// import { getAppSettingByKeyService } from "../AppSettings/appsetting.service.js";
+// import { processConversationService } from "../Conversation/conversation.service.js";
+// import {
+//   createChatStateService,
+//   getChatStateByPhoneService,
+//   updateChatStateToNeedAdminService,
+// } from "../ChatStateModel/chatState.service.js";
 
 export const verifyWebhook = (req, res) => {
   const mode = req.query["hub.mode"];
@@ -152,98 +152,42 @@ export const receiveMessage = async (req, res) => {
     const msg = req.body?.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
     if (!msg) return res.sendStatus(200);
 
-    const name =
-      req.body?.entry?.[0]?.changes?.[0]?.value?.contacts?.[0]?.profile?.name ||
-      null;
-
     const phone = msg.from;
     const text = msg.text?.body || "";
     const messageId = msg.id;
 
-    /* =================================================
-       1️⃣ SAVE USER MESSAGE (ALWAYS)
-    ================================================= */
-    await createUserMessageService(messageId, phone, name, "user", null, text);
+    const name =
+      req.body?.entry?.[0]?.changes?.[0]?.value?.contacts?.[0]?.profile?.name ||
+      null;
 
-    /* =================================================
-       2️⃣ GET / CREATE CHAT STATE
-    ================================================= */
-    let state = await getChatStateByPhoneService(phone);
-
-    if (!state || state.length === 0) {
-      await createChatStateService(name, phone);
-      state = await getChatStateByPhoneService(phone);
-    }
-
-    const chatState = state[0];
-
-    /* =================================================
-       3️⃣ HARD STOP STATES (NO AI)
-    ================================================= */
-    if (
-      chatState.state === "need_admin" ||
-      chatState.state === "admin_active"
-    ) {
+    if (await isMessageProcessed(messageId)) {
       return res.sendStatus(200);
     }
 
-    /* =================================================
-       4️⃣ CHAT LOCK (PREVENT DOUBLE / FAST REPLY)
-    ================================================= */
+    await markMessageProcessed(messageId, phone);
+
+    await createUserMessageService(messageId, phone, name, "user", null, text);
+
     if (await isChatLocked(phone)) {
       return res.sendStatus(200);
     }
 
     await lockChat(phone);
 
-    /* =================================================
-       5️⃣ ACK WHATSAPP IMMEDIATELY (NO DELAY)
-    ================================================= */
     res.sendStatus(200);
 
-    /* =================================================
-       6️⃣ BACKGROUND PROCESSING (AI + STATE)
-    ================================================= */
     (async () => {
       try {
-        // typing indicator
         await sendTypingIndicator(messageId);
 
-        let reply;
+        const reply = await getOpenAIReply(phone, text);
 
-        /* ---------------------------------------------
-           DETAILS COLLECTION OR NORMAL AI
-        --------------------------------------------- */
-        const isDetailsRequired = await getAppSettingByKeyService(
-          "collect_details"
-        );
-
-        if (isDetailsRequired === "true") {
-          reply = await processConversationService(phone, text);
-        } else {
-          reply = await getOpenAIReply(phone, text);
-        }
-
-        /* ---------------------------------------------
-           AI FAIL → MOVE TO ADMIN
-        --------------------------------------------- */
-        if (!reply || reply === "I don't know") {
-          await updateChatStateToNeedAdminService(phone);
-          return;
-        }
-
-        /* ---------------------------------------------
-           SAVE + SEND BOT MESSAGE
-        --------------------------------------------- */
         await createUserMessageService(null, phone, name, "bot", null, reply);
 
         await sendWhatsAppMessage(phone, reply, messageId);
       } catch (err) {
-        console.error("Background AI error:", err.message);
+        console.error("Background error:", err.message);
       } finally {
-        /* ---------------------------------------------
-           🔓 ALWAYS UNLOCK CHAT
-        --------------------------------------------- */
         await unlockChat(phone);
       }
     })();
