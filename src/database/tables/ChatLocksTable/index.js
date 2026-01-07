@@ -7,7 +7,7 @@ export const ChatLocksTable = (sequelize, Sequelize) => {
       allowNull: true,
     },
 
-    locaked_at: {
+    locked_at: {
       type: "TIMESTAMP",
       allowNull: true,
       defaultValue: sequelize.literal("CURRENT_TIMESTAMP"),
