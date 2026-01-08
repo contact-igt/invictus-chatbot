@@ -22,130 +22,11 @@ export const verifyWebhook = (req, res) => {
   const token = req.query["hub.verify_token"];
   const challenge = req.query["hub.challenge"];
 
-  try {
-    if (mode === "subscribe" && token === process.env.META_VERIFY_TOKEN) {
-      console.log("✅ WEBHOOK VERIFIED BY META");
-      return res.status(200).send(challenge); // MUST BE PLAIN TEXT
-    }
-    return res.status(203).send({
-      message: "Webhook connection error",
-    });
-  } catch (err) {
-    return res.status(500).send({
-      message: err?.message,
-    });
+  if (mode === "subscribe" && token === process.env.META_VERIFY_TOKEN) {
+    return res.status(200).send(challenge);
   }
+  return res.sendStatus(403);
 };
-
-// export const receiveMessage = async (req, res) => {
-//   try {
-//     const msg = req.body?.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
-//     if (!msg) return res.sendStatus(200);
-
-//     const name =
-//       req.body?.entry?.[0]?.changes?.[0]?.value?.contacts?.[0]?.profile?.name ||
-//       null;
-
-//     const phone = msg.from;
-//     const text = msg.text?.body || "";
-//     const messageId = msg.id;
-
-//     // 1️⃣ Save USER message
-//     await createUserMessageService(messageId, phone, name, "user", null, text);
-
-//     // 2️⃣ Get chat state
-//     let state = await getChatStateByPhoneService(phone);
-
-//     // 3️⃣ If new user → create chat state
-//     if (!state || state.length === 0) {
-//       await createChatStateService(name, phone);
-
-//       // fetch again after create
-//       state = await getChatStateByPhoneService(phone);
-//     }
-
-//     const chatState = state[0];
-
-//     // 4️⃣ STATE HANDLING (MOST IMPORTANT)
-
-//     // 🔴 Case 1: Waiting for admin → DO NOTHING
-//     if (chatState.state === "need_admin") {
-//       return res.sendStatus(200);
-//     }
-
-//     // 🔴 Case 2: Admin is chatting → DO NOTHING
-//     if (chatState.state === "admin_active") {
-//       return res.sendStatus(200);
-//     }
-
-//     // 🟢 Case 3: AI is active
-//     if (chatState.state === "ai_active" && chatState.ai_enable === "true") {
-//       await sendTypingIndicator(messageId);
-
-//       const reply = await getOpenAIReply(phone, text);
-
-//       // 🧠 OPTIONAL: if AI fails, switch to need_admin
-//       if (!reply || reply === "I don't know") {
-//         await updateChatStateToNeedAdminService(phone);
-//         return res.sendStatus(200);
-//       }
-
-//       await createUserMessageService(null, phone, name, "bot", null, reply);
-
-//       await sendWhatsAppMessage(phone, reply, messageId);
-//     }
-//   } catch (err) {
-//     console.error("Webhook error:", err.message);
-//   }
-
-//   res.sendStatus(200);
-// };
-
-// const isDetailsRequired = await getAppSettingByKeyService(
-//   "collect_details"
-// );
-
-// let reply
-
-// if (isDetailsRequired === "true") {
-//   reply = await processConversationService(phone, text);
-// } else {
-//   reply = await getOpenAIReply(phone, text);
-// }
-
-// export const receiveMessage = async (req, res) => {
-//   try {
-//     const msg = req.body?.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
-//     if (!msg) return res.sendStatus(200);
-
-//     const name =
-//       req.body?.entry?.[0]?.changes?.[0]?.value?.contacts?.[0]?.profile?.name ||
-//       null;
-
-//     const phone = msg.from;
-//     const text = msg.text?.body || "";
-//     const messageId = msg.id;
-
-//     // 1️⃣ Save USER message
-//     await createUserMessageService(messageId, phone, name, "user", null, text);
-
-//     await sendTypingIndicator(messageId);
-
-//     const reply = await getOpenAIReply(phone, text);
-
-//     await createUserMessageService(null, phone, name, "bot", null, reply);
-
-//     await sendWhatsAppMessage(phone, reply, messageId);
-
-//   res.sendStatus(200);
-
-//   }
-
-//   catch (err) {
-//     console.error("Webhook error:", err.message);
-//   }
-
-// };
 
 export const receiveMessage = async (req, res) => {
   try {
@@ -163,13 +44,12 @@ export const receiveMessage = async (req, res) => {
     if (await isMessageProcessed(messageId)) {
       return res.sendStatus(200);
     }
-
-
     await markMessageProcessed(messageId, phone);
 
     await createUserMessageService(messageId, phone, name, "user", null, text);
 
     let state = await getChatStateByPhoneService(phone);
+
     if (!state || state.length === 0) {
       await createChatStateService(name, phone);
       state = await getChatStateByPhoneService(phone);
@@ -191,10 +71,30 @@ export const receiveMessage = async (req, res) => {
 
     res.sendStatus(200);
 
-    (async () => {
+    setImmediate(async () => {
       try {
-        await sendTypingIndicator(messageId);
+        console.log("🚀 Background process started for", phone);
 
+        try {
+          await sendTypingIndicator(messageId);
+          console.log("✍️ Typing indicator sent");
+        } catch (e) {
+          console.warn("⚠️ Typing indicator failed:", e.message);
+        }
+
+        // try {
+        //   await sendWhatsAppMessage(
+        //     phone,
+        //     "Please wait a moment. I am checking this for you.",
+        //     messageId
+        //   );
+        //   console.log("💬 Wait message sent");
+        // } catch (e) {
+        //   console.warn("⚠️ Wait message failed:", e.message);
+        // }
+
+        // 3️⃣ AI MUST ALWAYS RUN
+        console.log("🤖 Calling AI...");
         let reply;
         const isDetailsRequired = await getAppSettingByKeyService(
           "collect_details"
@@ -206,14 +106,15 @@ export const receiveMessage = async (req, res) => {
           reply = await getOpenAIReply(phone, text);
         }
 
-        if (!reply || typeof reply !== "string" || reply.trim().length === 0) {
-          console.warn("❗ Empty reply. Switching to admin.");
+        console.log("✅ AI response:", reply);
 
-          // 🔔 switch to admin
+        // 4️⃣ Validation
+        if (!reply || typeof reply !== "string" || reply.trim() === "") {
+          console.warn("❗ Empty AI reply, switching to admin");
+
           await updateChatStateToNeedAdminService(phone);
 
-          // 💬 USER FALLBACK MESSAGE
-          const fallbackMessage =
+          const fallback =
             "Our team will review your message and contact you shortly.";
 
           await createUserMessageService(
@@ -222,16 +123,16 @@ export const receiveMessage = async (req, res) => {
             name,
             "bot",
             null,
-            fallbackMessage
+            fallback
           );
 
-          await sendWhatsAppMessage(phone, fallbackMessage, messageId);
-
+          await sendWhatsAppMessage(phone, fallback, messageId);
           return;
         }
 
         const safeReply = reply.trim();
 
+        // 5️⃣ Save + Send final reply
         await createUserMessageService(
           null,
           phone,
@@ -242,15 +143,15 @@ export const receiveMessage = async (req, res) => {
         );
 
         await sendWhatsAppMessage(phone, safeReply, messageId);
+
+        console.log("📤 Final reply sent");
       } catch (err) {
-        console.error("Background error:", err.message);
+        console.error("🔥 Background fatal error:", err);
       } finally {
         await unlockChat(phone);
+        console.log("🔓 Chat unlocked for", phone);
       }
-    })();
-
-
-
+    });
   } catch (err) {
     console.error("Webhook error:", err.message);
     res.sendStatus(200);
