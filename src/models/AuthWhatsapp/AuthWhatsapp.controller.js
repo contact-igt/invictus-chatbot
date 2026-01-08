@@ -9,13 +9,13 @@ import {
   sendWhatsAppMessage,
   unlockChat,
 } from "./AuthWhatsapp.service.js";
-// import { getAppSettingByKeyService } from "../AppSettings/appsetting.service.js";
-// import { processConversationService } from "../Conversation/conversation.service.js";
-// import {
-//   createChatStateService,
-//   getChatStateByPhoneService,
-//   updateChatStateToNeedAdminService,
-// } from "../ChatStateModel/chatState.service.js";
+import { getAppSettingByKeyService } from "../AppSettings/appsetting.service.js";
+import { processConversationService } from "../Conversation/conversation.service.js";
+import {
+  createChatStateService,
+  getChatStateByPhoneService,
+  updateChatStateToNeedAdminService,
+} from "../ChatStateModel/chatState.service.js";
 
 export const verifyWebhook = (req, res) => {
   const mode = req.query["hub.mode"];
@@ -164,14 +164,29 @@ export const receiveMessage = async (req, res) => {
       return res.sendStatus(200);
     }
 
+
     await markMessageProcessed(messageId, phone);
 
     await createUserMessageService(messageId, phone, name, "user", null, text);
 
-    if (await isChatLocked(phone)) {
+    let state = await getChatStateByPhoneService(phone);
+    if (!state || state.length === 0) {
+      await createChatStateService(name, phone);
+      state = await getChatStateByPhoneService(phone);
+    }
+
+    const chatState = state[0];
+
+    if (
+      chatState.state === "need_admin" ||
+      chatState.state === "admin_active"
+    ) {
       return res.sendStatus(200);
     }
 
+    if (await isChatLocked(phone)) {
+      return res.sendStatus(200);
+    }
     await lockChat(phone);
 
     res.sendStatus(200);
@@ -180,17 +195,62 @@ export const receiveMessage = async (req, res) => {
       try {
         await sendTypingIndicator(messageId);
 
-        const reply = await getOpenAIReply(phone, text);
+        let reply;
+        const isDetailsRequired = await getAppSettingByKeyService(
+          "collect_details"
+        );
 
-        await createUserMessageService(null, phone, name, "bot", null, reply);
+        if (isDetailsRequired === "true") {
+          reply = await processConversationService(phone, text);
+        } else {
+          reply = await getOpenAIReply(phone, text);
+        }
 
-        await sendWhatsAppMessage(phone, reply, messageId);
+        if (!reply || typeof reply !== "string" || reply.trim().length === 0) {
+          console.warn("❗ Empty reply. Switching to admin.");
+
+          // 🔔 switch to admin
+          await updateChatStateToNeedAdminService(phone);
+
+          // 💬 USER FALLBACK MESSAGE
+          const fallbackMessage =
+            "Our team will review your message and contact you shortly.";
+
+          await createUserMessageService(
+            null,
+            phone,
+            name,
+            "bot",
+            null,
+            fallbackMessage
+          );
+
+          await sendWhatsAppMessage(phone, fallbackMessage, messageId);
+
+          return;
+        }
+
+        const safeReply = reply.trim();
+
+        await createUserMessageService(
+          null,
+          phone,
+          name,
+          "bot",
+          null,
+          safeReply
+        );
+
+        await sendWhatsAppMessage(phone, safeReply, messageId);
       } catch (err) {
         console.error("Background error:", err.message);
       } finally {
         await unlockChat(phone);
       }
     })();
+
+
+
   } catch (err) {
     console.error("Webhook error:", err.message);
     res.sendStatus(200);

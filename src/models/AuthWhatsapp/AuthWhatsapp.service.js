@@ -74,8 +74,8 @@ export const getOpenAIReply = async (phone, userMessage) => {
     ${context} `;
 
     const response = await openai.chat.completions.create({
-      // model: "gpt-4o-mini",
-      model: "gpt-5.2",
+      model: "gpt-4o-mini",
+      // model: "gpt-5.2",
       messages: [
         { role: "system", content: systemPrompt },
         ...chatHistory,
@@ -85,7 +85,9 @@ export const getOpenAIReply = async (phone, userMessage) => {
       max_completion_tokens: 120,
     });
 
-    return response.choices[0].message.content.trim();
+    const reply = response?.data?.choices?.[0]?.message?.content?.trim();
+
+    return reply && reply.length > 0 ? reply : null;
   } catch (err) {
     console.error("OpenAI error:", err.message);
     return "Please try again later.";
