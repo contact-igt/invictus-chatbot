@@ -110,9 +110,9 @@ export const receiveMessage = async (req, res) => {
 
         // 4️⃣ Validation
         if (!reply || typeof reply !== "string" || reply.trim() === "") {
-          console.warn("❗ Empty AI reply, switching to admin");
+          console.log("❗ Empty AI reply, switching to admin");
 
-          await updateChatStateToNeedAdminService(phone);
+          // await updateChatStateToNeedAdminService(phone);
 
           const fallback =
             "Our team will review your message and contact you shortly.";
