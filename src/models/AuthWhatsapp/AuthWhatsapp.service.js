@@ -86,16 +86,18 @@ Rules:
         : "No relevant knowledge available.";
 
     /* 6️⃣ FINAL SYSTEM PROMPT */
-    const systemPrompt = `
-     ${basePrompt}
+    const systemPrompt = ` ${basePrompt}
 
-         IMPORTANT:
+          IMPORTANT:
           - Answer ONLY using the information from UPLOADED KNOWLEDGE.
           - If the answer is not found there, say you do not have that information.
+          - When information exists in UPLOADED KNOWLEDGE, explain in FULL detail.
+          - Do NOT summarise.
+          - Do NOT stop early.
 
           UPLOADED KNOWLEDGE:
           ${knowledgeContext}
-            `;
+      `;
 
     const response = await openai.chat.completions.create({
       model: "gpt-4o", // or "gpt-4o-mini"
