@@ -106,7 +106,7 @@ ${knowledgeContext}
         { role: "user", content: cleanMessage },
       ],
       temperature: 0.05,
-      max_completion_tokens: 180
+      max_completion_tokens: 180,
     });
 
     /* 8️⃣ SAFE RESPONSE EXTRACTION */
@@ -127,7 +127,6 @@ ${knowledgeContext}
     return null; // 🔥 controller handles fallback/admin
   }
 };
-
 
 export const isMessageProcessed = async (messageId) => {
   const [rows] = await db.sequelize.query(
