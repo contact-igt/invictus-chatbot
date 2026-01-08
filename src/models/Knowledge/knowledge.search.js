@@ -1,30 +1,73 @@
 import db from "../../database/index.js";
 import { tableNames } from "../../database/tableName.js";
 
+// export const searchKnowledgeChunks = async (question) => {
+//   if (!question) return [];
+
+//   // Normalize question
+//   const keywords = question
+//     .toLowerCase()
+//     .replace(/[^\w\s]/g, "")
+//     .split(" ")
+//     .filter(w => w.length > 2);
+
+//   if (!keywords.length) return [];
+
+//   const conditions = keywords.map(() => "chunk_text LIKE ?").join(" OR ");
+//   const values = keywords.map(k => `%${k}%`);
+
+//   const [rows] = await db.sequelize.query(
+//     `
+//     SELECT chunk_text
+//     FROM ${tableNames.KNOWLEDGECHUNKS}
+//     WHERE ${conditions}
+//     LIMIT 5
+//     `,
+//     { replacements: values }
+//   );
+
+//   return rows.map(r => r.chunk_text);
+// };
+
 export const searchKnowledgeChunks = async (question) => {
   if (!question) return [];
 
-  // Normalize question
+  const STOP_WORDS = [
+    "who",
+    "what",
+    "is",
+    "are",
+    "the",
+    "this",
+    "that",
+    "about",
+    "tell",
+    "me",
+    "please",
+    "explain",
+  ];
+
   const keywords = question
     .toLowerCase()
     .replace(/[^\w\s]/g, "")
     .split(" ")
-    .filter(w => w.length > 2);
+    .filter((w) => w.length > 2 && !STOP_WORDS.includes(w));
 
   if (!keywords.length) return [];
 
   const conditions = keywords.map(() => "chunk_text LIKE ?").join(" OR ");
-  const values = keywords.map(k => `%${k}%`);
+  const values = keywords.map((k) => `%${k}%`);
 
   const [rows] = await db.sequelize.query(
     `
     SELECT chunk_text
     FROM ${tableNames.KNOWLEDGECHUNKS}
     WHERE ${conditions}
-    LIMIT 5
+    ORDER BY LENGTH(chunk_text) DESC
+    LIMIT 10
     `,
     { replacements: values }
   );
 
-  return rows.map(r => r.chunk_text);
+  return rows.map((r) => r.chunk_text);
 };
