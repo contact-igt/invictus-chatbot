@@ -99,14 +99,14 @@ ${knowledgeContext}
 
     /* 7️⃣ OPENAI CALL */
     const response = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
+      model: "gpt-5.2",
       messages: [
         { role: "system", content: systemPrompt },
         ...chatHistory,
         { role: "user", content: cleanMessage },
       ],
       temperature: 0.05,
-      max_completion_tokens: 150,
+      max_completion_tokens: 180
     });
 
     /* 8️⃣ SAFE RESPONSE EXTRACTION */
