@@ -87,26 +87,26 @@ Rules:
 
     /* 6️⃣ FINAL SYSTEM PROMPT */
     const systemPrompt = `
-${basePrompt}
+     ${basePrompt}
 
-IMPORTANT:
-- Answer ONLY using the information from UPLOADED KNOWLEDGE.
-- If the answer is not found there, say you do not have that information.
+         IMPORTANT:
+          - Answer ONLY using the information from UPLOADED KNOWLEDGE.
+          - If the answer is not found there, say you do not have that information.
 
-UPLOADED KNOWLEDGE:
-${knowledgeContext}
-`;
+          UPLOADED KNOWLEDGE:
+          ${knowledgeContext}
+            `;
 
-    /* 7️⃣ OPENAI CALL */
     const response = await openai.chat.completions.create({
-      model: "gpt-5.2",
+      model: "gpt-4o", // or "gpt-4o-mini"
       messages: [
         { role: "system", content: systemPrompt },
         ...chatHistory,
         { role: "user", content: cleanMessage },
       ],
-      temperature: 0.05,
-      max_completion_tokens: 180,
+      temperature: 0.2, // not too strict
+      top_p: 0.9,
+      max_tokens: 800, // FULL DETAILS
     });
 
     /* 8️⃣ SAFE RESPONSE EXTRACTION */
