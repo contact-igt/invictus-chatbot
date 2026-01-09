@@ -1,4 +1,5 @@
 import axios from "axios";
+import https from "https";
 import OpenAI from "openai";
 import db from "../../database/index.js";
 import { tableNames } from "../../database/tableName.js";
@@ -13,34 +14,74 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
+// export const sendWhatsAppMessage = async (to, message, replyToMessageId) => {
+//   if (!message || typeof message !== "string" || message.trim() === "") {
+//     return;
+//   }
+
+//   const payload = {
+//     messaging_product: "whatsapp",
+//     recipient_type: "individual",
+//     to,
+//     type: "text",
+//     text: { body: message.trim() },
+//   };
+
+//   if (replyToMessageId) {
+//     payload.context = { message_id: replyToMessageId };
+//   }
+
+//   await axios.post(
+//     `https://graph.facebook.com/${process.env.META_API_VERSION}/${process.env.META_PHONE_NUMBER_ID}/messages`,
+//     payload,
+//     {
+//       headers: {
+//         Authorization: `Bearer ${process.env.META_ACCESS_TOKEN}`,
+//         "Content-Type": "application/json",
+//       },
+//       timeout: 15000,
+//     }
+//   );
+// };
+
+const httpsAgent = new https.Agent({
+  family: 4, // force IPv4 (fixes ENETUNREACH)
+  keepAlive: true,
+});
+
 export const sendWhatsAppMessage = async (to, message, replyToMessageId) => {
-  if (!message || typeof message !== "string" || message.trim() === "") {
-    return;
-  }
+  try {
+    if (!message || typeof message !== "string" || message.trim() === "") {
+      return;
+    }
 
-  const payload = {
-    messaging_product: "whatsapp",
-    recipient_type: "individual",
-    to,
-    type: "text",
-    text: { body: message.trim() },
-  };
+    const payload = {
+      messaging_product: "whatsapp",
+      recipient_type: "individual",
+      to,
+      type: "text",
+      text: {
+        body: message.trim(),
+      },
+    };
 
-  if (replyToMessageId) {
-    payload.context = { message_id: replyToMessageId };
-  }
+    if (replyToMessageId) {
+      payload.context = { message_id: replyToMessageId };
+    }
 
-  await axios.post(
-    `https://graph.facebook.com/${process.env.META_API_VERSION}/${process.env.META_PHONE_NUMBER_ID}/messages`,
-    payload,
-    {
+    const url = `https://graph.facebook.com/${process.env.META_API_VERSION}/${process.env.META_PHONE_NUMBER_ID}/messages`;
+
+    await axios.post(url, payload, {
       headers: {
         Authorization: `Bearer ${process.env.META_ACCESS_TOKEN}`,
         "Content-Type": "application/json",
       },
-      timeout: 15000,
-    }
-  );
+      httpsAgent,
+      timeout: 30000,
+    });
+  } catch (err) {
+    console.error("WhatsApp send failed:", err.message);
+  }
 };
 
 export const getOpenAIReply = async (phone, userMessage) => {
@@ -83,16 +124,16 @@ export const getOpenAIReply = async (phone, userMessage) => {
     }
 
     const DEFAULT_SYSTEM_PROMPT = `
-You are a WhatsApp support assistant.
+      You are a WhatsApp support assistant.
 
-Rules:
-- Reply in the SAME language as the user.
-- Be polite, calm, and professional.
-- Answer clearly and completely.
-- Use simple words.
-- If the information is not available, say so honestly.
-- Do NOT hallucinate.
-`;
+     Rules:
+     - Reply in the SAME language as the user.
+     - Be polite, calm, and professional.
+     - Answer clearly and completely.
+     - Use simple words. 
+     - If the information is not available, say so honestly.
+     - Do NOT hallucinate.
+      `;
 
     detectLanguageStyle(cleanMessage);
 
@@ -142,7 +183,7 @@ Rules:
       ],
       temperature: 0.2, // not too strict
       top_p: 0.9,
-      max_tokens: 300, // FULL DETAILS
+      max_tokens: 500, // FULL DETAILS
     });
 
     /* 8️⃣ SAFE RESPONSE EXTRACTION */
@@ -182,9 +223,6 @@ export const markMessageProcessed = async (messageId, phone) => {
     { replacements: [messageId, phone] }
   );
 };
-
-
-
 
 export const isChatLocked = async (phone) => {
   const [rows] = await db.sequelize.query(

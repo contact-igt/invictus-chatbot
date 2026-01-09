@@ -123,7 +123,5 @@ export const searchKnowledgeChunks = async (question) => {
     replacements: values,
   });
 
-  console.log(",,," , rows)
-
   return rows.map((r) => r.chunk_text);
 };
