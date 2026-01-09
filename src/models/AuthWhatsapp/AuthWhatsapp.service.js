@@ -44,6 +44,27 @@ export const sendWhatsAppMessage = async (to, message, replyToMessageId) => {
 };
 
 export const getOpenAIReply = async (phone, userMessage) => {
+  const now = new Date(
+    new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" })
+  );
+
+  const day = String(now.getDate()).padStart(2, "0");
+  const month = now.toLocaleString("en-US", { month: "long" });
+  const year = now.getFullYear();
+
+  let hours = now.getHours();
+  const minutes = String(now.getMinutes()).padStart(2, "0");
+  const ampm = hours >= 12 ? "PM" : "AM";
+  hours = hours % 12 || 12;
+
+  const currentDateFormatted = `${day} ${month} ${year}`;
+  const currentTimeFormatted = `${String(hours).padStart(
+    2,
+    "0"
+  )} ${minutes} ${ampm}`;
+
+  console.log("Date/Time", currentDateFormatted, currentTimeFormatted);
+
   try {
     if (!userMessage || typeof userMessage !== "string") {
       return null;
@@ -94,6 +115,11 @@ Rules:
           - When information exists in UPLOADED KNOWLEDGE, explain in FULL detail.
           - Do NOT summarise.
           - Do NOT stop early.
+
+          CURRENT DATE AND TIME (INDIAN STANDARD TIME)
+          Today Date: ${currentDateFormatted}
+          Current Time: ${currentTimeFormatted}
+          Timezone: Asia Kolkata
 
           UPLOADED KNOWLEDGE:
           ${knowledgeContext}
