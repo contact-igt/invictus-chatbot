@@ -42,7 +42,7 @@ export const processKnowledgeUpload = async (
 export const listKnowledgeService = async () => {
   try {
     const [result] = await db.sequelize.query(`
-    SELECT id, title, type, source_url,  file_name , created_at
+    SELECT id, title, type, source_url, file_name , status , created_at
     FROM ${tableNames.KNOWLEDGESOURCE}
     ORDER BY created_at DESC
     `);
@@ -120,4 +120,18 @@ export const deleteKnowledgeService = async (id) => {
     `,
     { replacements: [id] }
   );
+};
+
+export const updateKnowledgeStatusService = async (status, id) => {
+  const Query = ` UPDATE ${tableNames?.KNOWLEDGESOURCE} SET status = ? WHERE id = ?`;
+
+  try {
+    const values = [status, id];
+
+    const [result] = await db.sequelize.query(Query, { replacements: values });
+
+    return result;
+  } catch (err) {
+    throw err;
+  }
 };
