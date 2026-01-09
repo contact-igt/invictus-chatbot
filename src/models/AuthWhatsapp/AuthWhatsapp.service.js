@@ -118,7 +118,7 @@ Rules:
           - Do NOT summarise.
           - Do NOT stop early.
 
-          CURRENT DATE AND TIME (INDIAN STANDARD TIME)
+          CURRENT DATE , DAY AND TIME (INDIAN STANDARD TIME)
           Today Date: ${currentDateFormatted}
           Today Day : ${currentDayFormatted}
           Current Time: ${currentTimeFormatted}
