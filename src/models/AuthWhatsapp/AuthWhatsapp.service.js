@@ -51,6 +51,7 @@ export const getOpenAIReply = async (phone, userMessage) => {
   const day = String(now.getDate()).padStart(2, "0");
   const month = now.toLocaleString("en-US", { month: "long" });
   const year = now.getFullYear();
+  const weekday = now.toLocaleString("en-US", { weekday: "long" });
 
   let hours = now.getHours();
   const minutes = String(now.getMinutes()).padStart(2, "0");
@@ -62,8 +63,9 @@ export const getOpenAIReply = async (phone, userMessage) => {
     2,
     "0"
   )} ${minutes} ${ampm}`;
+  const currentDayFormatted = weekday;
 
-  console.log("Date/Time", currentDateFormatted, currentTimeFormatted);
+  console.log("Date/Time", currentDateFormatted, currentTimeFormatted , currentDayFormatted);
 
   try {
     if (!userMessage || typeof userMessage !== "string") {
@@ -116,8 +118,9 @@ Rules:
           - Do NOT summarise.
           - Do NOT stop early.
 
-          CURRENT DATE AND TIME (INDIAN STANDARD TIME)
+          CURRENT DATE , DAY AND TIME (INDIAN STANDARD TIME)
           Today Date: ${currentDateFormatted}
+          Today Day : ${currentDayFormatted}
           Current Time: ${currentTimeFormatted}
           Timezone: Asia Kolkata
 
