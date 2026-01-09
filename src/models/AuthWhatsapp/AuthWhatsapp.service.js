@@ -142,7 +142,7 @@ Rules:
       ],
       temperature: 0.2, // not too strict
       top_p: 0.9,
-      max_tokens: 800, // FULL DETAILS
+      max_tokens: 300, // FULL DETAILS
     });
 
     /* 8️⃣ SAFE RESPONSE EXTRACTION */
