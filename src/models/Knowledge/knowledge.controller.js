@@ -5,8 +5,10 @@ import {
   listKnowledgeService,
   processKnowledgeUpload,
   updateKnowledgeService,
+  updateKnowledgeStatusService,
 } from "./knowledge.service.js";
 import { cleanText } from "../../utils/cleanText.js";
+import { searchKnowledgeChunks } from "./knowledge.search.js";
 
 const sanitizeFolder = (str) => {
   if (!str) return "default";
@@ -110,7 +112,7 @@ export const uploadKnowledge = async (req, res) => {
         return res.status(400).json({ message: "URL required" });
       }
       finalText = await scrapeWebsiteText(source_url);
-      console.log("jjjj" , finalText)
+      console.log("jjjj", finalText);
       sourceUrl = source_url;
     }
 
@@ -183,5 +185,48 @@ export const deleteKnowledge = async (req, res) => {
   }
 };
 
+export const updateKnowledgeStatusController = async (req, res) => {
+  const { id } = req.params;
+  const { status } = req.query;
 
+  if (!status || !id) {
+    return res.status(400).send({
+      message: "Knowledge status  or id required",
+    });
+  }
 
+  try {
+    await updateKnowledgeStatusService(status, id);
+
+    return res.status(200).send({
+      message: "Knowledge status updated successfully",
+    });
+  } catch (err) {
+    return res.status(500).json({
+      message: err?.message,
+    });
+  }
+};
+
+export const searchKnowledgeChunksController = async (req, res) => {
+  const { question } = req.body;
+
+  if (question) {
+    return res.status(400).send({
+      message: "Knowledge search question or required",
+    });
+  }
+
+  try {
+    const data = await searchKnowledgeChunks(question);
+
+    return res.status(200).send({
+      message: "Knowledge status updated successfully",
+      output: data,
+    });
+  } catch (err) {
+    return res.status(500).json({
+      message: err?.message,
+    });
+  }
+};

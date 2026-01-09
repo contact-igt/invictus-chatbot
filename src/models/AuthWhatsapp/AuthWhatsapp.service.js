@@ -65,7 +65,12 @@ export const getOpenAIReply = async (phone, userMessage) => {
   )} ${minutes} ${ampm}`;
   const currentDayFormatted = weekday;
 
-  console.log("Date/Time", currentDateFormatted, currentTimeFormatted , currentDayFormatted);
+  console.log(
+    "Date/Time",
+    currentDateFormatted,
+    currentTimeFormatted,
+    currentDayFormatted
+  );
 
   try {
     if (!userMessage || typeof userMessage !== "string") {
@@ -126,7 +131,7 @@ Rules:
 
           UPLOADED KNOWLEDGE:
           ${knowledgeContext}
-      `;
+        `;
 
     const response = await openai.chat.completions.create({
       model: "gpt-4o", // or "gpt-4o-mini"
@@ -178,9 +183,9 @@ export const markMessageProcessed = async (messageId, phone) => {
   );
 };
 
-/* =========================
-   CHAT LOCK (AUTO EXPIRE)
-========================= */
+
+
+
 export const isChatLocked = async (phone) => {
   const [rows] = await db.sequelize.query(
     `
