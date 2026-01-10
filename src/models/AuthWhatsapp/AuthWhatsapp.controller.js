@@ -82,18 +82,6 @@ export const receiveMessage = async (req, res) => {
           console.warn("⚠️ Typing indicator failed:", e.message);
         }
 
-        // try {
-        //   await sendWhatsAppMessage(
-        //     phone,
-        //     "Please wait a moment. I am checking this for you.",
-        //     messageId
-        //   );
-        //   console.log("💬 Wait message sent");
-        // } catch (e) {
-        //   console.warn("⚠️ Wait message failed:", e.message);
-        // }
-
-        // 3️⃣ AI MUST ALWAYS RUN
         console.log("🤖 Calling AI...");
         let reply;
         const isDetailsRequired = await getAppSettingByKeyService(

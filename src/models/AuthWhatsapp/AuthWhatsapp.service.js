@@ -154,7 +154,6 @@ export const getOpenAIReply = async (phone, userMessage) => {
         ? chunks.join("\n\n")
         : "No relevant knowledge available.";
 
-    /* 6️⃣ FINAL SYSTEM PROMPT */
     const systemPrompt = ` ${basePrompt}
 
           IMPORTANT:
@@ -175,18 +174,17 @@ export const getOpenAIReply = async (phone, userMessage) => {
         `;
 
     const response = await openai.chat.completions.create({
-      model: "gpt-4o", // or "gpt-4o-mini"
+      model: "gpt-4o",
       messages: [
         { role: "system", content: systemPrompt },
         ...chatHistory,
         { role: "user", content: cleanMessage },
       ],
-      temperature: 0.2, // not too strict
+      temperature: 0.2,
       top_p: 0.9,
-      max_tokens: 500, // FULL DETAILS
+      max_tokens: 500,
     });
 
-    /* 8️⃣ SAFE RESPONSE EXTRACTION */
     const reply = response?.choices?.[0]?.message?.content;
 
     if (!reply || typeof reply !== "string") {
@@ -201,7 +199,7 @@ export const getOpenAIReply = async (phone, userMessage) => {
     return finalReply;
   } catch (err) {
     console.error("OpenAI error:", err.message);
-    return null; // 🔥 controller handles fallback/admin
+    return null;
   }
 };
 

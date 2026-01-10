@@ -1,8 +1,25 @@
 import { tableNames } from "../../tableName.js";
 
 export const ManagementTable = (sequelize, Sequelize) => {
-  return sequelize.define(tableNames.MANAGEMENT, {
-    name: {
+  return sequelize.define(tableNames?.MANAGEMENT, {
+    id: {
+      type: Sequelize.BIGINT,
+      primaryKey: true,
+      autoIncrement: true,
+    },
+
+    tenant_id: {
+      type: Sequelize.BIGINT,
+      allowNull: true, // SUPER_ADMIN
+    },
+
+    title: {
+      type: Sequelize.ENUM("Dr", "Mr", "Ms", "Mrs"),
+      allowNull: true,
+    },
+
+
+    username: {
       type: Sequelize.STRING,
       allowNull: false,
     },
@@ -11,14 +28,17 @@ export const ManagementTable = (sequelize, Sequelize) => {
       type: Sequelize.STRING,
       allowNull: false,
       unique: true,
-      validate: {
-        isEmail: true,
-      },
+      validate: { isEmail: true },
+    },
+
+    country_code: {
+      type: Sequelize.STRING,
+      allowNull: true,
     },
 
     mobile: {
       type: Sequelize.STRING,
-      allowNull: false,
+      allowNull: true,
       unique: true,
     },
 
@@ -26,41 +46,19 @@ export const ManagementTable = (sequelize, Sequelize) => {
       type: Sequelize.STRING,
       allowNull: false,
     },
+    
 
     role: {
-      type: Sequelize.ENUM("super-admin", "admin", "agent"),
+      type: Sequelize.ENUM("super_admin", "admin", "staff"),
       allowNull: false,
-      defaultValue: "agent",
     },
 
     status: {
-      type: Sequelize.ENUM("active", "inactive", "suspended"),
+      type: Sequelize.ENUM("active", "inactive"),
       defaultValue: "active",
-    },
-
-    createdAt: {
-      type: "TIMESTAMP",
-      allowNull: true,
-      defaultValue: sequelize.literal("CURRENT_TIMESTAMP"),
-      field: "created_at",
-    },
-
-    updatedAt: {
-      type: "TIMESTAMP",
-      allowNull: true,
-      defaultValue: sequelize.literal("CURRENT_TIMESTAMP"),
-      field: "updated_at",
     },
   });
 };
 
 
 
-// id
-// name
-// email
-// mobile
-// password
-// role        → super-admin | admin | agent
-// status      → active / inactive
-// created_at

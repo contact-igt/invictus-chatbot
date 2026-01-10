@@ -18,7 +18,7 @@ const Router = express.Router();
 
 Router.post(
   "/management/register",
-  authenticateSuperAdminToken,
+  // authenticateSuperAdminToken,
   registerManagementController
 );
 Router.post("/management/login", loginManagementController);

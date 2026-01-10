@@ -28,16 +28,25 @@ import bcrypt from "bcrypt";
 // import { tableNames } from "../../database/tableName.js";
 
 export const registerManagementController = async (req, res) => {
-  const token = req.header("Authorization");
+  // const token = req.header("Authorization");
 
-  const { title, username, email, country_code, mobile, password, role } =
-    req.body;
-
-  const requiredFields = {
+  const {
+    tenant_id,
     title,
     username,
     email,
+    country_code,
+    mobile,
     password,
+    role,
+  } = req.body;
+
+  const requiredFields = {
+    tenant_id,
+    username,
+    email,
+    country_code,
+    mobile,
     role,
   };
 
@@ -50,15 +59,16 @@ export const registerManagementController = async (req, res) => {
   }
 
   try {
-    const decoded = decodeAuthToken(token);
+    // const decoded = decodeAuthToken(token);
 
-    if (decoded.role !== "super-admin") {
-      return res.status(400).json({
-        message: "You don't have access to create new management user",
-      });
-    }
+    // if (decoded.role !== "super-admin") {
+    //   return res.status(400).json({
+    //     message: "You don't have access to create new management user",
+    //   });
+    // }
 
     await registerManagementService(
+      tenant_id,
       title,
       username,
       email,
@@ -112,8 +122,7 @@ export const loginManagementController = async (req, res) => {
       message: "Login successful",
       user: {
         id: user?.id,
-        title: user?.title,
-        username: user?.username,
+        username: user?.name,
         email: user?.email,
         profile: user?.profile_picture,
         role: user?.role,

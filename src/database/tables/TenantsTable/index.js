@@ -1,42 +1,46 @@
 import { tableNames } from "../../tableName.js";
 
-export const whatsappAccountTable = (sequelize, Sequelize) => {
-  return sequelize.define(tableNames.WHATSAPP_ACCOUNT, {
-    tenant_id: {
-      type: Sequelize.BIGINT,
-      allowNull: false,
+export const TenantsTable = (sequelize, Sequelize) => {
+  return sequelize.define(tableNames.TENANTS, {
+    name: {
+      type: Sequelize.STRING,
+      allowNull: true,
     },
 
-    whatsapp_number: {
+    email: {
+      type: Sequelize.STRING,
+      allowNull: false,
+      unique: true,
+      validate: {
+        isEmail: true,
+      },
+    },
+
+    country_code: {
+      type: Sequelize.STRING,
+      allowNull: true,
+    },
+
+    mobile: {
       type: Sequelize.STRING,
       allowNull: false,
       unique: true,
     },
 
-    phone_number_id: {
-      type: Sequelize.STRING,
-      allowNull: false,
-      unique: true,
-    },
-
-    waba_id: {
-      type: Sequelize.STRING,
-      allowNull: false,
-    },
-
-    access_token: {
-      type: Sequelize.TEXT,
-      allowNull: false,
-    },
-
-    provider: {
-      type: Sequelize.ENUM("meta"),
-      defaultValue: "meta",
+    type: {
+      type: Sequelize.ENUM("hospital", "clinic"),
+      allownull: false,
     },
 
     status: {
       type: Sequelize.ENUM("active", "inactive"),
+      allownull: false,
       defaultValue: "active",
+    },
+
+    profile: {
+      type: Sequelize.STRING,
+      allowNull: true,
     },
 
     createdAt: {
@@ -54,5 +58,3 @@ export const whatsappAccountTable = (sequelize, Sequelize) => {
     },
   });
 };
-
-
