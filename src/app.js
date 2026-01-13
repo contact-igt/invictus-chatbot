@@ -11,6 +11,7 @@ import ConversationRouter from "./models/Conversation/conversation.routes.js";
 import AppSettingRouter from "./models/AppSettings/appsetting.routes.js";
 import ManagementRouter from "./models/Management/management.routes.js";
 import TenantRouter from "./models/TenantModel/tenant.routes.js";
+import WhatsappAccountRouter from "./models/WhatsappAccountModel/whatsappAccount.routes.js"
 
 import dns from "dns";
 dns.setDefaultResultOrder("ipv4first");
@@ -42,7 +43,8 @@ app.use(
   ConversationRouter,
   AppSettingRouter,
   ManagementRouter,
-  TenantRouter
+  TenantRouter,
+  WhatsappAccountRouter
 );
 
 app.get("/", (req, res) => {

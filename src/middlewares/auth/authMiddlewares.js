@@ -204,13 +204,13 @@ export const generateRememberMeToken = (user) => {
   );
 };
 
-export const decodeAuthToken = (authHeader) => {
-  if (!authHeader) return null;
-  const token = authHeader.split(" ")[1];
-  if (!token) return null;
+// export const decodeAuthToken = (authHeader) => {
+//   if (!authHeader) return null;
+//   const token = authHeader.split(" ")[1];
+//   if (!token) return null;
 
-  return jwt.verify(token, ServerEnvironmentConfig.jwt_key);
-};
+//   return jwt.verify(token, ServerEnvironmentConfig.jwt_key);
+// };
 
 export const authenticate = async (req, res, next) => {
   const authHeader = req.headers["authorization"];

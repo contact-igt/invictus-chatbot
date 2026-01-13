@@ -1,15 +1,9 @@
 import {
-  decodeAuthToken,
   generateAccessToken,
   generateRefreshToken,
 } from "../../middlewares/auth/authMiddlewares.js";
 import { missingFieldsChecker } from "../../utils/missingFields.js";
 import { findTenantByIdService } from "../TenantModel/tenant.service.js";
-// import {
-//   findUserByIdService,
-//   updateOldUserPasswordByIdService,
-//   updateUserPasswordByIdService,
-// } from "../UserModels/user.service.js";
 import {
   getManagementService,
   getManagementByIdService,

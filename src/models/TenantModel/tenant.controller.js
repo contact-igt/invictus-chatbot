@@ -11,14 +11,14 @@ import {
 
 export const createTenantController = async (req, res) => {
   try {
-    const decoded = req.user;
+    // const decoded = req.user;
 
-    if (decoded.role !== "super_admin") {
-      await transaction.rollback();
-      return res.status(403).json({
-        message: "Only super admin can create tenant",
-      });
-    }
+    // if (decoded.role !== "super_admin") {
+    //   await transaction.rollback();
+    //   return res.status(403).json({
+    //     message: "Only super admin can create tenant",
+    //   });
+    // }
 
     const { name, email, country_code, mobile, type, password } = req.body;
 
