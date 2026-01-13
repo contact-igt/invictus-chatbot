@@ -3,7 +3,7 @@ import { tableNames } from "../../tableName.js";
 export const whatsappAccountTable = (sequelize, Sequelize) => {
   return sequelize.define(tableNames.WHATSAPP_ACCOUNT, {
     tenant_id: {
-      type: Sequelize.BIGINT,
+      type: Sequelize.INTEGER,
       allowNull: false,
     },
 
@@ -38,7 +38,6 @@ export const whatsappAccountTable = (sequelize, Sequelize) => {
       type: Sequelize.ENUM("active", "inactive"),
       defaultValue: "active",
     },
-
     createdAt: {
       type: "TIMESTAMP",
       allowNull: true,
@@ -54,5 +53,3 @@ export const whatsappAccountTable = (sequelize, Sequelize) => {
     },
   });
 };
-
-

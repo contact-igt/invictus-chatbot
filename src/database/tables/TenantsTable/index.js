@@ -4,16 +4,14 @@ export const TenantsTable = (sequelize, Sequelize) => {
   return sequelize.define(tableNames.TENANTS, {
     name: {
       type: Sequelize.STRING,
-      allowNull: true,
+      allowNull: false,
     },
 
     email: {
       type: Sequelize.STRING,
       allowNull: false,
       unique: true,
-      validate: {
-        isEmail: true,
-      },
+      validate: { isEmail: true },
     },
 
     country_code: {
@@ -28,21 +26,20 @@ export const TenantsTable = (sequelize, Sequelize) => {
     },
 
     type: {
-      type: Sequelize.ENUM("hospital", "clinic"),
-      allownull: false,
+      type: Sequelize.ENUM("hospital", "clinic", "organization"),
+      allowNull: false,
     },
 
     status: {
-      type: Sequelize.ENUM("active", "inactive"),
-      allownull: false,
+      type: Sequelize.ENUM("active", "inactive", "expired"),
       defaultValue: "active",
+      allowNull: false,
     },
 
     profile: {
       type: Sequelize.STRING,
       allowNull: true,
     },
-
     createdAt: {
       type: "TIMESTAMP",
       allowNull: true,

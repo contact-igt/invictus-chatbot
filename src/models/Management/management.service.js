@@ -5,14 +5,14 @@ import { tableNames } from "../../database/tableName.js";
 import db from "../../database/index.js";
 
 export const registerManagementService = async (
-  tenant_id,
   title,
   username,
   email,
   country_code,
   mobile,
   password,
-  role
+  role,
+  tenant_id
 ) => {
   const passwordhashed = await bcrypt.hash(password, 10);
 
@@ -53,7 +53,7 @@ export const loginManagementService = async (email) => {
 
 export const getManagementService = async () => {
   const protectedEmails = ["contact@invictusglobaltech.com"];
-  const Query = `SELECT id , name , email ,  mobile , role , status ,  created_at  FROM ${tableNames?.MANAGEMENT} ORDER BY created_at DESC `;
+  const Query = `SELECT * FROM ${tableNames?.MANAGEMENT} ORDER BY created_at DESC `;
 
   try {
     const [result] = await db.sequelize.query(Query);

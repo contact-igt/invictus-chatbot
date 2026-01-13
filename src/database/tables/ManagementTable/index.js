@@ -1,23 +1,16 @@
 import { tableNames } from "../../tableName.js";
 
 export const ManagementTable = (sequelize, Sequelize) => {
-  return sequelize.define(tableNames?.MANAGEMENT, {
-    id: {
-      type: Sequelize.BIGINT,
-      primaryKey: true,
-      autoIncrement: true,
-    },
-
+  return sequelize.define(tableNames.MANAGEMENT, {
     tenant_id: {
-      type: Sequelize.BIGINT,
-      allowNull: true, // SUPER_ADMIN
+      type: Sequelize.INTEGER,
+      allowNull: true,
     },
 
     title: {
       type: Sequelize.ENUM("Dr", "Mr", "Ms", "Mrs"),
       allowNull: true,
     },
-
 
     username: {
       type: Sequelize.STRING,
@@ -38,7 +31,6 @@ export const ManagementTable = (sequelize, Sequelize) => {
 
     mobile: {
       type: Sequelize.STRING,
-      allowNull: true,
       unique: true,
     },
 
@@ -46,7 +38,11 @@ export const ManagementTable = (sequelize, Sequelize) => {
       type: Sequelize.STRING,
       allowNull: false,
     },
-    
+
+    profile: {
+      type: Sequelize.STRING,
+      allowNull: true,
+    },
 
     role: {
       type: Sequelize.ENUM("super_admin", "admin", "staff"),
@@ -57,8 +53,18 @@ export const ManagementTable = (sequelize, Sequelize) => {
       type: Sequelize.ENUM("active", "inactive"),
       defaultValue: "active",
     },
+    createdAt: {
+      type: "TIMESTAMP",
+      allowNull: true,
+      defaultValue: sequelize.literal("CURRENT_TIMESTAMP"),
+      field: "created_at",
+    },
+
+    updatedAt: {
+      type: "TIMESTAMP",
+      allowNull: true,
+      defaultValue: sequelize.literal("CURRENT_TIMESTAMP"),
+      field: "updated_at",
+    },
   });
 };
-
-
-

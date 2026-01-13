@@ -22,7 +22,7 @@ Router.post(
   registerManagementController
 );
 Router.post("/management/login", loginManagementController);
-Router.get("/management", getManagementController);
+Router.get("/managements", getManagementController);
 Router.get("/management/:id", getManagementByIdController);
 // Router.post("/management/user-password", userPasswordChange);
 // Router.put(

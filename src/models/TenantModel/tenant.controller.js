@@ -19,7 +19,7 @@ export const createTenantController = async (req, res) => {
       country_code,
       mobile,
       type,
-      password
+      password,
     };
 
     const missingFields = await missingFieldsChecker(requiredFields);
@@ -38,16 +38,18 @@ export const createTenantController = async (req, res) => {
       type
     );
 
-    await registerManagementService(
-      tenantId,
-      null,
-      name,
-      email,
-      country_code,
-      mobile,
-      password,
-      "admin"
-    );
+    if (tenantId) {
+      await registerManagementService(
+        null,
+        name,
+        email,
+        country_code,
+        mobile,
+        password,
+        "admin",
+        tenantId
+      );
+    }
 
     return res.status(200).send({
       message: "Tenant onborded successfully",
@@ -137,6 +139,12 @@ export const updateTenantStatusController = async (req, res) => {
     if (!status) {
       return res.status(400).send({
         message: "Status is required",
+      });
+    }
+
+    if (!["active", "inactive"].includes(status)) {
+      return res.status(400).send({
+        message: "Invalid status",
       });
     }
 

@@ -31,7 +31,6 @@ export const registerManagementController = async (req, res) => {
   // const token = req.header("Authorization");
 
   const {
-    tenant_id,
     title,
     username,
     email,
@@ -39,10 +38,10 @@ export const registerManagementController = async (req, res) => {
     mobile,
     password,
     role,
+    tenant_id,
   } = req.body;
 
   const requiredFields = {
-    tenant_id,
     username,
     email,
     country_code,
@@ -68,14 +67,14 @@ export const registerManagementController = async (req, res) => {
     // }
 
     await registerManagementService(
-      tenant_id,
-      title,
+      title ? title : null,
       username,
       email,
       country_code,
       mobile,
       password,
-      role
+      role,
+      tenant_id
     );
 
     return res.status(200).json({
@@ -122,10 +121,12 @@ export const loginManagementController = async (req, res) => {
       message: "Login successful",
       user: {
         id: user?.id,
-        username: user?.name,
+        tenant_id: user?.tenant_id,
+        username: user?.username,
         email: user?.email,
-        profile: user?.profile_picture,
+        profile: user?.profile,
         role: user?.role,
+        status: user?.status,
       },
       accessToken: accessToken,
       refreshToken: refreshToken,
