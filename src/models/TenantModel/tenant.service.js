@@ -125,3 +125,16 @@ export const deleteTenantService = async (id) => {
     throw err;
   }
 };
+
+export const findTenantByIdService = async (id) => {
+  const Query = `SELECT * FROM ${tableNames?.TENANTS} WHERE id = ? LIMIT 1`;
+
+  try {
+    const [result] = await db.sequelize.query(Query, { replacements: [id] });
+    return result[0];
+  } catch (err) {
+    throw err;
+  }
+};
+
+

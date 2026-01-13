@@ -9,21 +9,39 @@ import {
   // userPasswordChange,
 } from "./management.controller.js";
 import {
+  authenticate,
+  refreshToken,
   // authenticateManagementToken,
-  authenticateSuperAdminToken,
-  // refreshToken,
+  // authenticateSuperAdminToken,
+  requireAdmin,
+  requireManagement,
 } from "../../middlewares/auth/authMiddlewares.js";
 
 const Router = express.Router();
 
 Router.post(
   "/management/register",
-  // authenticateSuperAdminToken,
+  authenticate,
+  requireAdmin,
   registerManagementController
 );
 Router.post("/management/login", loginManagementController);
-Router.get("/managements", getManagementController);
-Router.get("/management/:id", getManagementByIdController);
+Router.get(
+  "/managements",
+  authenticate,
+  requireManagement,
+  getManagementController
+);
+Router.get(
+  "/management/:id",
+  authenticate,
+  requireManagement,
+  getManagementByIdController
+);
+
+
+
+
 // Router.post("/management/user-password", userPasswordChange);
 // Router.put(
 //   "/management/:id",
@@ -35,6 +53,6 @@ Router.get("/management/:id", getManagementByIdController);
 //   authenticateSuperAdminToken,
 //   deleteManagementByIdController
 // );
-// Router.post("/refresh-management-token", refreshToken);
+Router.post("/refresh-management-token", refreshToken);
 
 export default Router;

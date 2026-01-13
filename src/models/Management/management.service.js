@@ -1,5 +1,3 @@
-import { title } from "process";
-
 import bcrypt from "bcrypt";
 import { tableNames } from "../../database/tableName.js";
 import db from "../../database/index.js";
@@ -43,7 +41,7 @@ export const loginManagementService = async (email) => {
     const Query = `SELECT * FROM ${tableNames?.MANAGEMENT} WHERE email = ? `;
 
     const [result] = await db.sequelize.query(Query, {
-      replacements: [email],
+      replacements: [email ],
     });
     return result[0];
   } catch (err) {
@@ -69,7 +67,7 @@ export const getManagementService = async () => {
 };
 
 export const getManagementByIdService = async (user_id) => {
-  const Query = `SELECT id , name , email ,  mobile , role , status ,  created_at FROM ${tableNames?.MANAGEMENT} WHERE id = ? `;
+  const Query = `SELECT * FROM ${tableNames?.MANAGEMENT} WHERE id = ? `;
 
   try {
     const [result] = await db.sequelize.query(Query, {
@@ -86,6 +84,8 @@ export const getManagementByIdService = async (user_id) => {
     throw err;
   }
 };
+
+
 
 // export const updateManagementByIdService = async (
 //   user_id,

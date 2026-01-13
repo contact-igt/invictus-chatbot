@@ -11,6 +11,15 @@ import {
 
 export const createTenantController = async (req, res) => {
   try {
+    const decoded = req.user;
+
+    if (decoded.role !== "super_admin") {
+      await transaction.rollback();
+      return res.status(403).json({
+        message: "Only super admin can create tenant",
+      });
+    }
+
     const { name, email, country_code, mobile, type, password } = req.body;
 
     const requiredFields = {
@@ -23,14 +32,13 @@ export const createTenantController = async (req, res) => {
     };
 
     const missingFields = await missingFieldsChecker(requiredFields);
-
     if (missingFields.length > 0) {
       return res.status(400).json({
-        message: `Missing required field(s) ${missingFields.join(", ")} `,
+        message: `Missing required field(s): ${missingFields.join(", ")}`,
       });
     }
 
-    const tenantId = await createTenantService(
+    const tenant = await createTenantService(
       name,
       email,
       country_code,
@@ -38,7 +46,7 @@ export const createTenantController = async (req, res) => {
       type
     );
 
-    if (tenantId) {
+    if (tenant) {
       await registerManagementService(
         null,
         name,
@@ -47,16 +55,19 @@ export const createTenantController = async (req, res) => {
         mobile,
         password,
         "admin",
-        tenantId
+        tenant
       );
     }
 
-    return res.status(200).send({
-      message: "Tenant onborded successfully",
+    return res.status(200).json({
+      message: "Tenant onboarded successfully",
+      tenant_id: tenant.id,
     });
   } catch (err) {
     if (err.original?.code === "ER_DUP_ENTRY") {
-      return res.status(400).json({ message: "Try another email or mobile " });
+      return res.status(400).json({
+        message: "Email or mobile already exists",
+      });
     }
 
     return res.status(500).json({
