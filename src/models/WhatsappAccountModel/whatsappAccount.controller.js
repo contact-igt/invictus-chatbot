@@ -13,11 +13,11 @@ export const whatsappCallbackController = async (req, res) => {
     const tenant_id = 1;
 
     if (!code) {
-      return res.status(400).json({ message: "Authorization code missing" });
+      return res.status(400).send({ message: "Authorization code missing" });
     }
 
     if (!tenant_id) {
-      return res.status(400).json({ message: "Invalid tenant context" });
+      return res.status(400).send({ message: "Invalid tenant context" });
     }
 
     const tokenRes = await axios.get(
@@ -35,7 +35,7 @@ export const whatsappCallbackController = async (req, res) => {
     const access_token = tokenRes.data.access_token;
 
     if (!access_token) {
-      return res.status(400).json({
+      return res.status(400).send({
         message: "Access token not received from Meta",
       });
     }
@@ -52,7 +52,7 @@ export const whatsappCallbackController = async (req, res) => {
     const business = businessRes.data?.data?.[0];
 
     if (!business) {
-      return res.status(400).json({
+      return res.status(400).send({
         message: "No Facebook Business found for this user",
       });
     }
@@ -71,7 +71,7 @@ export const whatsappCallbackController = async (req, res) => {
     const waba = wabaRes.data?.data?.[0];
 
     if (!waba) {
-      return res.status(400).json({
+      return res.status(400).send({
         message: "No WhatsApp Business Account found",
       });
     }
@@ -90,7 +90,7 @@ export const whatsappCallbackController = async (req, res) => {
     const phone = phoneRes.data?.data?.[0];
 
     if (!phone) {
-      return res.status(400).json({
+      return res.status(400).send({
         message: "No WhatsApp phone number found",
       });
     }
@@ -112,7 +112,7 @@ export const whatsappCallbackController = async (req, res) => {
   } catch (err) {
     console.error("META ERROR:", err.response?.data || err.message);
 
-    return res.status(500).json({
+    return res.status(500).send({
       message: "WhatsApp connection failed",
       meta_error: err.response?.data || err.message,
     });
@@ -195,7 +195,7 @@ export const testWhatsappAccountConnectionController = async (req, res) => {
       throw new Error("WABA ID does not match this phone number");
     }
 
-    await updateWhatsappAccountStatusService(account.id, "verified");
+    await updateWhatsappAccountStatusService(account.id, "verified", null);
 
     return res.status(200).send({
       message: "WhatsApp connection successful",
@@ -222,18 +222,18 @@ export const getWhatsappAccountByIdController = async (req, res) => {
   const tenant_id = req.user.tenant_id;
 
   if (!tenant_id) {
-    return res.status(400).json({ message: "Invalid tenant context" });
+    return res.status(400).send({ message: "Invalid tenant context" });
   }
 
   try {
     const response = await getWhatsappAccountByIdService(tenant_id);
 
-    return res.status(200).json({
+    return res.status(200).send({
       message: "success",
       data: response,
     });
   } catch (err) {
-    return res.status(500).json({
+    return res.status(500).send({
       message: err?.message,
     });
   }
@@ -246,7 +246,7 @@ export const activateWhatsappAccountController = async (req, res) => {
 
   try {
     if (!status) {
-      return res.status(400).json({
+      return res.status(400).send({
         message: "Status required",
       });
     }
@@ -254,18 +254,18 @@ export const activateWhatsappAccountController = async (req, res) => {
     const account = await getWhatsappAccountByIdService(tenant_id);
 
     if (!account || account.status !== "verified") {
-      return res.status(400).json({
+      return res.status(400).send({
         message: "Please test connection before activation",
       });
     }
 
     await updateWhatsappAccountStatusService(account.id, status, null);
 
-    return res.status(200).json({
+    return res.status(200).send({
       message: "WhatsApp account activated successfully",
     });
   } catch (err) {
-    return res.status(500).json({
+    return res.status(500).send({
       message: err?.message,
     });
   }
