@@ -241,7 +241,9 @@ export const getWhatsappAccountByIdController = async (req, res) => {
 export const activateWhatsappAccountController = async (req, res) => {
   const tenant_id = req.user.tenant_id;
 
-  const { status } = req.params;
+  const { status } = req.query;
+
+  console.log("sss", status);
 
   try {
     if (!status) {

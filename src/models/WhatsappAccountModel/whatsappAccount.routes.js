@@ -14,12 +14,6 @@ Router.get("/callback", whatsappCallbackController);
 
 Router.post("/whatsapp-account", authenticate, createWhatsappAccountController);
 
-Router.put(
-  "/whatsapp-account/status",
-  authenticate,
-  activateWhatsappAccountController
-);
-
 Router.get(
   "/whatsapp-accounts",
   authenticate,
@@ -27,9 +21,15 @@ Router.get(
 );
 
 Router.get(
-  "/whatsapp-accout/test-connect",
+  "/whatsapp-account/test-connect",
   authenticate,
   testWhatsappAccountConnectionController
+);
+
+Router.put(
+  "/whatsapp-account/status",
+  authenticate,
+  activateWhatsappAccountController
 );
 
 export default Router;
