@@ -2,13 +2,14 @@ import axios from "axios";
 import {
   createWhatsappAccountService,
   getWhatsappAccountByIdService,
+  updateWhatsappAccountStatusService,
 } from "./whatsappAccount.service.js";
 
 export const whatsappCallbackController = async (req, res) => {
   try {
     const { code } = req.query;
-    const user = req.user;
-    const tenant_id = user.tenant_id;
+
+    const tenant_id = 1;
 
     if (!code) {
       return res.status(400).json({ message: "Authorization code missing" });
@@ -17,6 +18,7 @@ export const whatsappCallbackController = async (req, res) => {
     if (!tenant_id) {
       return res.status(400).json({ message: "Invalid tenant context" });
     }
+
     const tokenRes = await axios.get(
       "https://graph.facebook.com/v19.0/oauth/access_token",
       {
@@ -104,7 +106,7 @@ export const whatsappCallbackController = async (req, res) => {
     );
 
     return res.redirect(
-      ` ${process.env.FRONTEND_URL}/settings/whatsapp-settings?status=connected `
+      "http://localhost:3000/settings/whatsapp-settings?status=connected"
     );
   } catch (err) {
     console.error("META ERROR:", err.response?.data || err.message);
@@ -112,6 +114,86 @@ export const whatsappCallbackController = async (req, res) => {
     return res.status(500).json({
       message: "WhatsApp connection failed",
       meta_error: err.response?.data || err.message,
+    });
+  }
+};
+
+// ---------------------
+
+export const manualWhatsappAccaountByIdController = async (req, res) => {
+  const { tenant_id, whatsapp_number, phone_number_id, waba_id, access_token } =
+    req.body;
+
+  const requiredFields = {
+    tenant_id,
+    whatsapp_number,
+    phone_number_id,
+    waba_id,
+    access_token,
+  };
+
+  const missingFields = await missingFieldsChecker(requiredFields);
+  if (missingFields.length > 0) {
+    return res.status(400).json({
+      message: `Missing required field(s): ${missingFields.join(", ")}`,
+    });
+  }
+
+  try {
+    await createWhatsappAccountService(
+      tenant_id,
+      whatsapp_number,
+      phone_number_id,
+      waba_id,
+      access_token,
+      "pending"
+    );
+
+    return res.status(200).json({
+      message: "WhatsApp details saved. Please test connection.",
+    });
+  } catch (err) {
+    return res.status(500).json({
+      message: err?.message,
+    });
+  }
+};
+
+export const testWhatsappConnectionController = async (req, res) => {
+  try {
+    const tenant_id = req.user.tenant_id;
+
+    const account = await getWhatsappAccountByIdService(tenant_id);
+
+    if (!account) {
+      return res.status(404).json({
+        message: "WhatsApp account not found",
+      });
+    }
+
+    await axios.get(
+      `https://graph.facebook.com/v19.0/${account.phone_number_id}`,
+      {
+        headers: {
+          Authorization: `Bearer ${account.access_token}`,
+        },
+      }
+    );
+
+    await updateWhatsappAccountStatusService(account.id, "verified", null);
+
+    return res.json({
+      message: "WhatsApp connection successful",
+    });
+  } catch (err) {
+    await updateWhatsappAccountStatusService(
+      account.id,
+      "failed",
+      err.response?.data || err.message
+    );
+
+    return res.status(400).json({
+      message: "WhatsApp connection failed",
     });
   }
 };
@@ -130,6 +212,38 @@ export const getWhatsappAccountByIdController = async (req, res) => {
     return res.status(200).json({
       message: "success",
       data: response,
+    });
+  } catch (err) {
+    return res.status(500).json({
+      message: err?.message,
+    });
+  }
+};
+
+export const activateWhatsappAccountController = async (req, res) => {
+  const tenant_id = req.user.tenant_id;
+
+  const { status } = req.params;
+
+  try {
+    if (!status) {
+      return res.status(400).json({
+        message: "Status required",
+      });
+    }
+
+    const account = await getWhatsappAccountByIdService(tenant_id);
+
+    if (!account || account.status !== "verified") {
+      return res.status(400).json({
+        message: "Please test connection before activation",
+      });
+    }
+
+    await updateWhatsappAccountStatusService(account.id, status, null);
+
+    return res.status(200).json({
+      message: "WhatsApp account activated successfully",
     });
   } catch (err) {
     return res.status(500).json({

@@ -5,10 +5,11 @@ export const whatsappAccountTable = (sequelize, Sequelize) => {
     tenant_id: {
       type: Sequelize.INTEGER,
       allowNull: false,
+      unique: true,
     },
 
     whatsapp_number: {
-      type: Sequelize.STRING,
+      type: Sequelize.STRING(20),
       allowNull: false,
       unique: true,
     },
@@ -25,7 +26,7 @@ export const whatsappAccountTable = (sequelize, Sequelize) => {
     },
 
     access_token: {
-      type: Sequelize.TEXT,
+      type: Sequelize.TEXT, // store encrypted
       allowNull: false,
     },
 
@@ -35,20 +36,41 @@ export const whatsappAccountTable = (sequelize, Sequelize) => {
     },
 
     status: {
-      type: Sequelize.ENUM("active", "inactive"),
-      defaultValue: "active",
+      type: Sequelize.ENUM(
+        "pending", // saved but not tested
+        "verified", // test success
+        "active", // ready to send messages
+        "inactive", // manually disabled
+        "token_expired",
+        "failed"
+      ),
+      defaultValue: "pending",
     },
-    createdAt: {
-      type: "TIMESTAMP",
+
+    is_verified: {
+      type: Sequelize.STRING,
+      defaultValue: "false",
+    },
+
+    verified_at: {
+      type: Sequelize.DATE,
       allowNull: true,
-      defaultValue: sequelize.literal("CURRENT_TIMESTAMP"),
+    },
+
+    last_error: {
+      type: Sequelize.TEXT,
+      allowNull: true,
+    },
+
+    createdAt: {
+      type: Sequelize.DATE,
+      defaultValue: Sequelize.literal("CURRENT_TIMESTAMP"),
       field: "created_at",
     },
 
     updatedAt: {
-      type: "TIMESTAMP",
-      allowNull: true,
-      defaultValue: sequelize.literal("CURRENT_TIMESTAMP"),
+      type: Sequelize.DATE,
+      defaultValue: Sequelize.literal("CURRENT_TIMESTAMP"),
       field: "updated_at",
     },
   });
