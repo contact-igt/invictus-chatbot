@@ -254,7 +254,7 @@ export const activateWhatsappAccountController = async (req, res) => {
 
     const account = await getWhatsappAccountByIdService(tenant_id);
 
-    if (!account || account.status !== "verified") {
+    if (!account || (account.status !== "verified" && status === "active")) {
       return res.status(400).send({
         message: "Please test connection before activation",
       });
@@ -263,7 +263,7 @@ export const activateWhatsappAccountController = async (req, res) => {
     await updateWhatsappAccountStatusService(account.id, status, null);
 
     return res.status(200).send({
-      message: "WhatsApp account activated successfully",
+      message: "WhatsApp account status updated successfully",
     });
   } catch (err) {
     return res.status(500).send({
