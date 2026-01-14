@@ -188,10 +188,9 @@ export const testWhatsappAccountConnectionController = async (req, res) => {
       }
     );
 
-    if (
-      account.waba_id &&
-      response.data?.whatsapp_business_account?.id !== account.waba_id
-    ) {
+    const metaWabaId = response.data?.whatsapp_business_account?.id;
+
+    if (account.waba_id && metaWabaId && metaWabaId !== account.waba_id) {
       throw new Error("WABA ID does not match this phone number");
     }
 
