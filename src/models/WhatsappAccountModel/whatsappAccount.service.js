@@ -44,13 +44,14 @@ export const getWhatsappAccountByIdService = async (tenant_id) => {
   const values = [tenant_id];
   try {
     const [result] = await db.sequelize.query(Query, { replacements: values });
-    return result;
+    return result[0];
   } catch (err) {
     throw err;
   }
 };
 
 export const updateWhatsappAccountStatusService = async (id, status, error) => {
+  
   const Query = `UPDATE ${tableNames?.WHATSAPP_ACCOUNT} SET status = ? , last_error = ? , is_verified = ? , verified_at = ? WHERE id = ? `;
 
   try {

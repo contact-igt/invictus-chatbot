@@ -121,8 +121,9 @@ export const whatsappCallbackController = async (req, res) => {
 
 // ---------------------
 
-export const manualWhatsappAccaountByIdController = async (req, res) => {
+export const createWhatsappAccountController = async (req, res) => {
   const { whatsapp_number, phone_number_id, waba_id, access_token } = req.body;
+
   const tenant_id = req.user.tenant_id;
 
   const requiredFields = {
@@ -135,7 +136,7 @@ export const manualWhatsappAccaountByIdController = async (req, res) => {
 
   const missingFields = await missingFieldsChecker(requiredFields);
   if (missingFields.length > 0) {
-    return res.status(400).json({
+    return res.status(400).send({
       message: `Missing required field(s): ${missingFields.join(", ")}`,
     });
   }
@@ -150,38 +151,43 @@ export const manualWhatsappAccaountByIdController = async (req, res) => {
       "pending"
     );
 
-    return res.status(200).json({
+    return res.status(200).send({
       message: "WhatsApp details saved. Please test connection.",
     });
   } catch (err) {
-    return res.status(500).json({
+    if (err.original?.code === "ER_DUP_ENTRY") {
+      return res.status(400).send({
+        message: "Tenant or whatsapp number or phone number id already exists",
+      });
+    }
+
+    return res.status(500).send({
       message: err?.message,
     });
   }
 };
 
-export const testWhatsappConnectionController = async (req, res) => {
+export const testWhatsappAccountConnectionController = async (req, res) => {
   const tenant_id = req.user.tenant_id;
 
   const account = await getWhatsappAccountByIdService(tenant_id);
 
   if (!account) {
-    return res.status(404).json({
+    return res.status(404).send({
       message: "WhatsApp account not found",
     });
   }
 
   try {
     const response = await axios.get(
-      `https://graph.facebook.com/v19.0/${account.phone_number_id}`,
+      `https://graph.facebook.com/v19.0/${account?.phone_number_id}`,
       {
         headers: {
-          Authorization: `Bearer ${account.access_token}`,
+          Authorization: `Bearer ${account?.access_token}`,
         },
       }
     );
 
-    // Optional WABA check
     if (
       account.waba_id &&
       response.data?.whatsapp_business_account?.id !== account.waba_id
@@ -191,7 +197,7 @@ export const testWhatsappConnectionController = async (req, res) => {
 
     await updateWhatsappAccountStatusService(account.id, "verified");
 
-    return res.json({
+    return res.status(200).send({
       message: "WhatsApp connection successful",
       data: {
         phone: response.data.display_phone_number,
@@ -205,7 +211,7 @@ export const testWhatsappConnectionController = async (req, res) => {
       err.response?.data || err.message
     );
 
-    return res.status(400).json({
+    return res.status(400).send({
       message: "WhatsApp connection failed",
       error: err.response?.data || err.message,
     });
@@ -213,8 +219,7 @@ export const testWhatsappConnectionController = async (req, res) => {
 };
 
 export const getWhatsappAccountByIdController = async (req, res) => {
-  const user = req.user;
-  const tenant_id = user.tenant_id;
+  const tenant_id = req.user.tenant_id;
 
   if (!tenant_id) {
     return res.status(400).json({ message: "Invalid tenant context" });
