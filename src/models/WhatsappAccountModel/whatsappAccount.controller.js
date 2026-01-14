@@ -160,18 +160,18 @@ export const manualWhatsappAccaountByIdController = async (req, res) => {
 };
 
 export const testWhatsappConnectionController = async (req, res) => {
+  const tenant_id = req.user.tenant_id;
+
+  const account = await getWhatsappAccountByIdService(tenant_id);
+
+  if (!account) {
+    return res.status(404).json({
+      message: "WhatsApp account not found",
+    });
+  }
+
   try {
-    const tenant_id = req.user.tenant_id;
-
-    const account = await getWhatsappAccountByIdService(tenant_id);
-
-    if (!account) {
-      return res.status(404).json({
-        message: "WhatsApp account not found",
-      });
-    }
-
-    await axios.get(
+    const response = await axios.get(
       `https://graph.facebook.com/v19.0/${account.phone_number_id}`,
       {
         headers: {
@@ -180,10 +180,22 @@ export const testWhatsappConnectionController = async (req, res) => {
       }
     );
 
-    await updateWhatsappAccountStatusService(account.id, "verified", null);
+    // Optional WABA check
+    if (
+      account.waba_id &&
+      response.data?.whatsapp_business_account?.id !== account.waba_id
+    ) {
+      throw new Error("WABA ID does not match this phone number");
+    }
+
+    await updateWhatsappAccountStatusService(account.id, "verified");
 
     return res.json({
       message: "WhatsApp connection successful",
+      data: {
+        phone: response.data.display_phone_number,
+        business_name: response.data.verified_name,
+      },
     });
   } catch (err) {
     await updateWhatsappAccountStatusService(
@@ -194,6 +206,7 @@ export const testWhatsappConnectionController = async (req, res) => {
 
     return res.status(400).json({
       message: "WhatsApp connection failed",
+      error: err.response?.data || err.message,
     });
   }
 };

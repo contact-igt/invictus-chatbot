@@ -3,6 +3,7 @@ import {
   activateWhatsappAccountController,
   getWhatsappAccountByIdController,
   manualWhatsappAccaountByIdController,
+  testWhatsappConnectionController,
   whatsappCallbackController,
 } from "./whatsappAccount.controller.js";
 import {
@@ -14,17 +15,21 @@ import {
 const Router = express.Router();
 
 Router.get("/callback", whatsappCallbackController);
-Router.get(
-  "/whatsapp-accounts",
-  authenticate,
-  getWhatsappAccountByIdController
-);
+
 Router.post(
   "/whatsapp-account",
   authenticate,
   manualWhatsappAccaountByIdController
 );
 
-Router.put("/whatsapp-account/status" , activateWhatsappAccountController)
+Router.put("/whatsapp-account/status", activateWhatsappAccountController);
+
+Router.get(
+  "/whatsapp-accounts",
+  authenticate,
+  getWhatsappAccountByIdController
+);
+
+Router.get("/whatsapp-accout/test-connect" , testWhatsappConnectionController)
 
 export default Router;
