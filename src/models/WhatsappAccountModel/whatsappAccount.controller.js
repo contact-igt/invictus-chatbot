@@ -4,6 +4,7 @@ import {
   getWhatsappAccountByIdService,
   updateWhatsappAccountStatusService,
 } from "./whatsappAccount.service.js";
+import { missingFieldsChecker } from "../../utils/missingFields.js";
 
 export const whatsappCallbackController = async (req, res) => {
   try {
@@ -121,8 +122,8 @@ export const whatsappCallbackController = async (req, res) => {
 // ---------------------
 
 export const manualWhatsappAccaountByIdController = async (req, res) => {
-  const { tenant_id, whatsapp_number, phone_number_id, waba_id, access_token } =
-    req.body;
+  const { whatsapp_number, phone_number_id, waba_id, access_token } = req.body;
+  const tenant_id = req.user.tenant_id;
 
   const requiredFields = {
     tenant_id,
