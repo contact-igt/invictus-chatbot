@@ -24,14 +24,6 @@ import bcrypt from "bcrypt";
 
 export const registerManagementController = async (req, res) => {
   try {
-    const decoded = req.user;
-
-    if (decoded.role !== "admin") {
-      return res.status(403).json({
-        message: "Only hospital admin can create staff",
-      });
-    }
-
     const { title, username, email, country_code, mobile, password } = req.body;
 
     const requiredFields = {
@@ -143,14 +135,6 @@ export const loginManagementController = async (req, res) => {
 };
 
 export const getManagementController = async (req, res) => {
-  const decoded = req.user;
-
-  if (decoded.role !== "admin" || "staff") {
-    return res.status(403).json({
-      message: "Only access for hospital admin or staff",
-    });
-  }
-
   try {
     const response = await getManagementService();
 
@@ -167,14 +151,6 @@ export const getManagementController = async (req, res) => {
 
 export const getManagementByIdController = async (req, res) => {
   const user_id = req.params.id;
-
-  const decoded = req.user;
-
-  if (decoded.role !== "admin" || "staff") {
-    return res.status(403).json({
-      message: "Only access for hospital admin or staff",
-    });
-  }
 
   try {
     const response = await getManagementByIdService(user_id);

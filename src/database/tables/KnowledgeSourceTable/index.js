@@ -2,6 +2,11 @@ import { tableNames } from "../../tableName.js";
 
 export const KnowledgeSourcesTable = (sequelize, Sequelize) => {
   return sequelize.define(tableNames.KNOWLEDGESOURCE, {
+    tenant_id: {
+      type: Sequelize.INTEGER,
+      allowNull: false,
+    },
+
     title: {
       type: Sequelize.STRING,
       allowNull: false,

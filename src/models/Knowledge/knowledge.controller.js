@@ -10,86 +10,13 @@ import {
 import { cleanText } from "../../utils/cleanText.js";
 import { searchKnowledgeChunks } from "./knowledge.search.js";
 
-const sanitizeFolder = (str) => {
-  if (!str) return "default";
-  return str.trim().replace(/[\s\/\\]+/g, "_"); // remove spaces, slashes
-};
-
-// export const uploadKnowledge = async (req, res) => {
-//   try {
-//     const { title, type, source_url, text , file_name , } = req.body;
-//     const file = req.files?.file;
-
-//     let rawText = "";
-//     let fileUrl = null;
-//     let sourceUrl = null;
-
-//     if (!title || !type) {
-//       return res.status(400).send({ message: "Required title and type" });
-//     }
-
-//     // ====================== TEXT TYPE ======================
-//     if (type === "text") {
-//       if (!text) {
-//         return res.status(400).send({ message: "Text is required" });
-//       }
-//       rawText = text;
-//       fileUrl = null;
-//       sourceUrl = null;
-//     }
-
-//     // ====================== FILE TYPES ======================
-//     if (["pdf", "doc", "docx", "txt"].includes(type)) {
-//       if (!file || !file.data || !file.name) {
-//         return res.status(400).send({ message: "File is required" });
-//       }
-
-//       // Clean folder path
-//       const folderPath = `${tableNames.KNOWLEDGESOURCE}/${sanitizeFolder(title)}`;
-
-//       // Upload file to Cloudinary
-//       fileUrl = await uploadToCloudinary(file, "raw", "public", folderPath);
-
-//       // Extract text from file (Tesseract for scanned PDFs/images)
-//       rawText = await extractDocumentText(file.data, file.name);
-//       sourceUrl = null;
-
-//       if (!rawText || rawText.trim().length < 10) {
-//         return res.status(400).send({
-//           message:
-//             "No readable text found. This file may be scanned or image-based.",
-//         });
-//       }
-//     }
-
-//     // ====================== URL TYPE ======================
-//     if (type === "url") {
-//       if (!source_url) {
-//         return res.status(400).send({ message: "URL is required" });
-//       }
-
-//       rawText = await scrapeWebsiteText(source_url);
-//       fileUrl = null;
-//       sourceUrl = source_url;
-
-//       if (!rawText || !rawText.trim()) {
-//         return res.status(400).send({ message: "No content extracted" });
-//       }
-//     }
-
-//     // ====================== CLEAN & SAVE ======================
-//     const cleanedText = cleanText(rawText);
-
-//     await processKnowledgeUpload(title, type, sourceUrl, cleanedText, fileUrl, file_name);
-
-//     res.status(200).send({ message: "Knowledge uploaded successfully" });
-//   } catch (err) {
-//     console.error(err);
-//     res.status(500).send({ error: err.message });
-//   }
-// };
-
 export const uploadKnowledge = async (req, res) => {
+  const tenant_id = req.user.tenant_id;
+
+  if (!tenant_id) {
+    return res.status(400).send({ message: "Invalid tenant context" });
+  }
+
   try {
     const { title, type, text, source_url, file_name } = req.body;
 
@@ -119,11 +46,12 @@ export const uploadKnowledge = async (req, res) => {
     const cleanedText = cleanText(finalText);
 
     await processKnowledgeUpload(
+      tenant_id,
       title,
       type,
       sourceUrl,
       cleanedText,
-      file_name
+      file_name,
     );
 
     res.json({ success: true });
@@ -134,8 +62,14 @@ export const uploadKnowledge = async (req, res) => {
 };
 
 export const listKnowledge = async (req, res) => {
+  const tenant_id = req.user.tenant_id;
+
+  if (!tenant_id) {
+    return res.status(400).send({ message: "Invalid tenant context" });
+  }
+
   try {
-    const data = await listKnowledgeService();
+    const data = await listKnowledgeService(tenant_id);
     return res.status(200).send({
       data: data,
     });
@@ -145,9 +79,15 @@ export const listKnowledge = async (req, res) => {
 };
 
 export const getKnowledgeById = async (req, res) => {
+  const tenant_id = req.user.tenant_id;
+
+  if (!tenant_id) {
+    return res.status(400).send({ message: "Invalid tenant context" });
+  }
+
   try {
     const { id } = req.params;
-    const data = await getKnowledgeByIdService(id);
+    const data = await getKnowledgeByIdService(id, tenant_id);
 
     if (!data) {
       return res.status(404).json({ message: "Knowledge not found" });
@@ -160,6 +100,12 @@ export const getKnowledgeById = async (req, res) => {
 };
 
 export const updateKnowledge = async (req, res) => {
+  const tenant_id = req.user.tenant_id;
+
+  if (!tenant_id) {
+    return res.status(400).send({ message: "Invalid tenant context" });
+  }
+
   try {
     const { id } = req.params;
     const { title, text } = req.body;
@@ -168,7 +114,7 @@ export const updateKnowledge = async (req, res) => {
       return res.status(400).json({ message: "title and text required" });
     }
 
-    await updateKnowledgeService(id, title, text);
+    await updateKnowledgeService(id, tenant_id, title, text);
     res.json({ message: "Knowledge updated successfully" });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -176,9 +122,15 @@ export const updateKnowledge = async (req, res) => {
 };
 
 export const deleteKnowledge = async (req, res) => {
+  const tenant_id = req.user.tenant_id;
+
+  if (!tenant_id) {
+    return res.status(400).send({ message: "Invalid tenant context" });
+  }
+
   try {
     const { id } = req.params;
-    await deleteKnowledgeService(id);
+    await deleteKnowledgeService(id, tenant_id);
     res.json({ message: "Knowledge deleted successfully" });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -189,6 +141,12 @@ export const updateKnowledgeStatusController = async (req, res) => {
   const { id } = req.params;
   const { status } = req.query;
 
+  const tenant_id = req.user.tenant_id;
+
+  if (!tenant_id) {
+    return res.status(400).send({ message: "Invalid tenant context" });
+  }
+
   if (!status || !id) {
     return res.status(400).send({
       message: "Knowledge status  or id required",
@@ -196,7 +154,7 @@ export const updateKnowledgeStatusController = async (req, res) => {
   }
 
   try {
-    await updateKnowledgeStatusService(status, id);
+    await updateKnowledgeStatusService(status, id, tenant_id);
 
     return res.status(200).send({
       message: "Knowledge status updated successfully",
@@ -210,6 +168,12 @@ export const updateKnowledgeStatusController = async (req, res) => {
 
 export const searchKnowledgeChunksController = async (req, res) => {
   const { question } = req.body;
+
+  const tenant_id = req.user.tenant_id;
+
+  if (!tenant_id) {
+    return res.status(400).send({ message: "Invalid tenant context" });
+  }
 
   if (question) {
     return res.status(400).send({

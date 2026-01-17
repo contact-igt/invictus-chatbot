@@ -8,15 +8,34 @@ import {
   updateKnowledgeStatusController,
   uploadKnowledge,
 } from "./knowledge.controller.js";
+import {
+  authenticate,
+  requireManagement,
+} from "../../middlewares/auth/authMiddlewares.js";
 
 const router = express.Router();
 
-router.post("/knowledge", uploadKnowledge);
-router.get("/knowledges", listKnowledge);
-router.get("/knowledge/:id", getKnowledgeById);
-router.put("/knowledge/:id", updateKnowledge);
-router.delete("/knowledge/:id", deleteKnowledge);
-router.put("/knowledge-status/:id", updateKnowledgeStatusController);
-router.post("/knowledge-search" , searchKnowledgeChunksController)
+router.post("/knowledge", authenticate, requireManagement, uploadKnowledge);
+router.get("/knowledges", authenticate, requireManagement, listKnowledge);
+router.get("/knowledge/:id", authenticate, requireManagement, getKnowledgeById);
+router.put("/knowledge/:id", authenticate, requireManagement, updateKnowledge);
+router.delete(
+  "/knowledge/:id",
+  authenticate,
+  requireManagement,
+  deleteKnowledge,
+);
+router.put(
+  "/knowledge-status/:id",
+  authenticate,
+  requireManagement,
+  updateKnowledgeStatusController,
+);
+router.post(
+  "/knowledge-search",
+  authenticate,
+  requireManagement,
+  searchKnowledgeChunksController,
+);
 
 export default router;

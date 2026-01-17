@@ -122,18 +122,13 @@ export const whatsappCallbackController = async (req, res) => {
 export const createWhatsappAccountController = async (req, res) => {
   const { whatsapp_number, phone_number_id, waba_id, access_token } = req.body;
 
-  console.log(
-    "credgtso",
-    whatsapp_number,
-    phone_number_id,
-    waba_id,
-    access_token,
-  );
-
   const tenant_id = req.user.tenant_id;
 
+  if (!tenant_id) {
+    return res.status(400).send({ message: "Invalid tenant context" });
+  }
+
   const requiredFields = {
-    tenant_id,
     whatsapp_number,
     phone_number_id,
     waba_id,
@@ -176,6 +171,10 @@ export const createWhatsappAccountController = async (req, res) => {
 
 export const testWhatsappAccountConnectionController = async (req, res) => {
   const tenant_id = req.user.tenant_id;
+
+  if (!tenant_id) {
+    return res.status(400).send({ message: "Invalid tenant context" });
+  }
 
   const account = await getWhatsappAccountByIdService(tenant_id);
 
@@ -248,17 +247,19 @@ export const getWhatsappAccountByIdController = async (req, res) => {
 export const activateWhatsappAccountController = async (req, res) => {
   const tenant_id = req.user.tenant_id;
 
+  if (!tenant_id) {
+    return res.status(400).send({ message: "Invalid tenant context" });
+  }
+
   const { status } = req.query;
 
-  console.log("sss", status);
+  if (!status) {
+    return res.status(400).send({
+      message: "Status required",
+    });
+  }
 
   try {
-    if (!status) {
-      return res.status(400).send({
-        message: "Status required",
-      });
-    }
-
     const account = await getWhatsappAccountByIdService(tenant_id);
 
     if (!account || (account.status !== "verified" && status === "active")) {

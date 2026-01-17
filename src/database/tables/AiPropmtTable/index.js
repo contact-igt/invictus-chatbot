@@ -2,6 +2,11 @@ import { tableNames } from "../../tableName.js";
 
 export const AiPromptTable = (sequelize, Sequelize) => {
   return sequelize.define(tableNames.AIPROMPT, {
+    tenant_id: {
+      type: Sequelize.INTEGER,
+      allowNull: false,
+    },
+
     name: {
       type: Sequelize.STRING,
       allowNull: true,
@@ -33,5 +38,3 @@ export const AiPromptTable = (sequelize, Sequelize) => {
     },
   });
 };
-
-

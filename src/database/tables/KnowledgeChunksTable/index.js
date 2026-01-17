@@ -2,6 +2,13 @@ import { tableNames } from "../../tableName.js";
 
 export const KnowledgeChunksTable = (sequelize, Sequelize) => {
   return sequelize.define(tableNames?.KNOWLEDGECHUNKS, {
+
+    tenant_id: {
+      type: Sequelize.INTEGER,
+      allowNull: false,
+    },
+
+
     source_id: {
       type: Sequelize.INTEGER,
       allowNull: false,
