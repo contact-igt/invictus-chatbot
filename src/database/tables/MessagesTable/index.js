@@ -1,7 +1,17 @@
 import { tableNames } from "../../tableName.js";
 
 export const MessagesTable = (sequelize, Sequelize) => {
-  return sequelize.define(tableNames?.MESSAGES, {
+  return sequelize.define(tableNames.MESSAGES, {
+    tenant_id: {
+      type: Sequelize.INTEGER,
+      allowNull: false,
+    },
+
+    phone_number_id: {
+      type: Sequelize.STRING,
+      allowNull: false,
+    },
+
     wa_id: {
       type: Sequelize.STRING,
       allowNull: true,
@@ -33,9 +43,8 @@ export const MessagesTable = (sequelize, Sequelize) => {
     },
 
     seen: {
-      type: Sequelize.STRING,
-      allowNull: false,
-      defaultValue: "false",
+      type: Sequelize.BOOLEAN,
+      defaultValue: false,
     },
 
     createdAt: {

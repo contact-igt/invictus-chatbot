@@ -7,7 +7,7 @@ export const createWhatsappAccountService = async (
   phone_number_id,
   waba_id,
   access_token,
-  status
+  status,
 ) => {
   const Query = `
   INSERT INTO ${tableNames?.WHATSAPP_ACCOUNT} 
@@ -51,7 +51,6 @@ export const getWhatsappAccountByIdService = async (tenant_id) => {
 };
 
 export const updateWhatsappAccountStatusService = async (id, status, error) => {
-  
   const Query = `UPDATE ${tableNames?.WHATSAPP_ACCOUNT} SET status = ? , last_error = ? , is_verified = ? , verified_at = ? WHERE id = ? `;
 
   try {
@@ -66,6 +65,19 @@ export const updateWhatsappAccountStatusService = async (id, status, error) => {
     });
 
     return result;
+  } catch (err) {
+    throw err;
+  }
+};
+
+export const getTenantByPhoneNumberIdService = async (phone_number_id) => {
+  const Query = `SELECT * FROM ${tableNames?.WHATSAPP_ACCOUNT} WHERE phone_number_id = ? AND status = 'active' LIMIT 1 `;
+
+  try {
+    const [result] = await db.sequelize.query(Query, {
+      replacements: [phone_number_id],
+    });
+    return result[0];
   } catch (err) {
     throw err;
   }

@@ -4,10 +4,22 @@ export const ChatLocksTable = (sequelize, Sequelize) => {
   return sequelize.define(
     tableNames.CHATLOCKS,
     {
-      phone: {
-        type: Sequelize.STRING(20),
+      tenant_id: {
+        type: Sequelize.INTEGER,
         allowNull: false,
-        primaryKey: true,
+        unique: true,
+      },
+
+      phone_number_id: {
+        type: Sequelize.STRING,
+        allowNull: false,
+        unique: true,
+      },
+
+      phone: {
+        type: Sequelize.STRING,
+        allowNull: false,
+        unique: true,
       },
 
       locked_at: {
@@ -21,6 +33,6 @@ export const ChatLocksTable = (sequelize, Sequelize) => {
       timestamps: true,
       createdAt: "created_at",
       updatedAt: "updated_at",
-    }
+    },
   );
 };

@@ -2,10 +2,20 @@ import { tableNames } from "../../tableName.js";
 
 export const ChatStateTable = (sequelize, Sequelize) => {
   return sequelize.define(tableNames.CHATSTATE, {
+    tenant_id: {
+      type: Sequelize.INTEGER,
+      allowNull: false,
+    },
+
+    phone_number_id: {
+      type: Sequelize.STRING,
+      allowNull: false,
+      unique: true,
+    },
+
     phone: {
       type: Sequelize.STRING,
-      allowNull: true,
-      unique: true,
+      allowNull: false,
     },
 
     name: {
@@ -25,8 +35,25 @@ export const ChatStateTable = (sequelize, Sequelize) => {
       defaultValue: "ai_active",
     },
 
+    last_user_message_at: {
+      type: Sequelize.DATE,
+      allowNull: true,
+    },
+
+    heat_state: {
+      type: Sequelize.ENUM("hot", "warm", "cold", "super_cold"),
+      allowNull: false,
+      defaultValue: "super_cold",
+    },
+
+    heat_score: {
+      type: Sequelize.INTEGER,
+      allowNull: false,
+      defaultValue: 0,
+    },
+
     claimed_id: {
-      type: Sequelize.STRING,
+      type: Sequelize.INTEGER,
       allowNull: true,
     },
 
@@ -50,16 +77,3 @@ export const ChatStateTable = (sequelize, Sequelize) => {
     },
   });
 };
-
-
-// chat_states
-// -----------
-// id
-// phone              (UNIQUE)
-// name
-// ai_enable          (true / false)
-// state              ai_active | need_admin | admin_active
-// claimed_admin_id   (NULL or managements.id)
-// summary_text
-// created_at
-// updated_at

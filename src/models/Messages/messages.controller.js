@@ -8,8 +8,14 @@ import {
 } from "./messages.service.js";
 
 export const getChatList = async (req, res) => {
+  const tenant_id = req.user.tenant_id;
+
+  if (!tenant_id) {
+    return res.status(400).send({ message: "Invalid tenant context" });
+  }
+
   try {
-    const chatlist = await getChatListService();
+    const chatlist = await getChatListService(tenant_id);
 
     return res.status(200).send({
       message: "success",
@@ -24,8 +30,14 @@ export const getChatList = async (req, res) => {
 
 export const getChatByPhone = async (req, res) => {
   const { phone } = req.params;
+  const tenant_id = req.user.tenant_id;
+
+  if (!tenant_id) {
+    return res.status(400).send({ message: "Invalid tenant context" });
+  }
+
   try {
-    const messages = await getChatByPhoneService(phone);
+    const messages = await getChatByPhoneService(phone, tenant_id);
     return res.status(200).send({
       messages: "Number successfully listed",
       data: messages,
@@ -39,12 +51,25 @@ export const getChatByPhone = async (req, res) => {
 
 export const sendAdminMessage = async (req, res) => {
   const { phone, name, message } = req.body;
+  const tenant_id = req.user.tenant_id;
+
+  if (!tenant_id) {
+    return res.status(400).send({ message: "Invalid tenant context" });
+  }
 
   try {
-    await sendWhatsAppMessage(phone, message);
-    // await createUserMessageService(null, phone, "admin", message);
+    await sendWhatsAppMessage(tenant_id, phone, message);
 
-    await createUserMessageService(null, phone, name, "admin", null, message);
+    await createUserMessageService(
+      tenant_id,
+      phone_number_id,
+      phone,
+      null,
+      name,
+      "admin",
+      null,
+      message,
+    );
 
     return res.status(200).send({
       message: "Message sended successfully",
@@ -57,8 +82,14 @@ export const sendAdminMessage = async (req, res) => {
 export const markSeenMessage = async (req, res) => {
   const { phone } = req.query;
 
+  const tenant_id = req.user.tenant_id;
+
+  if (!tenant_id) {
+    return res.status(400).send({ message: "Invalid tenant context" });
+  }
+
   try {
-    await markSeenMessageService(phone);
+    await markSeenMessageService(tenant_id, phone);
     return res.status(200).send({
       message: "message updated seen",
     });
@@ -70,17 +101,23 @@ export const markSeenMessage = async (req, res) => {
 };
 
 export const suggestReplyController = async (req, res) => {
+  const { phone } = req.body;
+
+  const tenant_id = req.user.tenant_id;
+
+  if (!phone) {
+    return res.status(400).json({
+      success: false,
+      message: "phone is required",
+    });
+  }
+
+  if (!tenant_id) {
+    return res.status(400).send({ message: "Invalid tenant context" });
+  }
+
   try {
-    const { phone } = req.body;
-
-    if (!phone) {
-      return res.status(400).json({
-        success: false,
-        message: "phone is required",
-      });
-    }
-
-    const reply = await suggestReplyService(phone);
+    const reply = await suggestReplyService(tenant_id, phone);
 
     return res.status(200).json({
       success: true,

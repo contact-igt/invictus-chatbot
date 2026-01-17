@@ -6,14 +6,14 @@ import {
   sendAdminMessage,
   suggestReplyController,
 } from "./messages.controller.js";
+import { authenticate } from "../../middlewares/auth/authMiddlewares.js";
 
 const Router = express.Router();
 
-Router.get("/chats", getChatList);
-Router.get("/chats/:phone", getChatByPhone);
-Router.post("/chats/send", sendAdminMessage);
-Router.put("/chats/mark", markSeenMessage);
-Router.post("/chats/suggest", suggestReplyController);
-
+Router.get("/chats", authenticate, getChatList);
+Router.get("/chats/:phone", authenticate, getChatByPhone);
+Router.post("/chats/send", authenticate, sendAdminMessage);
+Router.put("/chats/mark", authenticate, markSeenMessage);
+Router.post("/chats/suggest", authenticate, suggestReplyController);
 
 export default Router;

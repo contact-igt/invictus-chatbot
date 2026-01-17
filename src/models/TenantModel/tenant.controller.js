@@ -3,22 +3,14 @@ import { registerManagementService } from "../Management/management.service.js";
 import {
   createTenantService,
   deleteTenantService,
+  findTenantByIdService,
   getAllTenantService,
-  getTenantByidService,
   updateTenantService,
   updateTenantStatusService,
 } from "./tenant.service.js";
 
 export const createTenantController = async (req, res) => {
   try {
-    const decoded = req.user;
-
-    if (decoded.role !== "super_admin") {
-      await transaction.rollback();
-      return res.status(403).json({
-        message: "Only super admin can create tenant",
-      });
-    }
 
     const { name, email, country_code, mobile, type, password } = req.body;
 
@@ -43,7 +35,7 @@ export const createTenantController = async (req, res) => {
       email,
       country_code,
       mobile,
-      type
+      type,
     );
 
     if (tenant) {
@@ -55,7 +47,7 @@ export const createTenantController = async (req, res) => {
         mobile,
         password,
         "admin",
-        tenant
+        tenant,
       );
     }
 
@@ -91,7 +83,7 @@ export const getTenantByIdController = async (req, res) => {
   try {
     const { id } = req.params;
 
-    const response = await getTenantByidService(id);
+    const response = await findTenantByIdService(id);
 
     if (!id) {
       return res.status(400).json({ message: "Tenant details not found" });

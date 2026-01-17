@@ -6,7 +6,7 @@ export const createTenantService = async (
   email,
   country_code,
   mobile,
-  type
+  type,
 ) => {
   const Query = `INSERT INTO ${tableNames?.TENANTS} (name, email, country_code , mobile, type) VALUES (?,?,?,?,?)`;
 
@@ -35,25 +35,13 @@ export const getAllTenantService = async () => {
   }
 };
 
-export const getTenantByidService = async (id) => {
-  const Query = `SELECT * FROM ${tableNames?.TENANTS} WHERE id = ?  `;
-  try {
-    const [result] = await db.sequelize.query(Query, {
-      replacements: [id],
-    });
-    return result[0];
-  } catch (err) {
-    throw err;
-  }
-};
-
 export const updateTenantService = async (
   name,
   email,
   country_code,
   mobile,
   type,
-  id
+  id,
 ) => {
   const updateFields = [];
   const updateValues = [];

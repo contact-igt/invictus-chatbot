@@ -29,7 +29,7 @@ export const whatsappCallbackController = async (req, res) => {
           redirect_uri: process.env.META_REDIRECT_URI,
           code: code,
         },
-      }
+      },
     );
 
     const access_token = tokenRes.data.access_token;
@@ -46,7 +46,7 @@ export const whatsappCallbackController = async (req, res) => {
         headers: {
           Authorization: `Bearer ${access_token}`,
         },
-      }
+      },
     );
 
     const business = businessRes.data?.data?.[0];
@@ -65,7 +65,7 @@ export const whatsappCallbackController = async (req, res) => {
         headers: {
           Authorization: `Bearer ${access_token}`,
         },
-      }
+      },
     );
 
     const waba = wabaRes.data?.data?.[0];
@@ -84,7 +84,7 @@ export const whatsappCallbackController = async (req, res) => {
         headers: {
           Authorization: `Bearer ${access_token}`,
         },
-      }
+      },
     );
 
     const phone = phoneRes.data?.data?.[0];
@@ -103,11 +103,11 @@ export const whatsappCallbackController = async (req, res) => {
       whatsapp_number,
       phone_number_id,
       waba_id,
-      access_token
+      access_token,
     );
 
     return res.redirect(
-      "http://localhost:3000/settings/whatsapp-settings?status=connected"
+      "http://localhost:3000/settings/whatsapp-settings?status=connected",
     );
   } catch (err) {
     console.error("META ERROR:", err.response?.data || err.message);
@@ -119,10 +119,16 @@ export const whatsappCallbackController = async (req, res) => {
   }
 };
 
-// ---------------------
-
 export const createWhatsappAccountController = async (req, res) => {
   const { whatsapp_number, phone_number_id, waba_id, access_token } = req.body;
+
+  console.log(
+    "credgtso",
+    whatsapp_number,
+    phone_number_id,
+    waba_id,
+    access_token,
+  );
 
   const tenant_id = req.user.tenant_id;
 
@@ -135,6 +141,7 @@ export const createWhatsappAccountController = async (req, res) => {
   };
 
   const missingFields = await missingFieldsChecker(requiredFields);
+
   if (missingFields.length > 0) {
     return res.status(400).send({
       message: `Missing required field(s): ${missingFields.join(", ")}`,
@@ -148,7 +155,7 @@ export const createWhatsappAccountController = async (req, res) => {
       phone_number_id,
       waba_id,
       access_token,
-      "pending"
+      "pending",
     );
 
     return res.status(200).send({
@@ -185,7 +192,7 @@ export const testWhatsappAccountConnectionController = async (req, res) => {
         headers: {
           Authorization: `Bearer ${account?.access_token}`,
         },
-      }
+      },
     );
 
     const metaWabaId = response.data?.whatsapp_business_account?.id;
@@ -207,7 +214,7 @@ export const testWhatsappAccountConnectionController = async (req, res) => {
     await updateWhatsappAccountStatusService(
       account.id,
       "failed",
-      err.response?.data || err.message
+      err.response?.data || err.message,
     );
 
     return res.status(400).send({
@@ -255,7 +262,7 @@ export const activateWhatsappAccountController = async (req, res) => {
     const account = await getWhatsappAccountByIdService(tenant_id);
 
     if (!account || (account.status !== "verified" && status === "active")) {
-      return res.status(400).send({
+      return res.status(201).send({
         message: "Please test connection before activation",
       });
     }

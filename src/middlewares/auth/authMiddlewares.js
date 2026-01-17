@@ -176,7 +176,7 @@ export const generateAccessToken = (user) => {
       role: user.role,
     },
     ServerEnvironmentConfig.jwt_key,
-    { expiresIn: "15m" }
+    { expiresIn: "15m" },
   );
 };
 
@@ -188,7 +188,7 @@ export const generateRefreshToken = (user) => {
       role: user.role,
     },
     ServerEnvironmentConfig.jwt_key,
-    { expiresIn: "7d" }
+    { expiresIn: "7d" },
   );
 };
 
@@ -200,7 +200,7 @@ export const generateRememberMeToken = (user) => {
       role: user.role,
     },
     ServerEnvironmentConfig.jwt_key,
-    { expiresIn: "30d" }
+    { expiresIn: "30d" },
   );
 };
 

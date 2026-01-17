@@ -1,9 +1,13 @@
 import axios from "axios";
 
-export const sendTypingIndicator = async (messageId) => {
+export const sendTypingIndicator = async (
+  phone_number_id,
+  access_token,
+  messageId,
+) => {
   try {
     await axios.post(
-      `https://graph.facebook.com/${process.env.META_API_VERSION}/${process.env.META_PHONE_NUMBER_ID}/messages`,
+      `https://graph.facebook.com/${process.env.META_API_VERSION}/${phone_number_id}/messages`,
       {
         messaging_product: "whatsapp",
         status: "read",
@@ -14,10 +18,10 @@ export const sendTypingIndicator = async (messageId) => {
       },
       {
         headers: {
-          Authorization: `Bearer ${process.env.META_ACCESS_TOKEN}`,
+          Authorization: `Bearer ${access_token}`,
           "Content-Type": "application/json",
         },
-      }
+      },
     );
   } catch (err) {
     console.error("Typing indicator error:", err.response?.data || err.message);

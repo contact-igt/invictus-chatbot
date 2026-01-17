@@ -6,30 +6,42 @@ import {
   testWhatsappAccountConnectionController,
   whatsappCallbackController,
 } from "./whatsappAccount.controller.js";
-import { authenticate } from "../../middlewares/auth/authMiddlewares.js";
+import {
+  authenticate,
+  requireAdmin,
+  requireManagement,
+} from "../../middlewares/auth/authMiddlewares.js";
 
 const Router = express.Router();
 
 Router.get("/callback", whatsappCallbackController);
 
-Router.post("/whatsapp-account", authenticate, createWhatsappAccountController);
+Router.post(
+  "/whatsapp-account",
+  authenticate,
+  requireAdmin,
+  createWhatsappAccountController,
+);
 
 Router.get(
   "/whatsapp-accounts",
   authenticate,
-  getWhatsappAccountByIdController
+  requireManagement,
+  getWhatsappAccountByIdController,
 );
 
 Router.get(
   "/whatsapp-account/test-connect",
   authenticate,
-  testWhatsappAccountConnectionController
+  requireManagement,
+  testWhatsappAccountConnectionController,
 );
 
 Router.put(
   "/whatsapp-account/status",
   authenticate,
-  activateWhatsappAccountController
+  requireManagement,
+  activateWhatsappAccountController,
 );
 
 export default Router;

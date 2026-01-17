@@ -64,7 +64,7 @@ export const registerManagementController = async (req, res) => {
       mobile,
       password,
       "STAFF",
-      tenant_id
+      tenant_id,
     );
 
     return res.status(201).json({
@@ -143,6 +143,14 @@ export const loginManagementController = async (req, res) => {
 };
 
 export const getManagementController = async (req, res) => {
+  const decoded = req.user;
+
+  if (decoded.role !== "admin" || "staff") {
+    return res.status(403).json({
+      message: "Only access for hospital admin or staff",
+    });
+  }
+
   try {
     const response = await getManagementService();
 
@@ -159,6 +167,14 @@ export const getManagementController = async (req, res) => {
 
 export const getManagementByIdController = async (req, res) => {
   const user_id = req.params.id;
+
+  const decoded = req.user;
+
+  if (decoded.role !== "admin" || "staff") {
+    return res.status(403).json({
+      message: "Only access for hospital admin or staff",
+    });
+  }
 
   try {
     const response = await getManagementByIdService(user_id);

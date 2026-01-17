@@ -14,11 +14,31 @@ import {
 
 const Router = express.Router();
 
-Router.get("/tenants", getAllTenantController);
-Router.get("/tenant/:id", getTenantByIdController);
+Router.get("/tenants", authenticate, requireSuperAdmin, getAllTenantController);
+Router.get(
+  "/tenant/:id",
+  authenticate,
+  requireSuperAdmin,
+  getTenantByIdController,
+);
 Router.post("/tenant", authenticate, requireSuperAdmin, createTenantController);
-Router.put("/tenant/:id", updateTenantController);
-Router.put("/tenant-status/:id", updateTenantStatusController);
-Router.delete("/tenant/:id", deleteTenantController);
+Router.put(
+  "/tenant/:id",
+  authenticate,
+  requireSuperAdmin,
+  updateTenantController,
+);
+Router.put(
+  "/tenant-status/:id",
+  authenticate,
+  requireSuperAdmin,
+  updateTenantStatusController,
+);
+Router.delete(
+  "/tenant/:id",
+  authenticate,
+  requireSuperAdmin,
+  deleteTenantController,
+);
 
 export default Router;

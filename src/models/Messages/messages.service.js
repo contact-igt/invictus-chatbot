@@ -3,17 +3,37 @@ import { tableNames } from "../../database/tableName.js";
 import { AiService } from "../Ai/ai.service.js";
 
 export const createUserMessageService = async (
-  wa_id,
+  tenant_id,
+  phone_number_id,
   phone,
+  wa_id,
   name,
   sender,
   sender_id,
-  message
+  message,
 ) => {
-  const Query = `INSERT INTO ${tableNames?.MESSAGES} ( wa_id,	 phone,	name,	sender,	sender_id,	message ) VALUES (?,?,?,?,?,?) `;
+  const Query = `INSERT INTO ${tableNames?.MESSAGES} (  
+  tenant_id,
+  phone_number_id,
+  phone,
+  wa_id,	
+  name,	
+  sender,	
+  sender_id,	
+  message )
+   VALUES (?,?,?,?,?,?,?,?) `;
 
   try {
-    const values = [wa_id, phone, name, sender, sender_id, message];
+    const values = [
+      tenant_id,
+      phone_number_id,
+      phone,
+      wa_id,
+      name,
+      sender,
+      sender_id,
+      message,
+    ];
 
     const [result] = await db.sequelize.query(Query, { replacements: values });
     return result[0];
@@ -22,36 +42,50 @@ export const createUserMessageService = async (
   }
 };
 
-export const getChatListService = async () => {
+export const getChatListService = async (tenant_id) => {
   try {
-    const Query = ` 
-  SELECT phone , message , seen , name , created_at 
-  FROM messages as m1
-  WHERE id = (
-  SELECT MAX(id) FROM messages as m2
-  WHERE m2.phone = m1.phone 
-  ) 
-  ORDER BY m1.created_at DESC
-  
-  `;
+    const Query = `
+      SELECT 
+        m1.phone,
+        m1.name,
+        m1.message,
+        m1.seen,
+        m1.created_at
+      FROM messages m1
+      INNER JOIN (
+        SELECT 
+          phone,
+          MAX(created_at) AS last_message_time
+        FROM messages
+        WHERE tenant_id = ?
+        GROUP BY phone
+      ) m2
+      ON m1.phone = m2.phone
+      AND m1.created_at = m2.last_message_time
+      WHERE m1.tenant_id = ?
+      ORDER BY m1.created_at DESC
+    `;
 
-    const [result] = await db.sequelize.query(Query);
+    const [result] = await db.sequelize.query(Query, {
+      replacements: [tenant_id, tenant_id],
+    });
+
     return result;
   } catch (err) {
     throw err;
   }
 };
 
-export const getChatByPhoneService = async (phone) => {
+export const getChatByPhoneService = async (phone, tenant_id) => {
   try {
     const Query = `
     SELECT sender, message, seen , created_at
     FROM  ${tableNames?.MESSAGES}
-    WHERE phone = ?
+    WHERE phone = ? AND tenant_id = ?
     ORDER BY created_at ASC
   `;
     const [result] = await db.sequelize.query(Query, {
-      replacements: [phone],
+      replacements: [phone, tenant_id],
     });
     return result;
   } catch (err) {
@@ -59,17 +93,19 @@ export const getChatByPhoneService = async (phone) => {
   }
 };
 
-export const markSeenMessageService = async (phone) => {
-  const Query = `UPDATE ${tableNames?.MESSAGES} SET seen = "true" WHERE phone = ? AND seen = "false"`;
+export const markSeenMessageService = async (tenant_id, phone) => {
+  const Query = `UPDATE ${tableNames?.MESSAGES} SET seen = "true" WHERE phone = ? AND seen = "false" AND tenant_id = ?`;
   try {
-    const [result] = await db.sequelize.query(Query, { replacements: [phone] });
+    const [result] = await db.sequelize.query(Query, {
+      replacements: [phone, tenant_id],
+    });
     return result;
   } catch (err) {
     throw err;
   }
 };
 
-export const suggestReplyService = async (phone) => {
+export const suggestReplyService = async (tenant_id, phone) => {
   const ADMIN_SYSTEM_PROMPT = `
 
   You are a professional customer support executive.
@@ -86,10 +122,10 @@ Rules:
     `
     SELECT sender, message
     FROM ${tableNames.MESSAGES}
-    WHERE phone = ?
+    WHERE phone = ? AND tenant_id = ?
     ORDER BY created_at ASC
     `,
-    { replacements: [phone] }
+    { replacements: [phone, tenant_id] },
   );
 
   const chatHistory = messages
@@ -101,11 +137,11 @@ Rules:
     SELECT message
     FROM ${tableNames.MESSAGES}
     WHERE phone = ?
-      AND sender = 'user'
+      AND sender = 'user' AND tenant_id = ?
     ORDER BY created_at DESC
     LIMIT 1
     `,
-    { replacements: [phone] }
+    { replacements: [phone, tenant_id] },
   );
 
   if (!lastMsg.length) {
@@ -124,7 +160,7 @@ Rules:
     WHERE chunk_text LIKE ?
     LIMIT 5
     `,
-    { replacements: [`%${keywords}%`] }
+    { replacements: [`%${keywords}%`] },
   );
 
   const knowledgeText =
