@@ -10,7 +10,6 @@ export const ChatStateTable = (sequelize, Sequelize) => {
     phone_number_id: {
       type: Sequelize.STRING,
       allowNull: false,
-      unique: true,
     },
 
     phone: {
