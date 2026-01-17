@@ -9,13 +9,15 @@ import {
   sendWhatsAppMessage,
   unlockChat,
 } from "./AuthWhatsapp.service.js";
+
 import { getAppSettingByKeyService } from "../AppSettings/appsetting.service.js";
 import { processConversationService } from "../Conversation/conversation.service.js";
 import {
   createChatStateService,
   getChatStateByPhoneService,
-  // updateChatStateToNeedAdminService,
+  updateChatStateHeatOnUserMessageService,
 } from "../ChatStateModel/chatState.service.js";
+import { getTenantByPhoneNumberIdService } from "../WhatsappAccountModel/whatsappAccount.service.js";
 
 export const verifyWebhook = (req, res) => {
   const mode = req.query["hub.mode"];
@@ -30,130 +32,141 @@ export const verifyWebhook = (req, res) => {
 
 export const receiveMessage = async (req, res) => {
   try {
-    const msg = req.body?.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
+    const value = req.body?.entry?.[0]?.changes?.[0]?.value;
+    const msg = value?.messages?.[0];
+
     if (!msg) return res.sendStatus(200);
+
+    const phone_number_id = value?.metadata?.phone_number_id;
+    if (!phone_number_id) return res.sendStatus(200);
+
+    const account = await getTenantByPhoneNumberIdService(phone_number_id);
+    if (!account) return res.sendStatus(200);
+
+    const tenant_id = account.tenant_id;
 
     const phone = msg.from;
     const text = msg.text?.body || "";
     const messageId = msg.id;
 
-    const name =
-      req.body?.entry?.[0]?.changes?.[0]?.value?.contacts?.[0]?.profile?.name ||
-      null;
+    const name = value?.contacts?.[0]?.profile?.name || null;
 
-    if (await isMessageProcessed(messageId)) {
-      return res.sendStatus(200);
-    }
-    await markMessageProcessed(messageId, phone);
+    const ismessage = await isMessageProcessed(
+      tenant_id,
+      phone_number_id,
+      messageId,
+    );
 
-    await createUserMessageService(messageId, phone, name, "user", null, text);
-
-    let state = await getChatStateByPhoneService(phone);
-
-    if (!state || state.length === 0) {
-      await createChatStateService(name, phone);
-      state = await getChatStateByPhoneService(phone);
-    }
-
-    const chatState = state[0];
-
-    if (
-      chatState.state === "need_admin" ||
-      chatState.state === "admin_active"
-    ) {
+    if (ismessage?.length > 0) {
       return res.sendStatus(200);
     }
 
-    if (await isChatLocked(phone)) {
+    await markMessageProcessed(tenant_id, phone_number_id, messageId, phone);
+
+    await createUserMessageService(
+      tenant_id,
+      phone_number_id,
+      phone,
+      messageId,
+      name,
+      "user",
+      null,
+      text,
+    );
+
+    let state = await getChatStateByPhoneService(
+      tenant_id,
+      phone_number_id,
+      phone,
+    );
+
+    if (!state) {
+      await createChatStateService(tenant_id, phone_number_id, phone, name);
+      state = await getChatStateByPhoneService(
+        tenant_id,
+        phone_number_id,
+        phone,
+      );
+    }
+
+    await updateChatStateHeatOnUserMessageService(
+      tenant_id,
+      phone_number_id,
+      phone,
+    );
+
+    if (state.state === "need_admin" || state.state === "admin_active") {
       return res.sendStatus(200);
     }
-    await lockChat(phone);
+
+    if (await isChatLocked(tenant_id, phone_number_id, phone)) {
+      return res.sendStatus(200);
+    }
+
+    await lockChat(tenant_id, phone_number_id, phone);
 
     res.sendStatus(200);
 
     setImmediate(async () => {
       try {
-        console.log("🚀 Background process started for", phone);
-
-        try {
-          await sendTypingIndicator(messageId);
-          console.log("✍️ Typing indicator sent");
-        } catch (e) {
-          console.warn("⚠️ Typing indicator failed:", e.message);
-        }
-
-        // try {
-        //   await sendWhatsAppMessage(
-        //     phone,
-        //     "Please wait a moment. I am checking this for you.",
-        //     messageId
-        //   );
-        //   console.log("💬 Wait message sent");
-        // } catch (e) {
-        //   console.warn("⚠️ Wait message failed:", e.message);
-        // }
-
-        // 3️⃣ AI MUST ALWAYS RUN
-        console.log("🤖 Calling AI...");
-        let reply;
-        const isDetailsRequired = await getAppSettingByKeyService(
-          "collect_details"
+        await sendTypingIndicator(
+          phone_number_id,
+          account?.access_token,
+          messageId,
         );
 
-        if (isDetailsRequired === "true") {
-          reply = await processConversationService(phone, text);
-        } else {
-          reply = await getOpenAIReply(phone, text);
-        }
+        let reply = await getOpenAIReply(tenant_id, phone, text);
+        // const isDetailsRequired = await getAppSettingByKeyService(
+        //   tenant_id,
+        //   "collect_details",
+        // );
 
-        console.log("✅ AI response:", reply);
+        // if (isDetailsRequired === "true") {
+        //   reply = await processConversationService(tenant_id, phone, text);
+        // } else {
+        //   reply = await getOpenAIReply(tenant_id, phone, text);
+        // }
 
-        // 4️⃣ Validation
-        if (!reply || typeof reply !== "string" || reply.trim() === "") {
-          console.log("❗ Empty AI reply, switching to admin");
-
-          // await updateChatStateToNeedAdminService(phone);
-
+        if (!reply || !reply.trim()) {
           const fallback =
             "Our team will review your message and contact you shortly.";
 
           await createUserMessageService(
-            null,
+            tenant_id,
+            phone_number_id,
             phone,
+            messageId,
             name,
             "bot",
             null,
-            fallback
+            fallback,
           );
 
-          await sendWhatsAppMessage(phone, fallback, messageId);
+          await sendWhatsAppMessage(tenant_id, phone, fallback);
           return;
         }
 
         const safeReply = reply.trim();
-
-        // 5️⃣ Save + Send final reply
         await createUserMessageService(
-          null,
+          tenant_id,
+          phone_number_id,
           phone,
+          messageId,
           name,
           "bot",
           null,
-          safeReply
+          safeReply,
         );
 
-        await sendWhatsAppMessage(phone, safeReply, messageId);
-
-        console.log("📤 Final reply sent");
+        await sendWhatsAppMessage(tenant_id, phone, safeReply);
       } catch (err) {
-        console.error("🔥 Background fatal error:", err);
+        console.error("🔥 Background error:", err);
       } finally {
-        await unlockChat(phone);
-        console.log("🔓 Chat unlocked for", phone);
+        await unlockChat(tenant_id, phone_number_id, phone);
       }
     });
   } catch (err) {
-    console.error("Webhook error:", err.message);
-    res.sendStatus(200);
+    console.error("Webhook error:", err);
+    return res.sendStatus(200);
   }
 };

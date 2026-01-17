@@ -1,18 +1,8 @@
 import { tableNames } from "../../tableName.js";
 
-export const ManagementTable = (sequelize, Sequelize) => {
-  return sequelize.define(tableNames.MANAGEMENT, {
-    tenant_id: {
-      type: Sequelize.INTEGER,
-      allowNull: true,
-    },
-
-    title: {
-      type: Sequelize.ENUM("Dr", "Mr", "Ms", "Mrs"),
-      allowNull: true,
-    },
-
-    username: {
+export const TenantsTable = (sequelize, Sequelize) => {
+  return sequelize.define(tableNames.TENANTS, {
+    name: {
       type: Sequelize.STRING,
       allowNull: false,
     },
@@ -31,27 +21,24 @@ export const ManagementTable = (sequelize, Sequelize) => {
 
     mobile: {
       type: Sequelize.STRING,
+      allowNull: false,
       unique: true,
     },
 
-    password: {
-      type: Sequelize.STRING,
+    type: {
+      type: Sequelize.ENUM("hospital", "clinic", "organization"),
+      allowNull: false,
+    },
+
+    status: {
+      type: Sequelize.ENUM("active", "inactive", "expired"),
+      defaultValue: "active",
       allowNull: false,
     },
 
     profile: {
       type: Sequelize.STRING,
       allowNull: true,
-    },
-
-    role: {
-      type: Sequelize.ENUM("super_admin", "admin", "staff"),
-      allowNull: false,
-    },
-
-    status: {
-      type: Sequelize.ENUM("active", "inactive"),
-      defaultValue: "active",
     },
     createdAt: {
       type: "TIMESTAMP",

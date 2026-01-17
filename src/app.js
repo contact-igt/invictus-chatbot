@@ -9,9 +9,13 @@ import KnowledgeRouter from "./models/Knowledge/knowledge.routes.js";
 import AiPropmtRouter from "./models/AiPrompt/aiprompt.routes.js";
 import ConversationRouter from "./models/Conversation/conversation.routes.js";
 import AppSettingRouter from "./models/AppSettings/appsetting.routes.js";
-import ManagementRouter from "./models/Management/management.routes.js"
+import ManagementRouter from "./models/Management/management.routes.js";
+import TenantRouter from "./models/TenantModel/tenant.routes.js";
+import WhatsappAccountRouter from "./models/WhatsappAccountModel/whatsappAccount.routes.js";
+import ChatStateRouter from "./models/ChatStateModel/chatState.routes.js";
 
 import dns from "dns";
+import { startChatStateHeatDecayCronService } from "./models/ChatStateModel/chatState.service.js";
 dns.setDefaultResultOrder("ipv4first");
 
 const app = express();
@@ -24,7 +28,7 @@ app.use(
   fileUpload({
     limits: { fileSize: 20 * 1024 * 1024 },
     abortOnLimit: true,
-  })
+  }),
 );
 
 app.use((req, res, next) => {
@@ -40,8 +44,13 @@ app.use(
   AiPropmtRouter,
   ConversationRouter,
   AppSettingRouter,
-  ManagementRouter
+  ManagementRouter,
+  TenantRouter,
+  WhatsappAccountRouter,
+  ChatStateRouter,
 );
+
+startChatStateHeatDecayCronService();
 
 app.get("/", (req, res) => {
   res.json({ status: "OK" });

@@ -1,4 +1,5 @@
 export const tableNames = {
+  TENANTS : "tenants",
   WHATSAPP_ACCOUNT: "whatsapp_accounts",
   MESSAGES : "messages",
   KNOWLEDGESOURCE : "knowledge_sources",

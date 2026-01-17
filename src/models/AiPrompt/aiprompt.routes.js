@@ -8,16 +8,29 @@ import {
   updatePromptActive,
   uploadAiPrompt,
 } from "./aiprompt.controller.js";
+import {
+  authenticate,
+  requireManagement,
+} from "../../middlewares/auth/authMiddlewares.js";
 
 const router = express.Router();
 
-
-router.post("/prompt", uploadAiPrompt);
-router.get("/prompts", listAiPrompt);
-router.get("/prompt/:id", getAiPromptById);
-router.get("/prompt-active-lists" , getActivePromptController)
-router.put("/prompt/:id", updateAiPrompt);
-router.put("/prompt-active/:id", updatePromptActive);
-router.delete("/prompt/:id", deleteAiPrompt);
+router.post("/prompt", authenticate, requireManagement, uploadAiPrompt);
+router.get("/prompts", authenticate, requireManagement, listAiPrompt);
+router.get("/prompt/:id", authenticate, requireManagement, getAiPromptById);
+router.get(
+  "/prompt-active-lists",
+  authenticate,
+  requireManagement,
+  getActivePromptController,
+);
+router.put("/prompt/:id", authenticate, requireManagement, updateAiPrompt);
+router.put(
+  "/prompt-active/:id",
+  authenticate,
+  requireManagement,
+  updatePromptActive,
+);
+router.delete("/prompt/:id", authenticate, requireManagement, deleteAiPrompt);
 
 export default router;

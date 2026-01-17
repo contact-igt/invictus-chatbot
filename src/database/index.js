@@ -14,6 +14,7 @@ import { AdminAlertTable } from "./tables/AdminAlertTable/index.js";
 import { ChatStateTable } from "./tables/ChatStateTable/index.js";
 import { ProcessedMessagesTable } from "./tables/ProcessedMessagesTable/index.js";
 import { ChatLocksTable } from "./tables/ChatLocksTable/index.js";
+import { TenantsTable } from "./tables/TenantsTable/index.js";
 
 const dbconfig =
   ServerEnvironmentConfig?.server?.line === "production"
@@ -62,6 +63,9 @@ db.AdminAlert = AdminAlertTable(sequelize, Sequelize);
 db.ChatState = ChatStateTable(sequelize, Sequelize);
 db.ProcessedMessage = ProcessedMessagesTable(sequelize , Sequelize)
 db.ChatLocks = ChatLocksTable(sequelize , Sequelize)
+db.Tenants = TenantsTable(sequelize , Sequelize)
 
 
 export default db;
+
+

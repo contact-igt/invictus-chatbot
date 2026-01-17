@@ -1,14 +1,9 @@
 import {
-  decodeAuthToken,
   generateAccessToken,
   generateRefreshToken,
 } from "../../middlewares/auth/authMiddlewares.js";
 import { missingFieldsChecker } from "../../utils/missingFields.js";
-// import {
-//   findUserByIdService,
-//   updateOldUserPasswordByIdService,
-//   updateUserPasswordByIdService,
-// } from "../UserModels/user.service.js";
+import { findTenantByIdService } from "../TenantModel/tenant.service.js";
 import {
   getManagementService,
   getManagementByIdService,
@@ -28,102 +23,113 @@ import bcrypt from "bcrypt";
 // import { tableNames } from "../../database/tableName.js";
 
 export const registerManagementController = async (req, res) => {
-  const token = req.header("Authorization");
-
-  const { title, username, email, country_code, mobile, password, role } =
-    req.body;
-
-  const requiredFields = {
-    title,
-    username,
-    email,
-    password,
-    role,
-  };
-
-  const missingFields = await missingFieldsChecker(requiredFields);
-
-  if (missingFields.length > 0) {
-    return res.status(400).json({
-      message: `Missing required field(s) ${missingFields.join(", ")} `,
-    });
-  }
-
   try {
-    const decoded = decodeAuthToken(token);
+    const { title, username, email, country_code, mobile, password } = req.body;
 
-    if (decoded.role !== "super-admin") {
-      return res.status(400).json({
-        message: "You don't have access to create new management user",
-      });
-    }
-
-    await registerManagementService(
-      title,
+    const requiredFields = {
       username,
       email,
       country_code,
       mobile,
       password,
-      role
+    };
+
+    const missing = await missingFieldsChecker(requiredFields);
+    if (missing.length > 0) {
+      return res.status(400).json({
+        message: `Missing fields: ${missing.join(", ")}`,
+      });
+    }
+
+    const tenant_id = decoded.tenant_id;
+    if (!tenant_id) {
+      return res.status(400).json({
+        message: "Invalid tenant context",
+      });
+    }
+
+    await registerManagementService(
+      title || null,
+      username,
+      email,
+      country_code,
+      mobile,
+      password,
+      "STAFF",
+      tenant_id,
     );
 
-    return res.status(200).json({
-      message: "Successfully registered",
+    return res.status(201).json({
+      message: "Staff created successfully",
     });
   } catch (err) {
     if (err.original?.code === "ER_DUP_ENTRY") {
       return res
         .status(400)
-        .json({ message: "Email or mobile number already in use" });
+        .json({ message: "Email or mobile already exists" });
     }
 
-    return res.status(500).json({
-      message: err.message,
-    });
+    return res.status(500).json({ message: err.message });
   }
 };
 
 export const loginManagementController = async (req, res) => {
-  const { email, password } = req.body;
-
   try {
+    const { email, password } = req.body;
+
     if (!email || !password) {
       return res.status(400).json({
-        message: "email and password required",
+        message: "Email and password are required",
       });
     }
 
     const user = await loginManagementService(email);
 
     if (!user) {
-      return res.status(401).json({ message: "Incorrect Email" });
+      return res.status(401).json({
+        message: "Invalid email or password",
+      });
     }
 
     const isMatch = await bcrypt.compare(password, user.password);
-
     if (!isMatch) {
-      return res.status(401).json({ message: "Incorrect Password" });
+      return res.status(401).json({
+        message: "Invalid email or password",
+      });
     }
+
+    if (user.tenant_id) {
+      const tenant = await findTenantByIdService(user.tenant_id);
+
+      if (!tenant || tenant.status !== "active") {
+        return res.status(403).json({
+          code: "TENANT_INACTIVE",
+          message: "Your hospital account is inactive. Please contact support.",
+        });
+      }
+    }
+
     const accessToken = generateAccessToken(user);
     const refreshToken = generateRefreshToken(user);
 
     return res.status(200).json({
       message: "Login successful",
       user: {
-        id: user?.id,
-        title: user?.title,
-        username: user?.username,
-        email: user?.email,
-        profile: user?.profile_picture,
-        role: user?.role,
+        id: user.id,
+        username: user.username,
+        email: user.email,
+        role: user.role,
+        tenant_id: user.tenant_id,
       },
-      accessToken: accessToken,
-      refreshToken: refreshToken,
+      tokens: {
+        accessToken,
+        refreshToken,
+      },
     });
   } catch (err) {
+    console.error("Login error:", err);
     return res.status(500).json({
-      message: err?.message,
+      message: "Server error",
     });
   }
 };

@@ -2,45 +2,75 @@ import { tableNames } from "../../tableName.js";
 
 export const whatsappAccountTable = (sequelize, Sequelize) => {
   return sequelize.define(tableNames.WHATSAPP_ACCOUNT, {
-    user_id: {
+    tenant_id: {
       type: Sequelize.INTEGER,
-      allowNull: true,
+      allowNull: false,
+      unique: true,
     },
-    
+
+    whatsapp_number: {
+      type: Sequelize.STRING(20),
+      allowNull: false,
+      unique: true,
+    },
+
     phone_number_id: {
       type: Sequelize.STRING,
-      allowNull: true,
+      allowNull: false,
       unique: true,
     },
 
     waba_id: {
       type: Sequelize.STRING,
-      allownull: false,
+      allowNull: false,
     },
 
     access_token: {
-      type: Sequelize.STRING,
-      allownull: false,
-      unique: true,
+      type: Sequelize.TEXT, // store encrypted
+      allowNull: false,
     },
 
-    client_status: {
+    provider: {
+      type: Sequelize.ENUM("meta"),
+      defaultValue: "meta",
+    },
+
+    status: {
+      type: Sequelize.ENUM(
+        "pending", // saved but not tested
+        "verified", // test success
+        "active", // ready to send messages
+        "inactive", // manually disabled
+        "token_expired",
+        "failed"
+      ),
+      defaultValue: "pending",
+    },
+
+    is_verified: {
       type: Sequelize.STRING,
-      allownull: false,
-      unique: true,
+      defaultValue: "false",
+    },
+
+    verified_at: {
+      type: Sequelize.DATE,
+      allowNull: true,
+    },
+
+    last_error: {
+      type: Sequelize.TEXT,
+      allowNull: true,
     },
 
     createdAt: {
-      type: "TIMESTAMP",
-      allowNull: true,
-      defaultValue: sequelize.literal("CURRENT_TIMESTAMP"),
+      type: Sequelize.DATE,
+      defaultValue: Sequelize.literal("CURRENT_TIMESTAMP"),
       field: "created_at",
     },
 
     updatedAt: {
-      type: "TIMESTAMP",
-      allowNull: true,
-      defaultValue: sequelize.literal("CURRENT_TIMESTAMP"),
+      type: Sequelize.DATE,
+      defaultValue: Sequelize.literal("CURRENT_TIMESTAMP"),
       field: "updated_at",
     },
   });

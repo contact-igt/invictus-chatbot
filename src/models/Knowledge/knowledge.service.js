@@ -4,25 +4,26 @@ import { chunkText } from "../../utils/chunkText.js";
 import { cleanText } from "../../utils/cleanText.js";
 
 export const processKnowledgeUpload = async (
+  tenant_id,
   title,
   type,
   source_url,
   text,
-  file_name
+  file_name,
 ) => {
   const Query = `
   INSERT INTO ${tableNames?.KNOWLEDGESOURCE} 
-  (title , type , source_url , raw_text , file_name)
-  VALUES (?,?,?,?,?)`;
+  ( tenant_id, title , type , source_url , raw_text , file_name)
+  VALUES (?,?,?,?,?,?)`;
 
   const Query2 = ` 
   INSERT INTO ${tableNames.KNOWLEDGECHUNKS}
-  (source_id, chunk_text, embedding)
-  VALUES (?, ?, ?)`;
+  ( tenant_id, source_id, chunk_text, embedding)
+  VALUES (?, ?, ?, ?)`;
 
   try {
     const [result] = await db.sequelize.query(Query, {
-      replacements: [title, type, source_url, text, file_name],
+      replacements: [tenant_id, title, type, source_url, text, file_name],
     });
 
     const sourceId = result;
@@ -31,7 +32,7 @@ export const processKnowledgeUpload = async (
 
     for (const chunk of chunks) {
       await db.sequelize.query(Query2, {
-        replacements: [sourceId, chunk, JSON.stringify([])],
+        replacements: [tenant_id, sourceId, chunk, JSON.stringify([])],
       });
     }
   } catch (err) {
@@ -39,13 +40,17 @@ export const processKnowledgeUpload = async (
   }
 };
 
-export const listKnowledgeService = async () => {
-  try {
-    const [result] = await db.sequelize.query(`
+export const listKnowledgeService = async (tenant_id) => {
+  const Query = `
     SELECT id, title, type, source_url, file_name , status , created_at
-    FROM ${tableNames.KNOWLEDGESOURCE}
+    FROM ${tableNames.KNOWLEDGESOURCE} WHERE tenant_id IN (?)
     ORDER BY created_at DESC
-    `);
+    `;
+
+  try {
+    const [result] = await db.sequelize.query(Query, {
+      replacements: [tenant_id],
+    });
 
     return result;
   } catch (err) {
@@ -53,19 +58,19 @@ export const listKnowledgeService = async () => {
   }
 };
 
-export const getKnowledgeByIdService = async (id) => {
+export const getKnowledgeByIdService = async (id, tenant_id) => {
   const [rows] = await db.sequelize.query(
     `
     SELECT *
     FROM ${tableNames.KNOWLEDGESOURCE}
-    WHERE id = ?
+    WHERE id = ? AND tenant_id = ?
     `,
-    { replacements: [id] }
+    { replacements: [id, tenant_id] },
   );
   return rows[0];
 };
 
-export const updateKnowledgeService = async (id, title, text) => {
+export const updateKnowledgeService = async (id, tenant_id, title, text) => {
   const cleaned = cleanText(text);
 
   // 1️⃣ Update source
@@ -73,18 +78,18 @@ export const updateKnowledgeService = async (id, title, text) => {
     `
     UPDATE ${tableNames.KNOWLEDGESOURCE}
     SET title = ?, raw_text = ?
-    WHERE id = ?
+    WHERE id = ? AND tenant_id = ?
     `,
-    { replacements: [title, cleaned, id] }
+    { replacements: [title, cleaned, id, tenant_id] },
   );
 
   // 2️⃣ Delete old chunks
   await db.sequelize.query(
     `
     DELETE FROM ${tableNames.KNOWLEDGECHUNKS}
-    WHERE source_id = ?
+    WHERE source_id = ? AND tenant_id = ?
     `,
-    { replacements: [id] }
+    { replacements: [id, tenant_id] },
   );
 
   // 3️⃣ Recreate chunks
@@ -94,39 +99,39 @@ export const updateKnowledgeService = async (id, title, text) => {
     await db.sequelize.query(
       `
       INSERT INTO ${tableNames.KNOWLEDGECHUNKS}
-      (source_id, chunk_text, embedding)
-      VALUES (?, ?, ?)
+      (tenant_id , source_id, chunk_text, embedding)
+      VALUES (?, ?, ? , ?)
       `,
-      { replacements: [id, chunk, JSON.stringify([])] }
+      { replacements: [tenant_id, id, chunk, JSON.stringify([])] },
     );
   }
 };
 
-export const deleteKnowledgeService = async (id) => {
+export const deleteKnowledgeService = async (id, tenant_id) => {
   // 1️⃣ Delete chunks
   await db.sequelize.query(
     `
     DELETE FROM ${tableNames.KNOWLEDGECHUNKS}
-    WHERE source_id = ?
+    WHERE source_id = ? AND tenant_id = ?
     `,
-    { replacements: [id] }
+    { replacements: [id, tenant_id] },
   );
 
   // 2️⃣ Delete source
   await db.sequelize.query(
     `
     DELETE FROM ${tableNames.KNOWLEDGESOURCE}
-    WHERE id = ?
+    WHERE id = ? AND tenant_id = ?
     `,
-    { replacements: [id] }
+    { replacements: [id, tenant_id] },
   );
 };
 
-export const updateKnowledgeStatusService = async (status, id) => {
-  const Query = ` UPDATE ${tableNames?.KNOWLEDGESOURCE} SET status = ? WHERE id = ?`;
+export const updateKnowledgeStatusService = async (status, id , tenant_id) => {
+  const Query = ` UPDATE ${tableNames?.KNOWLEDGESOURCE} SET status = ? WHERE id = ? AND tenant_id = ?`;
 
   try {
-    const values = [status, id];
+    const values = [status, id , tenant_id];
 
     const [result] = await db.sequelize.query(Query, { replacements: values });
 
