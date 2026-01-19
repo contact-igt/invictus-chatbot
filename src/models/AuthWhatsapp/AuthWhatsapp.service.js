@@ -451,17 +451,17 @@ export const getOpenAIReply = async (tenant_id, phone, userMessage) => {
 
     detectLanguageStyle(cleanMessage);
 
-    const memory = await getConversationMemory(phone, 4);
+    const memory = await getConversationMemory(tenant_id, phone, 4);
     const chatHistory = buildChatHistory(memory);
 
-    const activePromptText = await getActivePromptService();
+    const activePromptText = await getActivePromptService(tenant_id);
 
     const basePrompt =
       activePromptText && activePromptText.trim().length > 0
         ? activePromptText
         : DEFAULT_SYSTEM_PROMPT;
 
-    const chunks = await searchKnowledgeChunks(cleanMessage);
+    const chunks = await searchKnowledgeChunks(tenant_id, cleanMessage);
 
     const knowledgeContext =
       chunks && chunks.length > 0

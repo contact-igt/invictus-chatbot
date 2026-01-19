@@ -21,7 +21,7 @@ Router.get(
   requireSuperAdmin,
   getTenantByIdController,
 );
-Router.post("/tenant", authenticate, requireSuperAdmin, createTenantController);
+Router.post("/tenant",  createTenantController);
 Router.put(
   "/tenant/:id",
   authenticate,
