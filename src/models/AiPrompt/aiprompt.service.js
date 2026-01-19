@@ -119,7 +119,7 @@ export const deleteAiPromptService = async (id, tenant_id) => {
 };
 
 export const getActivePromptService = async (tenant_id) => {
-  const Query = `SELECT prompt FROM ${tableNames?.AIPROMPT} WHERE is_active = ? AND tenant_id IN(?) LIMIT 1`;
+  const Query = `SELECT prompt FROM ${tableNames?.AIPROMPT} WHERE is_active = ? AND tenant_id = ? LIMIT 1`;
 
   try {
     const [result] = await db.sequelize.query(Query, {

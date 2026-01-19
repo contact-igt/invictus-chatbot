@@ -11,7 +11,6 @@ import {
 
 export const createTenantController = async (req, res) => {
   try {
-
     const { name, email, country_code, mobile, type, password } = req.body;
 
     const requiredFields = {

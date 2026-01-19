@@ -127,6 +127,8 @@ export const receiveMessage = async (req, res) => {
         //   reply = await getOpenAIReply(tenant_id, phone, text);
         // }
 
+        console.log("hhhhhh" , reply)
+
         if (!reply || !reply.trim()) {
           const fallback =
             "Our team will review your message and contact you shortly.";
@@ -165,6 +167,12 @@ export const receiveMessage = async (req, res) => {
         await unlockChat(tenant_id, phone_number_id, phone);
       }
     });
+
+
+
+
+
+    
   } catch (err) {
     console.error("Webhook error:", err);
     return res.sendStatus(200);
