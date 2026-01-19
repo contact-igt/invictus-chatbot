@@ -147,7 +147,6 @@ export const searchKnowledgeChunks = async (tenant_id, question) => {
     "explain",
   ];
 
-  // 🔹 Clean + tokenize
   const keywords = question
     .toLowerCase()
     .replace(/[^\w\s]/g, "")
@@ -156,7 +155,6 @@ export const searchKnowledgeChunks = async (tenant_id, question) => {
 
   if (!keywords.length) return [];
 
-  // 🔹 Dynamic LIKE conditions
   const conditions = keywords.map(() => "kc.chunk_text LIKE ?").join(" OR ");
   const values = keywords.map((k) => `%${k}%`);
 
@@ -166,7 +164,7 @@ export const searchKnowledgeChunks = async (tenant_id, question) => {
     INNER JOIN ${tableNames.KNOWLEDGESOURCE} ks
       ON ks.id = kc.source_id
     WHERE ks.status = 'active'
-      AND ks.tenant_id = ?
+      AND ks.tenant_id IN (?)
       AND (${conditions})
     ORDER BY LENGTH(kc.chunk_text) ASC
     LIMIT 8
