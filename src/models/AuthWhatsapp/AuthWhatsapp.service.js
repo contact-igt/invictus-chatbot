@@ -6,7 +6,7 @@ import { tableNames } from "../../database/tableName.js";
 
 import { searchKnowledgeChunks } from "../Knowledge/knowledge.search.js";
 import { getConversationMemory } from "../Messages/messages.memory.js";
-import { detectLanguageStyle } from "../../utils/detectLanguageStyle.js";
+import { detectLanguageAI } from "../../utils/detectLanguageStyle.js";
 import { buildChatHistory } from "../../utils/buildChatHistory.js";
 import { getActivePromptService } from "../AiPrompt/aiprompt.service.js";
 
@@ -15,243 +15,9 @@ const openai = new OpenAI({
 });
 
 const httpsAgent = new https.Agent({
-  family: 4, // force IPv4 (fixes ENETUNREACH)
+  family: 4,
   keepAlive: true,
 });
-
-// export const sendWhatsAppMessage = async (to, message, replyToMessageId) => {
-//   if (!message || typeof message !== "string" || message.trim() === "") {
-//     return;
-//   }
-
-//   const payload = {
-//     messaging_product: "whatsapp",
-//     recipient_type: "individual",
-//     to,
-//     type: "text",
-//     text: { body: message.trim() },
-//   };
-
-//   if (replyToMessageId) {
-//     payload.context = { message_id: replyToMessageId };
-//   }
-
-//   await axios.post(
-//     `https://graph.facebook.com/${process.env.META_API_VERSION}/${process.env.META_PHONE_NUMBER_ID}/messages`,
-//     payload,
-//     {
-//       headers: {
-//         Authorization: `Bearer ${process.env.META_ACCESS_TOKEN}`,
-//         "Content-Type": "application/json",
-//       },
-//       timeout: 15000,
-//     }
-//   );
-// };
-
-// export const sendWhatsAppMessage = async (to, message, replyToMessageId) => {
-//   try {
-//     if (!message || typeof message !== "string" || message.trim() === "") {
-//       return;
-//     }
-
-//     const payload = {
-//       messaging_product: "whatsapp",
-//       recipient_type: "individual",
-//       to,
-//       type: "text",
-//       text: {
-//         body: message.trim(),
-//       },
-//     };
-
-//     if (replyToMessageId) {
-//       payload.context = { message_id: replyToMessageId };
-//     }
-
-//     const url = `https://graph.facebook.com/${process.env.META_API_VERSION}/${process.env.META_PHONE_NUMBER_ID}/messages`;
-
-//     await axios.post(url, payload, {
-//       headers: {
-//         Authorization: `Bearer ${process.env.META_ACCESS_TOKEN}`,
-//         "Content-Type": "application/json",
-//       },
-//       httpsAgent,
-//       timeout: 30000,
-//     });
-//   } catch (err) {
-//     console.error("WhatsApp send failed:", err.message);
-//   }
-// };
-
-// export const getOpenAIReply = async (phone, userMessage) => {
-//   const now = new Date(
-//     new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" })
-//   );
-
-//   const day = String(now.getDate()).padStart(2, "0");
-//   const month = now.toLocaleString("en-US", { month: "long" });
-//   const year = now.getFullYear();
-//   const weekday = now.toLocaleString("en-US", { weekday: "long" });
-
-//   let hours = now.getHours();
-//   const minutes = String(now.getMinutes()).padStart(2, "0");
-//   const ampm = hours >= 12 ? "PM" : "AM";
-//   hours = hours % 12 || 12;
-
-//   const currentDateFormatted = `${day} ${month} ${year}`;
-//   const currentTimeFormatted = `${String(hours).padStart(
-//     2,
-//     "0"
-//   )} ${minutes} ${ampm}`;
-//   const currentDayFormatted = weekday;
-
-//   console.log(
-//     "Date/Time",
-//     currentDateFormatted,
-//     currentTimeFormatted,
-//     currentDayFormatted
-//   );
-
-//   try {
-//     if (!userMessage || typeof userMessage !== "string") {
-//       return null;
-//     }
-
-//     const cleanMessage = userMessage.trim();
-//     if (cleanMessage.length === 0) {
-//       return null;
-//     }
-
-//     const DEFAULT_SYSTEM_PROMPT = `
-//       You are a WhatsApp support assistant.
-
-//      Rules:
-//      - Reply in the SAME language as the user.
-//      - Be polite, calm, and professional.
-//      - Answer clearly and completely.
-//      - Use simple words.
-//      - If the information is not available, say so honestly.
-//      - Do NOT hallucinate.
-//       `;
-
-//     detectLanguageStyle(cleanMessage);
-
-//     const memory = await getConversationMemory(phone, 4);
-//     const chatHistory = buildChatHistory(memory);
-
-//     const activePromptText = await getActivePromptService();
-
-//     const basePrompt =
-//       activePromptText && activePromptText.trim().length > 0
-//         ? activePromptText
-//         : DEFAULT_SYSTEM_PROMPT;
-
-//     const chunks = await searchKnowledgeChunks(cleanMessage);
-
-//     const knowledgeContext =
-//       chunks && chunks.length > 0
-//         ? chunks.join("\n\n")
-//         : "No relevant knowledge available.";
-
-//     const systemPrompt = ` ${basePrompt}
-
-//           IMPORTANT:
-//           - Answer ONLY using the information from UPLOADED KNOWLEDGE.
-//           - If the answer is not found there, say you do not have that information.
-//           - When information exists in UPLOADED KNOWLEDGE, explain in FULL detail.
-//           - Do NOT summarise.
-//           - Do NOT stop early.
-
-//           CURRENT DATE , DAY AND TIME (INDIAN STANDARD TIME)
-//           Today Date: ${currentDateFormatted}
-//           Today Day : ${currentDayFormatted}
-//           Current Time: ${currentTimeFormatted}
-//           Timezone: Asia Kolkata
-
-//           UPLOADED KNOWLEDGE:
-//           ${knowledgeContext}
-//         `;
-
-//     const response = await openai.chat.completions.create({
-//       model: "gpt-4o",
-//       messages: [
-//         { role: "system", content: systemPrompt },
-//         ...chatHistory,
-//         { role: "user", content: cleanMessage },
-//       ],
-//       temperature: 0.2,
-//       top_p: 0.9,
-//       max_tokens: 500,
-//     });
-
-//     const reply = response?.choices?.[0]?.message?.content;
-
-//     if (!reply || typeof reply !== "string") {
-//       return null;
-//     }
-
-//     const finalReply = reply.trim();
-//     if (finalReply.length === 0) {
-//       return null;
-//     }
-
-//     return finalReply;
-//   } catch (err) {
-//     console.error("OpenAI error:", err.message);
-//     return null;
-//   }
-// };
-
-// export const isMessageProcessed = async (messageId) => {
-//   const [rows] = await db.sequelize.query(
-//     `SELECT message_id
-//      FROM ${tableNames.PROCESSEDMESSAGE}
-//      WHERE message_id = ?`,
-//     { replacements: [messageId] }
-//   );
-//   return rows.length > 0;
-// };
-
-// export const markMessageProcessed = async (messageId, phone) => {
-//   await db.sequelize.query(
-//     `INSERT IGNORE INTO ${tableNames.PROCESSEDMESSAGE}
-//      (message_id, phone)
-//      VALUES (?, ?)`,
-//     { replacements: [messageId, phone] }
-//   );
-// };
-
-// export const isChatLocked = async (phone) => {
-//   const [rows] = await db.sequelize.query(
-//     `
-//     SELECT phone
-//     FROM ${tableNames.CHATLOCKS}
-//     WHERE phone = ?
-//       AND created_at > (NOW() - INTERVAL 15 SECOND)
-//     `,
-//     { replacements: [phone] }
-//   );
-//   return rows.length > 0;
-// };
-
-// export const lockChat = async (phone) => {
-//   await db.sequelize.query(
-//     `
-//     INSERT IGNORE INTO ${tableNames.CHATLOCKS}
-//     (phone, created_at)
-//     VALUES (?, NOW())
-//     `,
-//     { replacements: [phone] }
-//   );
-// };
-
-// export const unlockChat = async (phone) => {
-//   await db.sequelize.query(
-//     `DELETE FROM ${tableNames.CHATLOCKS} WHERE phone = ?`,
-//     { replacements: [phone] }
-//   );
-// };
 
 export const sendWhatsAppMessage = async (tenant_id, to, message) => {
   if (!message || !message.trim()) return;
@@ -286,6 +52,8 @@ export const sendWhatsAppMessage = async (tenant_id, to, message) => {
         Authorization: `Bearer ${access_token}`,
         "Content-Type": "application/json",
       },
+      httpsAgent,
+      timeout: 30000,
     },
   );
 };
@@ -399,118 +167,108 @@ export const unlockChat = async (tenant_id, phone_number_id, phone) => {
 };
 
 export const getOpenAIReply = async (tenant_id, phone, userMessage) => {
-  const now = new Date(
-    new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }),
-  );
-
-  const day = String(now.getDate()).padStart(2, "0");
-  const month = now.toLocaleString("en-US", { month: "long" });
-  const year = now.getFullYear();
-  const weekday = now.toLocaleString("en-US", { weekday: "long" });
-
-  let hours = now.getHours();
-  const minutes = String(now.getMinutes()).padStart(2, "0");
-  const ampm = hours >= 12 ? "PM" : "AM";
-  hours = hours % 12 || 12;
-
-  const currentDateFormatted = `${day} ${month} ${year}`;
-  const currentTimeFormatted = `${String(hours).padStart(
-    2,
-    "0",
-  )} ${minutes} ${ampm}`;
-  const currentDayFormatted = weekday;
-
-  console.log(
-    "Date/Time",
-    currentDateFormatted,
-    currentTimeFormatted,
-    currentDayFormatted,
-  );
-
   try {
-    if (!userMessage || typeof userMessage !== "string") {
-      return null;
-    }
+    if (!userMessage) return null;
 
     const cleanMessage = userMessage.trim();
-    if (cleanMessage.length === 0) {
-      return null;
-    }
+    if (!cleanMessage) return null;
 
-    const DEFAULT_SYSTEM_PROMPT = `
-      You are a WhatsApp support assistant.
+    const now = new Date(
+      new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }),
+    );
 
-     Rules:
-     - Reply in the SAME language as the user.
-     - Be polite, calm, and professional.
-     - Answer clearly and completely.
-     - Use simple words.
-     - If the information is not available, say so honestly.
-     - Do NOT hallucinate.
-      `;
+    const currentDateFormatted = now.toLocaleDateString("en-GB", {
+      day: "2-digit",
+      month: "long",
+      year: "numeric",
+    });
 
-    detectLanguageStyle(cleanMessage);
+    const currentDayFormatted = now.toLocaleDateString("en-US", {
+      weekday: "long",
+    });
 
-    const memory = await getConversationMemory(tenant_id, phone, 4);
+    const currentTimeFormatted = now.toLocaleTimeString("en-US", {
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: true,
+    });
+
+    const languageInfo = await detectLanguageAI(cleanMessage);
+
+    console.log("language", languageInfo);
+
+    const memory = await getConversationMemory(tenant_id, phone);
     const chatHistory = buildChatHistory(memory);
 
-    const activePromptText = await getActivePromptService(tenant_id);
-
-    const basePrompt =
-      activePromptText && activePromptText.trim().length > 0
-        ? activePromptText
-        : DEFAULT_SYSTEM_PROMPT;
+    const hospitalPrompt =
+      (await getActivePromptService(tenant_id)) ||
+      "You are a hospital front-desk assistant.";
 
     const chunks = await searchKnowledgeChunks(tenant_id, cleanMessage);
-
     const knowledgeContext =
       chunks && chunks.length > 0
         ? chunks.join("\n\n")
         : "No relevant knowledge available.";
 
-    const systemPrompt = ` ${basePrompt}
+    const COMMON_BASE_PROMPT = `
+You are a WhatsApp front-desk reception assistant.
 
-          IMPORTANT:
-          - Answer ONLY using the information from UPLOADED KNOWLEDGE.
-          - If the answer is not found there, say you do not have that information.
-          - When information exists in UPLOADED KNOWLEDGE, explain in FULL detail.
-          - Do NOT summarise.
-          - Do NOT stop early.
+GLOBAL RULES:
+- Always read full conversation history before replying.
+- Never repeat questions already asked.
+- Be polite, calm, respectful, and human.
+- Use simple words.
+- Do NOT diagnose or prescribe medicines.
+- Do NOT hallucinate.
+`;
 
-          CURRENT DATE , DAY AND TIME (INDIAN STANDARD TIME)
-          Today Date: ${currentDateFormatted}
-          Today Day : ${currentDayFormatted}
-          Current Time: ${currentTimeFormatted}
-          Timezone: Asia Kolkata
 
-          UPLOADED KNOWLEDGE:
-          ${knowledgeContext}
-        `;
+const systemPrompt = `
+${COMMON_BASE_PROMPT}
+
+${hospitalPrompt}
+
+LANGUAGE ENFORCEMENT (STRICT):
+- Detected language: ${languageInfo.language}
+- Writing style: ${languageInfo.style}
+- Label: ${languageInfo.label}
+you must analyze the  Detected language AND Writing style then replay with correct sentence with meaning full of Lable way
+Do NOT translate.
+Do NOT change script.
+
+KNOWLEDGE RULE (VERY STRICT):
+- Answer ONLY using the information from UPLOADED KNOWLEDGE.
+- If information is not available, clearly say so.
+- Do NOT guess or add outside information.
+
+APPOINTMENT / CALLBACK RULE:
+- Do NOT confirm appointments.
+- Offer CALLBACK by hospital team if user agrees.
+- Collect details only after consent.
+
+CURRENT DATE & TIME (IST):
+Date: ${currentDateFormatted}
+Day: ${currentDayFormatted}
+Time: ${currentTimeFormatted}
+
+UPLOADED KNOWLEDGE:
+${knowledgeContext}
+`;
 
     const response = await openai.chat.completions.create({
       model: "gpt-4o",
+      temperature: 0.2,
+      top_p: 0.9,
+      max_tokens: 500,
       messages: [
         { role: "system", content: systemPrompt },
         ...chatHistory,
         { role: "user", content: cleanMessage },
       ],
-      temperature: 0.2,
-      top_p: 0.9,
-      max_tokens: 500,
     });
 
-    const reply = response?.choices?.[0]?.message?.content;
-
-    if (!reply || typeof reply !== "string") {
-      return null;
-    }
-
-    const finalReply = reply.trim();
-    if (finalReply.length === 0) {
-      return null;
-    }
-
-    return finalReply;
+    const reply = response?.choices?.[0]?.message?.content?.trim();
+    return reply || null;
   } catch (err) {
     console.error("OpenAI error:", err.message);
     return null;

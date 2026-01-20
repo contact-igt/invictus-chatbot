@@ -50,7 +50,7 @@ export const getChatByPhone = async (req, res) => {
 };
 
 export const sendAdminMessage = async (req, res) => {
-  const { phone, name, message } = req.body;
+  const { phone_number_id, phone, name, message } = req.body;
   const tenant_id = req.user.tenant_id;
 
   if (!tenant_id) {
@@ -58,8 +58,6 @@ export const sendAdminMessage = async (req, res) => {
   }
 
   try {
-    await sendWhatsAppMessage(tenant_id, phone, message);
-
     await createUserMessageService(
       tenant_id,
       phone_number_id,
@@ -70,6 +68,8 @@ export const sendAdminMessage = async (req, res) => {
       null,
       message,
     );
+
+    await sendWhatsAppMessage(tenant_id, phone, message);
 
     return res.status(200).send({
       message: "Message sended successfully",

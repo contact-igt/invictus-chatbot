@@ -15,3 +15,5 @@ export const tableNames = {
   CHATLOCKS : "chat_locks"
 
 };
+
+

@@ -10,14 +10,13 @@ import {
   unlockChat,
 } from "./AuthWhatsapp.service.js";
 
-import { getAppSettingByKeyService } from "../AppSettings/appsetting.service.js";
-import { processConversationService } from "../Conversation/conversation.service.js";
 import {
   createChatStateService,
   getChatStateByPhoneService,
   updateChatStateHeatOnUserMessageService,
 } from "../ChatStateModel/chatState.service.js";
 import { getTenantByPhoneNumberIdService } from "../WhatsappAccountModel/whatsappAccount.service.js";
+import { getIO } from "../../middlewares/socket/socket.js";
 
 export const verifyWebhook = (req, res) => {
   const mode = req.query["hub.mode"];
@@ -62,6 +61,18 @@ export const receiveMessage = async (req, res) => {
     }
 
     await markMessageProcessed(tenant_id, phone_number_id, messageId, phone);
+
+    const io = getIO();
+
+    io.to(`tenant-${tenant_id}`).emit("new-message", {
+      tenant_id,
+      phone,
+      phone_number_id,
+      name,
+      message: text,
+      sender: "user",
+      created_at: new Date(),
+    });
 
     await createUserMessageService(
       tenant_id,
@@ -116,22 +127,21 @@ export const receiveMessage = async (req, res) => {
         );
 
         let reply = await getOpenAIReply(tenant_id, phone, text);
-        // const isDetailsRequired = await getAppSettingByKeyService(
-        //   tenant_id,
-        //   "collect_details",
-        // );
 
-        // if (isDetailsRequired === "true") {
-        //   reply = await processConversationService(tenant_id, phone, text);
-        // } else {
-        //   reply = await getOpenAIReply(tenant_id, phone, text);
-        // }
-
-        console.log("hhhhhh" , reply)
 
         if (!reply || !reply.trim()) {
           const fallback =
             "Our team will review your message and contact you shortly.";
+
+          io.to(`tenant-${tenant_id}`).emit("new-message", {
+            tenant_id,
+            phone,
+            phone_number_id,
+            name,
+            message: fallback,
+            sender: "bot",
+            created_at: new Date(),
+          });
 
           await createUserMessageService(
             tenant_id,
@@ -149,6 +159,17 @@ export const receiveMessage = async (req, res) => {
         }
 
         const safeReply = reply.trim();
+
+        io.to(`tenant-${tenant_id}`).emit("new-message", {
+          tenant_id,
+          phone,
+          phone_number_id,
+          name,
+          message: safeReply,
+          sender: "bot",
+          created_at: new Date(),
+        });
+
         await createUserMessageService(
           tenant_id,
           phone_number_id,
@@ -162,17 +183,11 @@ export const receiveMessage = async (req, res) => {
 
         await sendWhatsAppMessage(tenant_id, phone, safeReply);
       } catch (err) {
-        console.error("🔥 Background error:", err);
+        console.error("Background error:", err);
       } finally {
         await unlockChat(tenant_id, phone_number_id, phone);
       }
     });
-
-
-
-
-
-    
   } catch (err) {
     console.error("Webhook error:", err);
     return res.sendStatus(200);
