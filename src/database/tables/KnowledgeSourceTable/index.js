@@ -34,8 +34,10 @@ export const KnowledgeSourcesTable = (sequelize, Sequelize) => {
 
     status: {
       type: Sequelize.ENUM("active", "inactive"),
-      defaultValue: "active",
+      defaultValue: "inactive",
     },
+
+    
 
     createdAt: {
       type: "TIMESTAMP",

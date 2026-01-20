@@ -39,8 +39,6 @@ ${message}
 
   try {
     const parsed = JSON.parse(result);
-    // return parsed;
-
     return normalizeLanguageLabel(parsed);
   } catch {
     return {
