@@ -84,7 +84,7 @@ export const updateChatStateHeatOnUserMessageService = async (
 export const startChatStateHeatDecayCronService = () => {
   cron.schedule("*/30 * * * *", async () => {
     try {
-      console.log("🔥 Heat decay cron started");
+      console.log("Heat decay cron started");
 
       await db.sequelize.query(`
         UPDATE ${tableNames?.CHATSTATE}
@@ -103,9 +103,9 @@ export const startChatStateHeatDecayCronService = () => {
           END
     `);
 
-      console.log("✅ Heat decay cron finished");
+      console.log("Heat decay cron finished");
     } catch (err) {
-      console.error("❌ Heat decay cron error:", err.message);
+      console.error("Heat decay cron error:", err.message);
       throw err;
     }
   });

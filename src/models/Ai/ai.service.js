@@ -1,9 +1,4 @@
 import OpenAI from "openai";
-
-import db from "../../database/index.js";
-import { tableNames } from "../../database/tableName.js";
-import { getOpenAIReply } from "../AuthWhatsapp/AuthWhatsapp.service.js";
-
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
@@ -23,9 +18,3 @@ export const AiService = async (system, propmt) => {
     return "Please try again later.";
   }
 };
-
-
-
-
-
-
