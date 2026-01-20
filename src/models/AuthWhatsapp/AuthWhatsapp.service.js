@@ -228,13 +228,33 @@ ${COMMON_BASE_PROMPT}
 
 ${hospitalPrompt}
 
-LANGUAGE ENFORCEMENT (STRICT):
-- Detected language: ${languageInfo.language}
-- Writing style: ${languageInfo.style}
-- Label: ${languageInfo.label}
-you must analyze the  Detected language AND Writing style then replay with correct sentence with meaning full of Lable way
+
+LANGUAGE ENFORCEMENT (VERY STRICT):
+
+Detected Language: ${languageInfo.language}
+Writing Style: ${languageInfo.style}
+Internal Label (for system use only): ${languageInfo.label}
+
+You MUST follow these rules EXACTLY:
+
+1. Use Detected Language and Writing Style to form the reply.
+2. If Writing Style is "romanized":
+   - Use ONLY English letters (a–z).
+   - Do NOT use native script characters.
+3. If Writing Style is "native_script":
+   - Use ONLY the native script.
+4. If Writing Style is "mixed":
+   - Follow the same mixed style as the user.
+
+IMPORTANT:
+- The Label is ONLY for internal understanding.
+- Do NOT mention the label in the reply.
+- Do NOT prefix the reply with "english:", "tanglish:", "benglish:", etc.
+- The reply must look like normal human conversation.
+
 Do NOT translate.
 Do NOT change script.
+
 
 KNOWLEDGE RULE (VERY STRICT):
 - Answer ONLY using the information from UPLOADED KNOWLEDGE.
