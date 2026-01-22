@@ -52,8 +52,6 @@ export const getLeadListService = async (tenant_id) => {
 export const updateLeadService = async (tenant_id, contact_id) => {
   const { heat_state, heat_score } = calculateHeatState(new Date());
 
-  console.log("ddd", tenant_id, contact_id);
-
   const Query = `UPDATE ${tableNames?.LEADS} SET last_user_message_at = Now() , heat_state = ?, score = ? , summary_status = ?  WHERE tenant_id = ? AND contact_id = ?`;
 
   try {
@@ -97,9 +95,8 @@ export const startLeadHeatDecayCronService = () => {
   });
 };
 
-export const getLeadSummaryService = async (tenant_id, phone, contact_id) => {
+export const getLeadSummaryService = async (tenant_id, phone , contact_id) => {
   try {
-    // 1️⃣ Get conversation
     const memory = await getConversationMemory(tenant_id, phone);
 
     if (!memory || memory.length === 0) {

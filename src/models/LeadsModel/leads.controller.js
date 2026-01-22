@@ -1,3 +1,4 @@
+import { getContactByIdAndTenantIdService } from "../ContactsModel/contacts.service.js";
 import { getLeadListService, getLeadSummaryService } from "./leads.service.js";
 
 export const getLeadListController = async (req, res) => {
@@ -24,19 +25,27 @@ export const getLeadListController = async (req, res) => {
 };
 
 export const getLeadSummaryController = async (req, res) => {
-  const { phone } = req.query;
   const { id } = req.params;
 
   const tenant_id = req.user.tenant_id;
 
-  if (!tenant_id || !phone) {
+  if (!tenant_id || !id) {
     return res.status(400).send({
-      message: "Tenant id or phone number missing",
+      message: "Tenant id or contact id missing",
     });
   }
 
   try {
-    const response = await getLeadSummaryService(tenant_id, phone , id);
+    const contactDetails = await getContactByIdAndTenantIdService(
+      id,
+      tenant_id,
+    );
+
+    const response = await getLeadSummaryService(
+      tenant_id,
+      contactDetails?.phone,
+      id,
+    );
 
     return res.status(200).send({
       message: "success",
