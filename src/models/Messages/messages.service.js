@@ -1,6 +1,6 @@
 import db from "../../database/index.js";
 import { tableNames } from "../../database/tableName.js";
-import { AiService } from "../Ai/ai.service.js";
+import { AiService } from "../../utils/coreAi.js";
 
 export const createUserMessageService = async (
   tenant_id,

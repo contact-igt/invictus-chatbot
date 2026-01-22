@@ -1,4 +1,4 @@
-import { AiService } from "../models/Ai/ai.service.js";
+import { AiService } from "./coreAi.js";
 import { normalizeLanguageLabel } from "./normalizeLanguageLabel.js";
 
 export const detectLanguageAI = async (message) => {

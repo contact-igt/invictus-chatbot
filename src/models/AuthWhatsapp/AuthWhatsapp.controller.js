@@ -10,13 +10,17 @@ import {
   unlockChat,
 } from "./AuthWhatsapp.service.js";
 
-import {
-  createChatStateService,
-  getChatStateByPhoneService,
-  updateChatStateHeatOnUserMessageService,
-} from "../ChatStateModel/chatState.service.js";
 import { getTenantByPhoneNumberIdService } from "../WhatsappAccountModel/whatsappAccount.service.js";
 import { getIO } from "../../middlewares/socket/socket.js";
+import {
+  createContactService,
+  getContactByPhoneAndTenantIdService,
+} from "../ContactsModel/contacts.service.js";
+import {
+  createLeadService,
+  getLeadByPhoneService,
+  updateLeadService,
+} from "../LeadsModel/leads.service.js";
 
 export const verifyWebhook = (req, res) => {
   const mode = req.query["hub.mode"];
@@ -85,30 +89,27 @@ export const receiveMessage = async (req, res) => {
       text,
     );
 
-    let state = await getChatStateByPhoneService(
+    let contactsaved = await getContactByPhoneAndTenantIdService(
       tenant_id,
-      phone_number_id,
       phone,
     );
 
-    if (!state) {
-      await createChatStateService(tenant_id, phone_number_id, phone, name);
-      state = await getChatStateByPhoneService(
+    if (!contactsaved) {
+      await createContactService(tenant_id, phone, name ? name : null, null);
+      contactsaved = await getContactByPhoneAndTenantIdService(
         tenant_id,
-        phone_number_id,
         phone,
       );
     }
 
-    await updateChatStateHeatOnUserMessageService(
-      tenant_id,
-      phone_number_id,
-      phone,
-    );
+    let leadSaved = await getLeadByPhoneService(tenant_id, contactsaved?.id);
 
-    if (state.state === "need_admin" || state.state === "admin_active") {
-      return res.sendStatus(200);
+    if (!leadSaved) {
+      await createLeadService(tenant_id, contactsaved?.id);
+      leadSaved = await getLeadByPhoneService(tenant_id, contactsaved?.id);
     }
+
+    await updateLeadService(tenant_id, leadSaved?.contact_id);
 
     if (await isChatLocked(tenant_id, phone_number_id, phone)) {
       return res.sendStatus(200);
@@ -127,7 +128,6 @@ export const receiveMessage = async (req, res) => {
         );
 
         let reply = await getOpenAIReply(tenant_id, phone, text);
-
 
         if (!reply || !reply.trim()) {
           const fallback =

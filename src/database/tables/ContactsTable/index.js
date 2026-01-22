@@ -1,11 +1,15 @@
 import { tableNames } from "../../tableName.js";
 
-export const ContactTable = (sequelize, Sequelize) => {
+export const ContactsTable = (sequelize, Sequelize) => {
   return sequelize.define(tableNames?.CONTACTS, {
+    tenant_id: {
+      type: Sequelize.INTEGER,
+      allowNull: false,
+    },
+
     phone: {
       type: Sequelize.STRING,
       allowNull: false,
-      unique: true,
     },
 
     name: {
@@ -13,13 +17,13 @@ export const ContactTable = (sequelize, Sequelize) => {
       allowNull: true,
     },
 
-    email: {
+    profile_pic: {
       type: Sequelize.STRING,
       allowNull: true,
     },
 
-    clinic_name: {
-      type: Sequelize.STRING,
+    last_message_at: {
+      type: Sequelize.DATE,
       allowNull: true,
     },
 
