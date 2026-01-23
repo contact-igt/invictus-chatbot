@@ -23,7 +23,9 @@ export const createLeadService = async (tenant_id, contact_id) => {
 };
 
 export const getLeadByPhoneService = async (tenant_id, contact_id) => {
-  const Query = `SELECT * FROM ${tableNames?.LEADS} WHERE tenant_id = ? AND contact_id = ? LIMIT 1`;
+  const Query = `
+  
+  SELECT * FROM ${tableNames?.LEADS} WHERE tenant_id = ? AND contact_id = ? LIMIT 1`;
 
   try {
     const [result] = await db.sequelize.query(Query, {
@@ -36,7 +38,11 @@ export const getLeadByPhoneService = async (tenant_id, contact_id) => {
 };
 
 export const getLeadListService = async (tenant_id) => {
-  const Query = `SELECT * FROM ${tableNames?.LEADS} WHERE tenant_id IN (?) ORDER BY last_user_message_at DESC`;
+  const Query = `
+  SELECT led.* , cta.* FROM ${tableNames?.LEADS} as led
+  LEFT JOIN ${tableNames?.CONTACTS} as cta on (cta.id = led.contact_id)
+  WHERE led.tenant_id IN (?) 
+  ORDER BY led.last_user_message_at DESC`;
 
   try {
     const [result] = await db.sequelize.query(Query, {
@@ -53,6 +59,22 @@ export const updateLeadService = async (tenant_id, contact_id) => {
   const { heat_state, heat_score } = calculateHeatState(new Date());
 
   const Query = `UPDATE ${tableNames?.LEADS} SET last_user_message_at = Now() , heat_state = ?, score = ? , summary_status = ?  WHERE tenant_id = ? AND contact_id = ?`;
+
+  try {
+    const [result] = await db.sequelize.query(Query, {
+      replacements: [heat_state, heat_score, "new", tenant_id, contact_id],
+    });
+
+    return result;
+  } catch (err) {
+    throw err;
+  }
+};
+
+export const updateAdminLeadService = async (tenant_id, contact_id) => {
+  const { heat_state, heat_score } = calculateHeatState(new Date());
+
+  const Query = `UPDATE ${tableNames?.LEADS} SET last_admin_reply_at = Now() , heat_state = ?, score = ? , summary_status = ?  WHERE tenant_id = ? AND contact_id = ?`;
 
   try {
     const [result] = await db.sequelize.query(Query, {
@@ -95,7 +117,7 @@ export const startLeadHeatDecayCronService = () => {
   });
 };
 
-export const getLeadSummaryService = async (tenant_id, phone , contact_id) => {
+export const getLeadSummaryService = async (tenant_id, phone, contact_id) => {
   try {
     const memory = await getConversationMemory(tenant_id, phone);
 

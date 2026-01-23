@@ -7,6 +7,11 @@ export const MessagesTable = (sequelize, Sequelize) => {
       allowNull: false,
     },
 
+    contact_id: {
+      type: Sequelize.INTEGER,
+      allowNull: false,
+    },
+
     phone_number_id: {
       type: Sequelize.STRING,
       allowNull: false,

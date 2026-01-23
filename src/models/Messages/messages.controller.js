@@ -1,4 +1,5 @@
 import { sendWhatsAppMessage } from "../AuthWhatsapp/AuthWhatsapp.service.js";
+import { updateAdminLeadService,} from "../LeadsModel/leads.service.js";
 import {
   createUserMessageService,
   getChatByPhoneService,
@@ -50,16 +51,19 @@ export const getChatByPhone = async (req, res) => {
 };
 
 export const sendAdminMessage = async (req, res) => {
-  const { phone_number_id, phone, name, message } = req.body;
+  const { phone_number_id, contact_id, phone, name, message } = req.body;
   const tenant_id = req.user.tenant_id;
 
-  if (!tenant_id) {
-    return res.status(400).send({ message: "Invalid tenant context" });
+  if (!tenant_id || !contact_id) {
+    return res
+      .status(400)
+      .send({ message: "Invalid tenant id or contact id context" });
   }
 
   try {
     await createUserMessageService(
       tenant_id,
+      contact_id,
       phone_number_id,
       phone,
       null,
@@ -70,6 +74,8 @@ export const sendAdminMessage = async (req, res) => {
     );
 
     await sendWhatsAppMessage(tenant_id, phone, message);
+
+    await updateAdminLeadService(tenant_id, contact_id);
 
     return res.status(200).send({
       message: "Message sended successfully",

@@ -16,7 +16,9 @@ import TenantRouter from "./models/TenantModel/tenant.routes.js";
 import WhatsappAccountRouter from "./models/WhatsappAccountModel/whatsappAccount.routes.js";
 import ContactRouter from "./models/ContactsModel/contact.routes.js";
 import LeadRouter from "./models/LeadsModel/leads.routes.js";
+import LiveChatRouter from "./models/LiveChatModel/livechat.routes.js"
 import { startLeadHeatDecayCronService } from "./models/LeadsModel/leads.service.js";
+import { startLiveChatCleanupService } from "./models/LiveChatModel/livechat.service.js";
 
 dns.setDefaultResultOrder("ipv4first");
 
@@ -49,9 +51,11 @@ app.use(
   WhatsappAccountRouter,
   ContactRouter,
   LeadRouter,
+  LiveChatRouter
 );
 
 startLeadHeatDecayCronService();
+startLiveChatCleanupService();
 
 app.get("/", (req, res) => {
   res.json({ status: "OK" });

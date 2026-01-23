@@ -10,6 +10,7 @@ export const tableNames = {
   PROCESSEDMESSAGE: "processed_messages",
   CHATLOCKS: "chat_locks",
   LEADS: "leads",
+  LIVECHAT : "live_chats"
 };
 
 

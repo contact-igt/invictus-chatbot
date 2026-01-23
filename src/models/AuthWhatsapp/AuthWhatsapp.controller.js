@@ -21,6 +21,7 @@ import {
   getLeadByPhoneService,
   updateLeadService,
 } from "../LeadsModel/leads.service.js";
+import { createLiveChatService, getLivechatByIdService } from "../LiveChatModel/livechat.service.js";
 
 export const verifyWebhook = (req, res) => {
   const mode = req.query["hub.mode"];
@@ -78,17 +79,6 @@ export const receiveMessage = async (req, res) => {
       created_at: new Date(),
     });
 
-    await createUserMessageService(
-      tenant_id,
-      phone_number_id,
-      phone,
-      messageId,
-      name,
-      "user",
-      null,
-      text,
-    );
-
     let contactsaved = await getContactByPhoneAndTenantIdService(
       tenant_id,
       phone,
@@ -101,6 +91,24 @@ export const receiveMessage = async (req, res) => {
         phone,
       );
     }
+
+    const livelist = await getLivechatByIdService(tenant_id, contactsaved?.id);
+
+    if (!livelist) {
+      await createLiveChatService(tenant_id, contactsaved?.id);
+    }
+
+    await createUserMessageService(
+      tenant_id,
+      contactsaved?.id,
+      phone_number_id,
+      phone,
+      messageId,
+      name,
+      "user",
+      null,
+      text,
+    );
 
     let leadSaved = await getLeadByPhoneService(tenant_id, contactsaved?.id);
 
@@ -145,6 +153,7 @@ export const receiveMessage = async (req, res) => {
 
           await createUserMessageService(
             tenant_id,
+            contactsaved?.id,
             phone_number_id,
             phone,
             messageId,
@@ -172,6 +181,7 @@ export const receiveMessage = async (req, res) => {
 
         await createUserMessageService(
           tenant_id,
+          contactsaved?.id,
           phone_number_id,
           phone,
           messageId,

@@ -12,6 +12,7 @@ import { ChatLocksTable } from "./tables/ChatLocksTable/index.js";
 import { TenantsTable } from "./tables/TenantsTable/index.js";
 import { LeadsTable } from "./tables/LeadsTable/index.js";
 import { ContactsTable } from "./tables/ContactsTable/index.js";
+import { LiveChatTable } from "./tables/LiveChatTable/index.js";
 
 const dbconfig =
   ServerEnvironmentConfig?.server?.line === "production"
@@ -58,5 +59,6 @@ db.Messages = MessagesTable(sequelize, Sequelize);
 db.ProcessedMessage = ProcessedMessagesTable(sequelize, Sequelize);
 db.ChatLocks = ChatLocksTable(sequelize, Sequelize);
 db.Leads = LeadsTable(sequelize, Sequelize);
+db.LiveChat = LiveChatTable(sequelize, Sequelize);
 
 export default db;
