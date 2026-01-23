@@ -10,13 +10,18 @@ import {
   unlockChat,
 } from "./AuthWhatsapp.service.js";
 
-import {
-  createChatStateService,
-  getChatStateByPhoneService,
-  updateChatStateHeatOnUserMessageService,
-} from "../ChatStateModel/chatState.service.js";
 import { getTenantByPhoneNumberIdService } from "../WhatsappAccountModel/whatsappAccount.service.js";
 import { getIO } from "../../middlewares/socket/socket.js";
+import {
+  createContactService,
+  getContactByPhoneAndTenantIdService,
+} from "../ContactsModel/contacts.service.js";
+import {
+  createLeadService,
+  getLeadByPhoneService,
+  updateLeadService,
+} from "../LeadsModel/leads.service.js";
+import { createLiveChatService, getLivechatByIdService } from "../LiveChatModel/livechat.service.js";
 
 export const verifyWebhook = (req, res) => {
   const mode = req.query["hub.mode"];
@@ -74,8 +79,28 @@ export const receiveMessage = async (req, res) => {
       created_at: new Date(),
     });
 
+    let contactsaved = await getContactByPhoneAndTenantIdService(
+      tenant_id,
+      phone,
+    );
+
+    if (!contactsaved) {
+      await createContactService(tenant_id, phone, name ? name : null, null);
+      contactsaved = await getContactByPhoneAndTenantIdService(
+        tenant_id,
+        phone,
+      );
+    }
+
+    const livelist = await getLivechatByIdService(tenant_id, contactsaved?.id);
+
+    if (!livelist) {
+      await createLiveChatService(tenant_id, contactsaved?.id);
+    }
+
     await createUserMessageService(
       tenant_id,
+      contactsaved?.id,
       phone_number_id,
       phone,
       messageId,
@@ -85,30 +110,14 @@ export const receiveMessage = async (req, res) => {
       text,
     );
 
-    let state = await getChatStateByPhoneService(
-      tenant_id,
-      phone_number_id,
-      phone,
-    );
+    let leadSaved = await getLeadByPhoneService(tenant_id, contactsaved?.id);
 
-    if (!state) {
-      await createChatStateService(tenant_id, phone_number_id, phone, name);
-      state = await getChatStateByPhoneService(
-        tenant_id,
-        phone_number_id,
-        phone,
-      );
+    if (!leadSaved) {
+      await createLeadService(tenant_id, contactsaved?.id);
+      leadSaved = await getLeadByPhoneService(tenant_id, contactsaved?.id);
     }
 
-    await updateChatStateHeatOnUserMessageService(
-      tenant_id,
-      phone_number_id,
-      phone,
-    );
-
-    if (state.state === "need_admin" || state.state === "admin_active") {
-      return res.sendStatus(200);
-    }
+    await updateLeadService(tenant_id, leadSaved?.contact_id);
 
     if (await isChatLocked(tenant_id, phone_number_id, phone)) {
       return res.sendStatus(200);
@@ -128,7 +137,6 @@ export const receiveMessage = async (req, res) => {
 
         let reply = await getOpenAIReply(tenant_id, phone, text);
 
-
         if (!reply || !reply.trim()) {
           const fallback =
             "Our team will review your message and contact you shortly.";
@@ -145,6 +153,7 @@ export const receiveMessage = async (req, res) => {
 
           await createUserMessageService(
             tenant_id,
+            contactsaved?.id,
             phone_number_id,
             phone,
             messageId,
@@ -172,6 +181,7 @@ export const receiveMessage = async (req, res) => {
 
         await createUserMessageService(
           tenant_id,
+          contactsaved?.id,
           phone_number_id,
           phone,
           messageId,

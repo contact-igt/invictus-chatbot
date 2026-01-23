@@ -10,7 +10,7 @@ export const registerManagementService = async (
   mobile,
   password,
   role,
-  tenant_id
+  tenant_id,
 ) => {
   const passwordhashed = await bcrypt.hash(password, 10);
 
@@ -41,7 +41,7 @@ export const loginManagementService = async (email) => {
     const Query = `SELECT * FROM ${tableNames?.MANAGEMENT} WHERE email = ? `;
 
     const [result] = await db.sequelize.query(Query, {
-      replacements: [email ],
+      replacements: [email],
     });
     return result[0];
   } catch (err) {
@@ -49,12 +49,14 @@ export const loginManagementService = async (email) => {
   }
 };
 
-export const getManagementService = async () => {
+export const getManagementService = async (tenant_id) => {
   const protectedEmails = ["contact@invictusglobaltech.com"];
-  const Query = `SELECT * FROM ${tableNames?.MANAGEMENT} ORDER BY created_at DESC `;
+  const Query = `SELECT * FROM ${tableNames?.MANAGEMENT} WHERE tenant_id IN (?) ORDER BY created_at DESC `;
 
   try {
-    const [result] = await db.sequelize.query(Query);
+    const [result] = await db.sequelize.query(Query, {
+      replacements: [tenant_id],
+    });
     const filteredManagement = result
       .filter((management) => !protectedEmails.includes(management.email))
       .map((management) => ({
@@ -84,8 +86,6 @@ export const getManagementByIdService = async (user_id) => {
     throw err;
   }
 };
-
-
 
 // export const updateManagementByIdService = async (
 //   user_id,

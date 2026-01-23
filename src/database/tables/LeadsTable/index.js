@@ -1,7 +1,7 @@
 import { tableNames } from "../../tableName.js";
 
-export const MessagesTable = (sequelize, Sequelize) => {
-  return sequelize.define(tableNames.MESSAGES, {
+export const LeadsTable = (sequelize, Sequelize) => {
+  return sequelize.define(tableNames?.LEADS, {
     tenant_id: {
       type: Sequelize.INTEGER,
       allowNull: false,
@@ -10,46 +10,46 @@ export const MessagesTable = (sequelize, Sequelize) => {
     contact_id: {
       type: Sequelize.INTEGER,
       allowNull: false,
+      unique: true,
     },
 
-    phone_number_id: {
-      type: Sequelize.STRING,
+    score: {
+      type: Sequelize.INTEGER,
       allowNull: false,
+      defaultValue: 0,
     },
 
-    wa_id: {
-      type: Sequelize.STRING,
-      allowNull: true,
-    },
-
-    phone: {
-      type: Sequelize.STRING,
+    heat_state: {
+      type: Sequelize.ENUM("hot", "warm", "cold", "supercold"),
       allowNull: false,
+      defaultValue: "cold",
     },
 
-    name: {
-      type: Sequelize.STRING,
-      allowNull: true,
-    },
-
-    sender: {
-      type: Sequelize.ENUM("user", "bot", "admin"),
-      allowNull: false,
-    },
-
-    sender_id: {
-      type: Sequelize.STRING,
-      allowNull: true,
-    },
-
-    message: {
+    ai_summary: {
       type: Sequelize.TEXT,
-      allowNull: false,
+      allowNull: true,
     },
 
-    seen: {
-      type: Sequelize.BOOLEAN,
-      defaultValue: false,
+    summary_status: {
+      type: Sequelize.ENUM("new", "old"),
+      allowNull: false,
+      defaultValue: "new",
+    },
+
+    last_user_message_at: {
+      type: Sequelize.DATE,
+      allowNull: true,
+    },
+
+    last_admin_reply_at: {
+      type: Sequelize.DATE,
+      allowNull: true,
+    },
+
+    status: {
+      type: Sequelize.ENUM("active", "archived", "blocked"),
+      allowNull: false,
+      defaultValue: "active",
     },
 
     createdAt: {

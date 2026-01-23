@@ -1,26 +1,27 @@
-import { type } from "os";
 import { tableNames } from "../../tableName.js";
 
-export const AppSettingTable = (sequelize, Sequelize) => {
-  return sequelize.define(tableNames.APPSETTINGS, {
-    label: {
-      type: Sequelize.STRING,
+export const LiveChatTable = (sequelize, Sequelize) => {
+  return sequelize.define(tableNames.LIVECHAT, {
+    tenant_id: {
+      type: Sequelize.INTEGER,
       allowNull: false,
     },
-    setting_key: {
-      type: Sequelize.STRING,
+
+    contact_id: {
+      type: Sequelize.INTEGER,
       allowNull: false,
-      unique: true,
     },
-    setting_value: {
-      type: Sequelize.STRING,
-      allowNull: false,
-      defaultValue: "false",
-    },
-    description: {
-      type: Sequelize.TEXT,
+
+    last_message_at: {
+      type: Sequelize.DATE,
       allowNull: true,
     },
+
+    assigned_admin_id: {
+      type: Sequelize.INTEGER,
+      allowNull: true,
+    },
+
     createdAt: {
       type: "TIMESTAMP",
       allowNull: true,

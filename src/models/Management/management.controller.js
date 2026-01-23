@@ -135,8 +135,16 @@ export const loginManagementController = async (req, res) => {
 };
 
 export const getManagementController = async (req, res) => {
+  const tenant_id = req.user.tenant_id;
+
+    if (!tenant_id) {
+    return res.status(400).send({
+      message: "Tenant id missing",
+    });
+  }
+
   try {
-    const response = await getManagementService();
+    const response = await getManagementService(tenant_id);
 
     return res.status(200).json({
       message: "success",

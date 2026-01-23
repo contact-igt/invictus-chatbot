@@ -11,13 +11,14 @@ import AuthWhatsappRouter from "./models/AuthWhatsapp/AuthWhatsapp.routes.js";
 import WhatsappMessageRouter from "./models/Messages/messages.routes.js";
 import KnowledgeRouter from "./models/Knowledge/knowledge.routes.js";
 import AiPropmtRouter from "./models/AiPrompt/aiprompt.routes.js";
-import ConversationRouter from "./models/Conversation/conversation.routes.js";
-import AppSettingRouter from "./models/AppSettings/appsetting.routes.js";
 import ManagementRouter from "./models/Management/management.routes.js";
 import TenantRouter from "./models/TenantModel/tenant.routes.js";
 import WhatsappAccountRouter from "./models/WhatsappAccountModel/whatsappAccount.routes.js";
-import ChatStateRouter from "./models/ChatStateModel/chatState.routes.js";
-import { startChatStateHeatDecayCronService } from "./models/ChatStateModel/chatState.service.js";
+import ContactRouter from "./models/ContactsModel/contact.routes.js";
+import LeadRouter from "./models/LeadsModel/leads.routes.js";
+import LiveChatRouter from "./models/LiveChatModel/livechat.routes.js"
+import { startLeadHeatDecayCronService } from "./models/LeadsModel/leads.service.js";
+import { startLiveChatCleanupService } from "./models/LiveChatModel/livechat.service.js";
 
 dns.setDefaultResultOrder("ipv4first");
 
@@ -45,15 +46,16 @@ app.use(
   WhatsappMessageRouter,
   KnowledgeRouter,
   AiPropmtRouter,
-  ConversationRouter,
-  AppSettingRouter,
   ManagementRouter,
   TenantRouter,
   WhatsappAccountRouter,
-  ChatStateRouter,
+  ContactRouter,
+  LeadRouter,
+  LiveChatRouter
 );
 
-startChatStateHeatDecayCronService();
+startLeadHeatDecayCronService();
+startLiveChatCleanupService();
 
 app.get("/", (req, res) => {
   res.json({ status: "OK" });

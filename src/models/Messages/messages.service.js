@@ -1,9 +1,10 @@
 import db from "../../database/index.js";
 import { tableNames } from "../../database/tableName.js";
-import { AiService } from "../Ai/ai.service.js";
+import { AiService } from "../../utils/coreAi.js";
 
 export const createUserMessageService = async (
   tenant_id,
+  contact_id,
   phone_number_id,
   phone,
   wa_id,
@@ -14,6 +15,7 @@ export const createUserMessageService = async (
 ) => {
   const Query = `INSERT INTO ${tableNames?.MESSAGES} (  
   tenant_id,
+  contact_id,
   phone_number_id,
   phone,
   wa_id,	
@@ -21,11 +23,12 @@ export const createUserMessageService = async (
   sender,	
   sender_id,	
   message )
-   VALUES (?,?,?,?,?,?,?,?) `;
+   VALUES (?,?,?,?,?,?,?,?,?) `;
 
   try {
     const values = [
       tenant_id,
+      contact_id,
       phone_number_id,
       phone,
       wa_id,
@@ -45,29 +48,36 @@ export const createUserMessageService = async (
 export const getChatListService = async (tenant_id) => {
   try {
     const Query = `
-      SELECT 
-        m1.phone,
-        m1.name,
-        m1.message,
-        m1.seen,
-        m1.created_at
-      FROM messages m1
-      INNER JOIN (
-        SELECT 
-          phone,
-          MAX(created_at) AS last_message_time
-        FROM messages
-        WHERE tenant_id = ?
-        GROUP BY phone
-      ) m2
-      ON m1.phone = m2.phone
-      AND m1.created_at = m2.last_message_time
-      WHERE m1.tenant_id = ?
-      ORDER BY m1.created_at DESC
-    `;
+  SELECT
+    m.contact_id,
+    c.phone,
+    c.name,
+    m.message,
+    m.seen,
+    m.created_at AS last_message_at
+  FROM messages m
+  INNER JOIN (
+    SELECT
+      contact_id,
+      MAX(created_at) AS last_message_time
+    FROM messages
+    WHERE tenant_id = ?
+    GROUP BY contact_id
+  ) lm
+    ON m.contact_id = lm.contact_id
+   AND m.created_at = lm.last_message_time
+  JOIN contacts c
+    ON c.id = m.contact_id
+  LEFT JOIN ${tableNames.LIVECHAT} lc
+    ON lc.contact_id = m.contact_id
+   AND lc.tenant_id = ?
+  WHERE m.tenant_id = ?
+    AND lc.contact_id IS NULL
+  ORDER BY m.created_at DESC
+`;
 
     const [result] = await db.sequelize.query(Query, {
-      replacements: [tenant_id, tenant_id],
+      replacements: [tenant_id, tenant_id, tenant_id],
     });
 
     return result;
@@ -79,7 +89,7 @@ export const getChatListService = async (tenant_id) => {
 export const getChatByPhoneService = async (phone, tenant_id) => {
   try {
     const Query = `
-    SELECT sender, message, seen , created_at
+    SELECT contact_id , sender, message, seen , created_at
     FROM  ${tableNames?.MESSAGES}
     WHERE phone = ? AND tenant_id = ?
     ORDER BY created_at ASC
