@@ -58,8 +58,8 @@ export const verifyTenantInvitationController = async (req, res) => {
       return res.status(403).send({
         valid: false,
         status: invitation.status,
-        message: "one step to complete access process",
         is_password: false,
+        message: "one step to complete access process",
       });
     }
 
@@ -70,8 +70,8 @@ export const verifyTenantInvitationController = async (req, res) => {
       return res.status(403).send({
         valid: false,
         status: invitation.status,
-        message: "Invitation is no longer usable",
         is_password: true,
+        message: "Invitation is no longer usable",
       });
     }
 
@@ -94,10 +94,12 @@ export const verifyTenantInvitationController = async (req, res) => {
     return res.status(200).send({
       message: "success",
       valid: true,
-      email: invitation.email,
+      status: invitation?.status,
+      is_password: false,
       tenant_id: invitation.tenant_id,
       tenant_user_id: invitation.tenant_user_id,
       company_name: getTenantDetails?.company_name,
+      email: invitation.email,
     });
   } catch (err) {
     return res.status(500).send({
@@ -154,6 +156,7 @@ export const rejectTenantInvitationController = async (req, res) => {
     await updateInvitationStatusService(invitation.invitation_id, "revoked");
 
     return res.status(200).send({
+      valid: false,
       message: "Invitation rejected successfully",
     });
   } catch (err) {
