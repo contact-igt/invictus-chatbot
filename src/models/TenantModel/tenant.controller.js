@@ -1,25 +1,56 @@
+import { tableNames } from "../../database/tableName.js";
+import { generateReadableIdFromLast } from "../../utils/generateReadableIdFromLast.js";
 import { missingFieldsChecker } from "../../utils/missingFields.js";
-import { registerManagementService } from "../Management/management.service.js";
+import crypto from "crypto";
 import {
   createTenantService,
   deleteTenantService,
+  deleteTenantStatusService,
   findTenantByIdService,
   getAllTenantService,
   updateTenantService,
-  updateTenantStatusService,
+  // updateTenantStatusService,
 } from "./tenant.service.js";
 
+import fs from "fs";
+import path from "path";
+import handlebars from "handlebars";
+import { fileURLToPath } from "url";
+import db from "../../database/index.js";
+import { generateInviteToken } from "../../middlewares/auth/authMiddlewares.js";
+import { sendEmail } from "../../utils/emailService.js";
+import {
+  createTenantInvitationService,
+  getLastTenantInvitationService,
+} from "../TenantInvitationModel/tenantinvitation.service.js";
+import {
+  createTenantUserService,
+  updateTenantUserService,
+} from "../TenantUserModel/tenantUser.service.js";
+
 export const createTenantController = async (req, res) => {
+  const loginUSer = req.user;
+
   try {
-    const { name, email, country_code, mobile, type, password } = req.body;
+    const {
+      company_name,
+      owner_name,
+      owner_email,
+      owner_country_code,
+      owner_mobile,
+      type,
+      subscription_start_date,
+      subscription_end_date,
+      profile,
+    } = req.body;
 
     const requiredFields = {
-      name,
-      email,
-      country_code,
-      mobile,
+      company_name,
+      owner_name,
+      owner_email,
+      owner_country_code,
+      owner_mobile,
       type,
-      password,
     };
 
     const missingFields = await missingFieldsChecker(requiredFields);
@@ -29,30 +60,96 @@ export const createTenantController = async (req, res) => {
       });
     }
 
-    const tenant = await createTenantService(
-      name,
-      email,
-      country_code,
-      mobile,
-      type,
+    const tenant_id = await generateReadableIdFromLast(
+      tableNames.TENANTS,
+      "tenant_id",
+      "TT",
     );
 
-    if (tenant) {
-      await registerManagementService(
-        null,
-        name,
-        email,
-        country_code,
-        mobile,
-        password,
-        "admin",
-        tenant,
-      );
-    }
+    await createTenantService(
+      tenant_id,
+      company_name,
+      owner_name,
+      owner_email,
+      owner_country_code,
+      owner_mobile,
+      type,
+      subscription_start_date || null,
+      subscription_end_date || null,
+      profile || null,
+    );
 
-    return res.status(200).json({
-      message: "Tenant onboarded successfully",
-      tenant_id: tenant.id,
+    const tenant_user_id = await generateReadableIdFromLast(
+      tableNames.TENANT_USERS,
+      "tenant_user_id",
+      "TTU",
+    );
+
+    await createTenantUserService(
+      tenant_user_id,
+      tenant_id,
+      owner_name,
+      owner_email,
+      owner_country_code,
+      owner_mobile,
+      profile || null,
+      "tenant_admin",
+    );
+
+    const tenant_invitation_id = await generateReadableIdFromLast(
+      tableNames.TENANT_INVITATIONS,
+      "invitation_id",
+      "INV",
+    );
+
+    const inviteToken = generateInviteToken({
+      tenant_id,
+      tenant_user_id,
+      email: owner_email,
+    });
+
+    const tokenHash = crypto
+      .createHash("sha256")
+      .update(inviteToken)
+      .digest("hex");
+
+    await createTenantInvitationService(
+      tenant_invitation_id,
+      tenant_id,
+      tenant_user_id,
+      owner_email,
+      tokenHash,
+      loginUSer?.unique_id,
+    );
+
+    const inviteUrl = `${process.env.FRONTEND_URL}/account/activate?token=${inviteToken}`;
+
+    const __filename = fileURLToPath(import.meta.url);
+    const __dirname = path.dirname(__filename);
+
+    const templatePath = path.join(
+      __dirname,
+      "../../../public/html/tenantInvite/index.html",
+    );
+
+    const source = fs.readFileSync(templatePath, "utf8");
+    const template = handlebars.compile(source);
+
+    const emailHtml = template({
+      owner_name,
+      company_name,
+      invite_url: inviteUrl,
+      expiry_hours: 48,
+    });
+
+    await sendEmail({
+      to: owner_email,
+      subject: `You're invited to manage ${company_name} on WhatsNexus`,
+      html: emailHtml,
+    });
+
+    return res.status(201).json({
+      message: "Tenant created successfully. Invitation email sent to owner.",
     });
   } catch (err) {
     if (err.original?.code === "ER_DUP_ENTRY") {
@@ -71,6 +168,7 @@ export const getAllTenantController = async (req, res) => {
   try {
     const response = await getAllTenantService();
     return res.status(200).send({
+      message: "success",
       data: response,
     });
   } catch (err) {
@@ -84,7 +182,7 @@ export const getTenantByIdController = async (req, res) => {
 
     const response = await findTenantByIdService(id);
 
-    if (!id) {
+    if (!response) {
       return res.status(400).json({ message: "Tenant details not found" });
     }
 
@@ -99,13 +197,27 @@ export const getTenantByIdController = async (req, res) => {
 export const updateTenantController = async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, email, country_code, mobile, type } = req.body;
+    const {
+      company_name,
+      owner_name,
+      owner_email,
+      owner_country_code,
+      owner_mobile,
+      type,
+    } = req.body;
+
+    const response = await findTenantByIdService(id);
+
+    if (!response) {
+      return res.status(400).json({ message: "Tenant details not found" });
+    }
 
     const requiredFields = {
-      name,
-      email,
-      country_code,
-      mobile,
+      company_name,
+      owner_name,
+      owner_email,
+      owner_country_code,
+      owner_mobile,
       type,
     };
 
@@ -117,7 +229,21 @@ export const updateTenantController = async (req, res) => {
       });
     }
 
-    await updateTenantService(name, email, country_code, mobile, type, id);
+    await updateTenantService(
+      company_name,
+      owner_name,
+      owner_email,
+      owner_country_code,
+      owner_mobile,
+      type,
+      id,
+    );
+
+    await updateTenantUserService(
+      owner_name,
+      owner_email,
+      response?.owner_email,
+    );
 
     return res.status(200).send({
       message: "Tentnat updated successfully",
@@ -133,27 +259,46 @@ export const updateTenantController = async (req, res) => {
   }
 };
 
-export const updateTenantStatusController = async (req, res) => {
+// export const updateTenantStatusController = async (req, res) => {
+//   try {
+//     const { id } = req.params;
+//     const { status } = req.query;
+
+//     if (!status) {
+//       return res.status(400).send({
+//         message: "Status is required",
+//       });
+//     }
+
+//     if (!["active", "inactive", "rejected", "suspended"].includes(status)) {
+//       return res.status(400).send({
+//         message: "Invalid status",
+//       });
+//     }
+
+//     await updateTenantStatusService(status, id);
+
+//     return res.status(200).send({
+//       message: "Tentnat status updated successfully",
+//     });
+//   } catch (err) {
+//     res.status(500).send({ error: err.message });
+//   }
+// };
+
+export const deleteTenantStatusController = async (req, res) => {
   try {
     const { id } = req.params;
-    const { status } = req.query;
 
-    if (!status) {
-      return res.status(400).send({
-        message: "Status is required",
-      });
+    const response = await findTenantByIdService(id);
+
+    if (!response) {
+      return res.status(400).json({ message: "Tenant details not found" });
     }
 
-    if (!["active", "inactive"].includes(status)) {
-      return res.status(400).send({
-        message: "Invalid status",
-      });
-    }
-
-    await updateTenantStatusService(status, id);
-
+    await deleteTenantStatusService(id);
     return res.status(200).send({
-      message: "Tentnat status updated successfully",
+      message: "Tentnat removed successfully",
     });
   } catch (err) {
     res.status(500).send({ error: err.message });
@@ -169,5 +314,31 @@ export const deleteTenantController = async (req, res) => {
     });
   } catch (err) {
     res.status(500).send({ error: err.message });
+  }
+};
+
+export const resendTenantInvitationController = async (req, res) => {
+  const { tenant_user_id } = req.params;
+
+  if (tenant_user_id) {
+    return res.status(400).send({
+      message: "Tenant user id invalid",
+    });
+  }
+
+  try {
+    const loginUSer = req.user;
+
+    const getlastlink = await getLastTenantInvitationService(tenant_user_id);
+
+    if (!getlastlink) {
+      return res.status(403).send({
+        message: "There no any link can  be sent previously",
+      });
+    }
+  } catch (err) {
+    return res.status(500).send({
+      message: err?.message,
+    });
   }
 };

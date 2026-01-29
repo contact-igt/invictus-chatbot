@@ -13,6 +13,12 @@ import { TenantsTable } from "./tables/TenantsTable/index.js";
 import { LeadsTable } from "./tables/LeadsTable/index.js";
 import { ContactsTable } from "./tables/ContactsTable/index.js";
 import { LiveChatTable } from "./tables/LiveChatTable/index.js";
+import { TenantUsersTable } from "./tables/TenantUsersTable/index.js";
+import { TenantInvitationsTable } from "./tables/TenantInvitationsTable/index.js";
+import { WhatsappTemplateTable } from "./tables/WhatsappTemplateTable/index.js";
+import { WhatsappTemplateComponentTable } from "./tables/WhatsappTemplateComponentTable/index.js";
+import { WhatsappTemplateVariableTable } from "./tables/WhatsappTemplateVariablesTable/index.js";
+import { WhatsappTemplateSyncLogTable } from "./tables/WhatsappTemplateSyncLogsTable/index.js";
 
 const dbconfig =
   ServerEnvironmentConfig?.server?.line === "production"
@@ -48,9 +54,25 @@ const db = {};
 db.Sequelize = Sequelize;
 db.sequelize = sequelize;
 
-db.Tenants = TenantsTable(sequelize, Sequelize);
-db.Whatsappaccount = whatsappAccountTable(sequelize, Sequelize);
 db.Management = ManagementTable(sequelize, Sequelize);
+db.Tenants = TenantsTable(sequelize, Sequelize);
+db.TenantUsers = TenantUsersTable(sequelize, Sequelize);
+db.TenantInvitations = TenantInvitationsTable(sequelize, Sequelize);
+db.WhatsappTemplates = WhatsappTemplateTable(sequelize, Sequelize);
+db.WhatsappTemplateComponents = WhatsappTemplateComponentTable(
+  sequelize,
+  Sequelize,
+);
+db.WhatsappTemplateVariables = WhatsappTemplateVariableTable(
+  sequelize,
+  Sequelize,
+);
+db.WhatsappTemplateSyncLogs = WhatsappTemplateSyncLogTable(
+  sequelize,
+  Sequelize,
+);
+
+db.Whatsappaccount = whatsappAccountTable(sequelize, Sequelize);
 db.KnowledgeSources = KnowledgeSourcesTable(sequelize, Sequelize);
 db.KnowledgeChunks = KnowledgeChunksTable(sequelize, Sequelize);
 db.AiPrompt = AiPromptTable(sequelize, Sequelize);

@@ -42,7 +42,7 @@ export const whatsappAccountTable = (sequelize, Sequelize) => {
         "active", // ready to send messages
         "inactive", // manually disabled
         "token_expired",
-        "failed"
+        "failed",
       ),
       defaultValue: "pending",
     },

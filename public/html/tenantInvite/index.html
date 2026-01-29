@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>You're Invited to WhatsNexus</title>
+    <style>
+      body {
+        background: radial-gradient(circle at top left, #0b1f3a, #020617);
+        font-family: Arial, sans-serif;
+        margin: 0;
+        padding: 40px 0;
+        color: #ffffff;
+      }
+
+      .card {
+        max-width: 520px;
+        margin: auto;
+        background: #0b1220;
+        border-radius: 14px;
+        padding: 32px;
+        box-shadow: 0 0 40px rgba(0, 0, 0, 0.6);
+        text-align: center;
+      }
+
+      .logo {
+        font-size: 26px;
+        font-weight: 700;
+        color: #10b981;
+        margin-bottom: 8px;
+      }
+
+      .subtitle {
+        font-size: 13px;
+        color: #94a3b8;
+        margin-bottom: 24px;
+      }
+
+      h2 {
+        color: #34d399;
+        margin-bottom: 12px;
+      }
+
+      p {
+        color: #cbd5e1;
+        font-size: 15px;
+        line-height: 1.6;
+      }
+
+      .button {
+        display: inline-block;
+        margin-top: 28px;
+        padding: 14px 26px;
+        background: #10b981;
+        color: #fff !important;
+        text-decoration: none;
+        border-radius: 10px;
+        font-size: 16px;
+        font-weight: 600;
+      }
+
+      .button:hover {
+        background: #059669;
+      }
+
+      .footer {
+        margin-top: 28px;
+        font-size: 12px;
+        color: #64748b;
+      }
+
+      .security {
+        margin-top: 20px;
+        font-size: 12px;
+        color: #94a3b8;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <div class="logo">WhatsNexus</div>
+      <div class="subtitle">AI Receptionist Hub</div>
+
+      <h2>You're Invited</h2>
+
+      <p>
+        Hello <strong>{{owner_name}}</strong>,<br /><br />
+        You’ve been invited to manage <strong>{{company_name}}</strong> on
+        WhatsNexus. This platform helps you automate WhatsApp conversations,
+        qualify leads, and manage customer interactions efficiently.
+      </p>
+
+      <a href="{{invite_url}}" class="button"> Accept Invitation </a>
+
+      <p class="security">
+        This invitation link is valid for {{expiry_hours}} hours. Please do not
+        share this link with anyone.
+      </p>
+
+      <div class="footer">
+        © 2026 WhatsNexus · Powered by Invictus Global Tech
+      </div>
+    </div>
+  </body>
+</html>

@@ -1,7 +1,14 @@
 export const tableNames = {
-  TENANTS: "tenants",
-  WHATSAPP_ACCOUNT: "whatsapp_accounts",
   MANAGEMENT: "managements",
+  TENANTS: "tenants",
+  TENANT_USERS: "tenant_users",
+  TENANT_INVITATIONS: "tenant_invitations",
+  WHATSAPP_TEMPLATE: "whatsapp_templates",
+  WHATSAPP_TEMPLATE_COMPONENTS: "whatsapp_templates_components",
+  WHATSAPP_TEMPLATE_VARIABLES: "whatsapp_template_variables",
+  WHATSAPP_TEMPLATE_SYNC_LOGS : "whatsapp_template_sync_logs",
+
+  WHATSAPP_ACCOUNT: "whatsapp_accounts",
   KNOWLEDGESOURCE: "knowledge_sources",
   KNOWLEDGECHUNKS: "knowledge_chunks",
   AIPROMPT: "ai_prompts",
@@ -10,7 +17,5 @@ export const tableNames = {
   PROCESSEDMESSAGE: "processed_messages",
   CHATLOCKS: "chat_locks",
   LEADS: "leads",
-  LIVECHAT : "live_chats"
+  LIVECHAT: "live_chats",
 };
-
-

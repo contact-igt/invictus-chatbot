@@ -2,42 +2,86 @@ import express from "express";
 import {
   createTenantController,
   deleteTenantController,
+  deleteTenantStatusController,
   getAllTenantController,
   getTenantByIdController,
   updateTenantController,
-  updateTenantStatusController,
+  // updateTenantStatusController,
 } from "./tenant.controller.js";
 import {
   authenticate,
-  requireSuperAdmin,
+  authorize,
 } from "../../middlewares/auth/authMiddlewares.js";
 
 const Router = express.Router();
 
-Router.get("/tenants", authenticate, requireSuperAdmin, getAllTenantController);
+Router.post(
+  "/tenant",
+  authenticate,
+  authorize({
+    user_type: "management",
+    roles: ["platform_admin", "super_admin"],
+  }),
+  createTenantController,
+);
+
+Router.get(
+  "/tenants",
+  authenticate,
+  authorize({
+    user_type: "management",
+    roles: ["platform_admin", "super_admin"],
+  }),
+  getAllTenantController,
+);
+
 Router.get(
   "/tenant/:id",
   authenticate,
-  requireSuperAdmin,
+  authorize({
+    user_type: "management",
+    roles: ["platform_admin", "super_admin"],
+  }),
   getTenantByIdController,
 );
-Router.post("/tenant",  createTenantController);
+
 Router.put(
   "/tenant/:id",
   authenticate,
-  requireSuperAdmin,
+  authorize({
+    user_type: "management",
+    roles: ["platform_admin", "super_admin"],
+  }),
   updateTenantController,
 );
+
+// Router.put(
+//   "/tenant-status/:id",
+//   authenticate,
+//   authorize({
+//     user_type: "management",
+//     roles: ["platform_admin", "super_admin"],
+//   }),
+//   updateTenantStatusController,
+// );
+
 Router.put(
-  "/tenant-status/:id",
+  "/tenant-remove/:id",
   authenticate,
-  requireSuperAdmin,
-  updateTenantStatusController,
+  authorize({
+    user_type: "management",
+    roles: ["platform_admin", "super_admin"],
+  }),
+  deleteTenantStatusController,
 );
+
 Router.delete(
   "/tenant/:id",
   authenticate,
-  requireSuperAdmin,
+  authorize({
+    user_type: "management",
+    roles: ["super_admin"],
+  }),
   deleteTenantController,
 );
 
