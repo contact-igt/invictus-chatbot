@@ -10,7 +10,10 @@ import {
   findTenantUserByIdService,
   updateTenantUserPasswordService,
 } from "../TenantUserModel/tenantUser.service.js";
-import { activateTenantService } from "../TenantModel/tenant.service.js";
+import {
+  activateTenantService,
+  findTenantByIdService,
+} from "../TenantModel/tenant.service.js";
 import {
   generateAccessToken,
   generateRefreshToken,
@@ -27,6 +30,12 @@ export const verifyTenantInvitationController = async (req, res) => {
 
     const invitation = await getInvitationByTokenHashService(tokenHash);
 
+    const getTenantDetails = await findTenantByIdService(invitation?.tenant_id);
+
+    const getTenantUserDetails = await findTenantUserByIdService(
+      invitation?.tenant_user_id,
+    );
+
     if (!invitation) {
       return res.status(404).send({
         valid: false,
@@ -34,11 +43,35 @@ export const verifyTenantInvitationController = async (req, res) => {
       });
     }
 
-    if (invitation.status !== "pending") {
+    if (invitation.status !== "pending" && invitation.status !== "accepted") {
       return res.status(403).send({
         valid: false,
         status: invitation.status,
         message: "Invitation is no longer usable",
+      });
+    }
+
+    if (
+      invitation.status === "accepted" &&
+      !getTenantUserDetails?.password_hash
+    ) {
+      return res.status(403).send({
+        valid: false,
+        status: invitation.status,
+        message: "one step to complete access process",
+        is_password: false,
+      });
+    }
+
+    if (
+      invitation.status === "accepted" &&
+      getTenantUserDetails?.password_hash
+    ) {
+      return res.status(403).send({
+        valid: false,
+        status: invitation.status,
+        message: "Invitation is no longer usable",
+        is_password: true,
       });
     }
 
@@ -52,12 +85,19 @@ export const verifyTenantInvitationController = async (req, res) => {
       });
     }
 
+    if (!getTenantDetails) {
+      return res.status(403).send({
+        message: "Tenant details invalid",
+      });
+    }
+
     return res.status(200).send({
       message: "success",
       valid: true,
       email: invitation.email,
       tenant_id: invitation.tenant_id,
       tenant_user_id: invitation.tenant_user_id,
+      company_name: getTenantDetails?.company_name,
     });
   } catch (err) {
     return res.status(500).send({
@@ -89,7 +129,8 @@ export const acceptTenantInvitationController = async (req, res) => {
     await activateTenantService(invitation.tenant_id);
 
     return res.status(200).send({
-      message: "Invitation accepted. Please set your password.",
+      valid: true,
+      message: "Invitation accepted. Please set your password",
     });
   } catch (err) {
     return res.status(500).send({
