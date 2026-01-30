@@ -35,16 +35,27 @@ export const createWhatsappTemplateController = async (req, res) => {
       "WT",
     );
 
-    await createWhatsappTemplateService({
+    // await createWhatsappTemplateService({
+    //   template_id,
+    //   tenant_id: loginUser.tenant_id,
+    //   template_name,
+    //   category,
+    //   language,
+    //   components,
+    //   variables,
+    //   created_by: loginUser.tenant_user_id,
+    // });
+
+    await createWhatsappTemplateService(
       template_id,
-      tenant_id: loginUser.tenant_id,
+      loginUser?.template_id,
       template_name,
       category,
       language,
       components,
       variables,
-      created_by: loginUser.tenant_user_id,
-    });
+      loginUser?.tenant_user_id,
+    );
 
     return res.status(201).json({
       message: "WhatsApp template created successfully",

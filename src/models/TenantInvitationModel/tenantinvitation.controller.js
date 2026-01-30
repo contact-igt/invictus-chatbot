@@ -51,12 +51,22 @@ export const verifyTenantInvitationController = async (req, res) => {
       });
     }
 
+    if (new Date(invitation.expires_at) < new Date()) {
+      await updateInvitationStatusService(invitation?.invitation_id, "expired");
+
+      return res.status(403).send({
+        valid: false,
+        status: "expired",
+        message: "Invitation link has expired",
+      });
+    }
+
     if (
       invitation.status === "accepted" &&
       !getTenantUserDetails?.password_hash
     ) {
-      return res.status(403).send({
-        valid: false,
+      return res.status(200).send({
+        valid: true,
         status: invitation.status,
         is_password: false,
         message: "one step to complete access process",
@@ -75,16 +85,6 @@ export const verifyTenantInvitationController = async (req, res) => {
       });
     }
 
-    if (new Date(invitation.expires_at) < new Date()) {
-      await updateInvitationStatusService(invitation?.invitation_id, "expired");
-
-      return res.status(403).send({
-        valid: false,
-        status: "expired",
-        message: "Invitation link has expired",
-      });
-    }
-
     if (!getTenantDetails) {
       return res.status(403).send({
         message: "Tenant details invalid",
@@ -96,10 +96,12 @@ export const verifyTenantInvitationController = async (req, res) => {
       valid: true,
       status: invitation?.status,
       is_password: false,
-      tenant_id: invitation.tenant_id,
-      tenant_user_id: invitation.tenant_user_id,
       company_name: getTenantDetails?.company_name,
+      owner_name : getTenantDetails?.owner_name,
       email: invitation.email,
+      // tenant_id: invitation.tenant_id,
+      // tenant_user_id: invitation.tenant_user_id,
+    
     });
   } catch (err) {
     return res.status(500).send({
