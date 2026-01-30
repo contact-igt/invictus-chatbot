@@ -48,6 +48,9 @@ export const verifyTenantInvitationController = async (req, res) => {
         valid: false,
         status: invitation.status,
         message: "Invitation is no longer usable",
+        company_name: getTenantDetails?.company_name,
+        owner_name: getTenantDetails?.owner_name,
+        email: invitation.email,
       });
     }
 
@@ -58,6 +61,9 @@ export const verifyTenantInvitationController = async (req, res) => {
         valid: false,
         status: "expired",
         message: "Invitation link has expired",
+        company_name: getTenantDetails?.company_name,
+        owner_name: getTenantDetails?.owner_name,
+        email: invitation.email,
       });
     }
 
@@ -70,6 +76,9 @@ export const verifyTenantInvitationController = async (req, res) => {
         status: invitation.status,
         is_password: false,
         message: "one step to complete access process",
+        company_name: getTenantDetails?.company_name,
+        owner_name: getTenantDetails?.owner_name,
+        email: invitation.email,
       });
     }
 
@@ -82,6 +91,9 @@ export const verifyTenantInvitationController = async (req, res) => {
         status: invitation.status,
         is_password: true,
         message: "Invitation is no longer usable",
+        company_name: getTenantDetails?.company_name,
+        owner_name: getTenantDetails?.owner_name,
+        email: invitation.email,
       });
     }
 
@@ -97,11 +109,10 @@ export const verifyTenantInvitationController = async (req, res) => {
       status: invitation?.status,
       is_password: false,
       company_name: getTenantDetails?.company_name,
-      owner_name : getTenantDetails?.owner_name,
+      owner_name: getTenantDetails?.owner_name,
       email: invitation.email,
       // tenant_id: invitation.tenant_id,
       // tenant_user_id: invitation.tenant_user_id,
-    
     });
   } catch (err) {
     return res.status(500).send({
