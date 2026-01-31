@@ -14,7 +14,6 @@ export const TenantInvitationsTable = (sequelize, Sequelize) => {
       invitation_id: {
         type: Sequelize.STRING,
         allowNull: false,
-        unique: true,
       },
 
       tenant_id: {
@@ -36,11 +35,10 @@ export const TenantInvitationsTable = (sequelize, Sequelize) => {
       token_hash: {
         type: Sequelize.TEXT,
         allowNull: false,
-        unique: true,
       },
 
       status: {
-        type: Sequelize.ENUM("pending", "accepted", "expired", "revoked"),
+        type: Sequelize.ENUM("pending", "accepted", "expired", "revoked", "completed"),
         allowNull: false,
         defaultValue: "pending",
       },
@@ -62,19 +60,46 @@ export const TenantInvitationsTable = (sequelize, Sequelize) => {
 
       createdAt: {
         type: Sequelize.DATE,
+        allowNull: false,
         defaultValue: sequelize.literal("CURRENT_TIMESTAMP"),
         field: "created_at",
       },
 
       updatedAt: {
         type: Sequelize.DATE,
-        defaultValue: sequelize.literal("CURRENT_TIMESTAMP"),
+        allowNull: false,
+        defaultValue: sequelize.literal(
+          "CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP",
+        ),
         field: "updated_at",
       },
-    }
+    },
+    {
+      tableName: tableNames.TENANT_INVITATIONS,
+      timestamps: true,
+      underscored: true,
+      indexes: [
+        {
+          name: "unique_invite_id",
+          unique: true,
+          fields: ["invitation_id"],
+        },
+        {
+          name: "unique_invite_token",
+          unique: true,
+          fields: ["token_hash"],
+        },
+        {
+          name: "idx_invite_tenant_email",
+          fields: ["tenant_id", "email", "status"],
+        },
+        {
+          name: "idx_invite_expiry",
+          fields: ["expires_at"],
+        },
+      ],
+    },
   );
 };
-
-
 
 

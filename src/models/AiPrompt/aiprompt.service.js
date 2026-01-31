@@ -76,7 +76,7 @@ export const checkIsAnyActivePromptService = async (tenant_id) => {
   try {
     const [result] = await db.sequelize.query(
       `SELECT COUNT(*) as active_count FROM ${tableNames?.AIPROMPT} WHERE is_active = ? AND tenant_id IN (?) `,
-      { replacements: ["true", tenant_id] },
+      { replacements: [true, tenant_id] },
     );
 
     return result[0];
@@ -123,7 +123,7 @@ export const getActivePromptService = async (tenant_id) => {
 
   try {
     const [result] = await db.sequelize.query(Query, {
-      replacements: ["true", tenant_id],
+      replacements: [true, tenant_id],
     });
     return result[0]?.prompt;
   } catch (err) {

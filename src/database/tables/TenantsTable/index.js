@@ -14,7 +14,6 @@ export const TenantsTable = (sequelize, Sequelize) => {
       tenant_id: {
         type: Sequelize.STRING,
         allowNull: false,
-        unique: true, // TT001
       },
 
       company_name: {
@@ -92,9 +91,41 @@ export const TenantsTable = (sequelize, Sequelize) => {
       updatedAt: {
         type: Sequelize.DATE,
         allowNull: false,
-        defaultValue: sequelize.literal("CURRENT_TIMESTAMP"),
+        defaultValue: sequelize.literal(
+          "CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP",
+        ),
         field: "updated_at",
       },
-    }
+    },
+    {
+      tableName: tableNames.TENANTS,
+      timestamps: true,
+      underscored: true,
+      indexes: [
+        {
+          name: "unique_tenant_id",
+          unique: true,
+          fields: ["tenant_id"],
+        },
+        {
+          name: "idx_tenant_status",
+          fields: ["status"],
+        },
+        {
+          name: "idx_tenant_deleted",
+          fields: ["is_deleted"],
+        },
+        {
+          name: "unique_owner_email",
+          unique: true,
+          fields: ["owner_email"],
+        },
+        {
+          name: "unique_owner_mobile",
+          unique: true,
+          fields: ["owner_mobile"],
+        },
+      ],
+    },
   );
 };

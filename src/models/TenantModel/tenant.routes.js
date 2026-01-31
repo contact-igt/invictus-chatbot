@@ -6,6 +6,7 @@ import {
   getAllTenantController,
   getTenantByIdController,
   updateTenantController,
+  resendTenantInvitationController,
   // updateTenantStatusController,
 } from "./tenant.controller.js";
 import {
@@ -55,16 +56,6 @@ Router.put(
   updateTenantController,
 );
 
-// Router.put(
-//   "/tenant-status/:id",
-//   authenticate,
-//   authorize({
-//     user_type: "management",
-//     roles: ["platform_admin", "super_admin"],
-//   }),
-//   updateTenantStatusController,
-// );
-
 Router.put(
   "/tenant-remove/:id",
   authenticate,
@@ -83,6 +74,16 @@ Router.delete(
     roles: ["super_admin"],
   }),
   deleteTenantController,
+);
+
+Router.post(
+  "/tenant/resend-invite/:tenant_user_id",
+  authenticate,
+  authorize({
+    user_type: "management",
+    roles: ["platform_admin", "super_admin"],
+  }),
+  resendTenantInvitationController,
 );
 
 export default Router;

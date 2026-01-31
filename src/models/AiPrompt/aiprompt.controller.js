@@ -116,7 +116,7 @@ export const updatePromptActive = async (req, res) => {
       return res.status(400).json({ message: "prompt id required" });
     }
 
-    if (is_active === "true") {
+    if (String(is_active) === "true") {
       const activelist = await checkIsAnyActivePromptService(tenant_id);
       if (activelist?.active_count > 0) {
         return res.status(400).send({

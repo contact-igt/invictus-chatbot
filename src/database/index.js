@@ -1,7 +1,6 @@
 import Sequelize from "sequelize";
 import DatabaseEnvironmentConfig from "../config/database.config.js";
 import ServerEnvironmentConfig from "../config/server.config.js";
-import { whatsappAccountTable } from "./tables/WhatsappAccountTable/index.js";
 import { MessagesTable } from "./tables/MessagesTable/index.js";
 import { KnowledgeSourcesTable } from "./tables/KnowledgeSourceTable/index.js";
 import { KnowledgeChunksTable } from "./tables/KnowledgeChunksTable/index.js";
@@ -19,6 +18,9 @@ import { WhatsappTemplateTable } from "./tables/WhatsappTemplateTable/index.js";
 import { WhatsappTemplateComponentTable } from "./tables/WhatsappTemplateComponentTable/index.js";
 import { WhatsappTemplateVariableTable } from "./tables/WhatsappTemplateVariablesTable/index.js";
 import { WhatsappTemplateSyncLogTable } from "./tables/WhatsappTemplateSyncLogsTable/index.js";
+import { WhatsappAccountTable } from "./tables/WhatsappAccountTable/index.js";
+import { SequencesTable } from "./tables/SequencesTable/index.js";
+
 
 const dbconfig =
   ServerEnvironmentConfig?.server?.line === "production"
@@ -72,7 +74,7 @@ db.WhatsappTemplateSyncLogs = WhatsappTemplateSyncLogTable(
   Sequelize,
 );
 
-db.Whatsappaccount = whatsappAccountTable(sequelize, Sequelize);
+db.Whatsappaccount = WhatsappAccountTable(sequelize, Sequelize);
 db.KnowledgeSources = KnowledgeSourcesTable(sequelize, Sequelize);
 db.KnowledgeChunks = KnowledgeChunksTable(sequelize, Sequelize);
 db.AiPrompt = AiPromptTable(sequelize, Sequelize);
@@ -82,5 +84,252 @@ db.ProcessedMessage = ProcessedMessagesTable(sequelize, Sequelize);
 db.ChatLocks = ChatLocksTable(sequelize, Sequelize);
 db.Leads = LeadsTable(sequelize, Sequelize);
 db.LiveChat = LiveChatTable(sequelize, Sequelize);
+db.Sequences = SequencesTable(sequelize, Sequelize);
+
+// ========================================
+// ASSOCIATIONS
+// ========================================
+// NOTE: Using constraints: false to prevent FK creation
+// This allows associations for eager loading without requiring matching column types in DB
+
+// Tenant → TenantUsers (One-to-Many)
+db.Tenants.hasMany(db.TenantUsers, {
+  foreignKey: "tenant_id",
+  sourceKey: "tenant_id",
+  as: "users",
+  constraints: false
+});
+db.TenantUsers.belongsTo(db.Tenants, {
+  foreignKey: "tenant_id",
+  targetKey: "tenant_id",
+  as: "tenant",
+  constraints: false
+});
+
+// Tenant → TenantInvitations (One-to-Many)
+db.Tenants.hasMany(db.TenantInvitations, {
+  foreignKey: "tenant_id",
+  sourceKey: "tenant_id",
+  as: "invitations",
+  constraints: false
+});
+db.TenantInvitations.belongsTo(db.Tenants, {
+  foreignKey: "tenant_id",
+  targetKey: "tenant_id",
+  as: "tenant",
+  constraints: false
+});
+
+// Tenant → WhatsappAccount (One-to-One)
+db.Tenants.hasOne(db.Whatsappaccount, {
+  foreignKey: "tenant_id",
+  sourceKey: "tenant_id",
+  as: "whatsappAccount",
+  constraints: false
+});
+db.Whatsappaccount.belongsTo(db.Tenants, {
+  foreignKey: "tenant_id",
+  targetKey: "tenant_id",
+  as: "tenant",
+  constraints: false
+});
+
+// Tenant → Contacts (One-to-Many)
+db.Tenants.hasMany(db.Contacts, {
+  foreignKey: "tenant_id",
+  sourceKey: "tenant_id",
+  as: "contacts",
+  constraints: false
+});
+db.Contacts.belongsTo(db.Tenants, {
+  foreignKey: "tenant_id",
+  targetKey: "tenant_id",
+  as: "tenant",
+  constraints: false
+});
+
+// Contacts → Leads (One-to-One)
+db.Contacts.hasOne(db.Leads, {
+  foreignKey: "contact_id",
+  sourceKey: "id",
+  as: "lead",
+  constraints: false
+});
+db.Leads.belongsTo(db.Contacts, {
+  foreignKey: "contact_id",
+  targetKey: "id",
+  as: "contact",
+  constraints: false
+});
+
+// Contacts → Messages (One-to-Many)
+db.Contacts.hasMany(db.Messages, {
+  foreignKey: "contact_id",
+  sourceKey: "id",
+  as: "messages",
+  constraints: false
+});
+db.Messages.belongsTo(db.Contacts, {
+  foreignKey: "contact_id",
+  targetKey: "id",
+  as: "contact",
+  constraints: false
+});
+
+// Contacts → LiveChat (One-to-One)
+db.Contacts.hasOne(db.LiveChat, {
+  foreignKey: "contact_id",
+  sourceKey: "id",
+  as: "liveChat",
+  constraints: false
+});
+db.LiveChat.belongsTo(db.Contacts, {
+  foreignKey: "contact_id",
+  targetKey: "id",
+  as: "contact",
+  constraints: false
+});
+
+// KnowledgeSources → KnowledgeChunks (One-to-Many)
+db.KnowledgeSources.hasMany(db.KnowledgeChunks, {
+  foreignKey: "source_id",
+  sourceKey: "id",
+  as: "chunks",
+  constraints: false
+});
+db.KnowledgeChunks.belongsTo(db.KnowledgeSources, {
+  foreignKey: "source_id",
+  targetKey: "id",
+  as: "source",
+  constraints: false
+});
+
+// WhatsappTemplate → WhatsappTemplateComponents (One-to-Many)
+db.WhatsappTemplates.hasMany(db.WhatsappTemplateComponents, {
+  foreignKey: "template_id",
+  sourceKey: "template_id",
+  as: "components",
+  constraints: false
+});
+db.WhatsappTemplateComponents.belongsTo(db.WhatsappTemplates, {
+  foreignKey: "template_id",
+  targetKey: "template_id",
+  as: "template",
+  constraints: false
+});
+
+// WhatsappTemplate → WhatsappTemplateVariables (One-to-Many)
+db.WhatsappTemplates.hasMany(db.WhatsappTemplateVariables, {
+  foreignKey: "template_id",
+  sourceKey: "template_id",
+  as: "variables",
+  constraints: false
+});
+db.WhatsappTemplateVariables.belongsTo(db.WhatsappTemplates, {
+  foreignKey: "template_id",
+  targetKey: "template_id",
+  as: "template",
+  constraints: false
+});
+
+// WhatsappTemplate → WhatsappTemplateSyncLogs (One-to-Many)
+db.WhatsappTemplates.hasMany(db.WhatsappTemplateSyncLogs, {
+  foreignKey: "template_id",
+  sourceKey: "template_id",
+  as: "syncLogs",
+  constraints: false
+});
+db.WhatsappTemplateSyncLogs.belongsTo(db.WhatsappTemplates, {
+  foreignKey: "template_id",
+  targetKey: "template_id",
+  as: "template",
+  constraints: false
+});
+
+// Tenant → WhatsappTemplates (One-to-Many)
+db.Tenants.hasMany(db.WhatsappTemplates, {
+  foreignKey: "tenant_id",
+  sourceKey: "tenant_id",
+  as: "templates",
+  constraints: false
+});
+db.WhatsappTemplates.belongsTo(db.Tenants, {
+  foreignKey: "tenant_id",
+  targetKey: "tenant_id",
+  as: "tenant",
+  constraints: false
+});
+
+// Tenant → KnowledgeSources (One-to-Many)
+db.Tenants.hasMany(db.KnowledgeSources, {
+  foreignKey: "tenant_id",
+  sourceKey: "tenant_id",
+  as: "knowledgeSources",
+  constraints: false
+});
+db.KnowledgeSources.belongsTo(db.Tenants, {
+  foreignKey: "tenant_id",
+  targetKey: "tenant_id",
+  as: "tenant",
+  constraints: false
+});
+
+// Tenant → AiPrompt (One-to-Many)
+db.Tenants.hasMany(db.AiPrompt, {
+  foreignKey: "tenant_id",
+  sourceKey: "tenant_id",
+  as: "aiPrompts",
+  constraints: false
+});
+db.AiPrompt.belongsTo(db.Tenants, {
+  foreignKey: "tenant_id",
+  targetKey: "tenant_id",
+  as: "tenant",
+  constraints: false
+});
+
+// Tenant → Leads (One-to-Many)
+db.Tenants.hasMany(db.Leads, {
+  foreignKey: "tenant_id",
+  sourceKey: "tenant_id",
+  as: "leads",
+  constraints: false
+});
+db.Leads.belongsTo(db.Tenants, {
+  foreignKey: "tenant_id",
+  targetKey: "tenant_id",
+  as: "tenant",
+  constraints: false
+});
+
+// Tenant → Messages (One-to-Many)
+db.Tenants.hasMany(db.Messages, {
+  foreignKey: "tenant_id",
+  sourceKey: "tenant_id",
+  as: "messages",
+  constraints: false
+});
+db.Messages.belongsTo(db.Tenants, {
+  foreignKey: "tenant_id",
+  targetKey: "tenant_id",
+  as: "tenant",
+  constraints: false
+});
+
+// Tenant → LiveChat (One-to-Many)
+db.Tenants.hasMany(db.LiveChat, {
+  foreignKey: "tenant_id",
+  sourceKey: "tenant_id",
+  as: "liveChats",
+  constraints: false
+});
+db.LiveChat.belongsTo(db.Tenants, {
+  foreignKey: "tenant_id",
+  targetKey: "tenant_id",
+  as: "tenant",
+  constraints: false
+});
 
 export default db;
+
+

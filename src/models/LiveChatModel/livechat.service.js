@@ -2,10 +2,10 @@ import { tableNames } from "../../database/tableName.js";
 import db from "../../database/index.js";
 import cron from "node-cron";
 
-export const createLiveChatService = async (tenant_id, contact_id) => {
-  const Query = ` INSERT INTO ${tableNames?.LIVECHAT} (tenant_id, contact_id, last_message_at) VALUES (?,?,NOW())`;
+export const createLiveChatService = async (tenant_id, contact_id, status = "active") => {
+  const Query = ` INSERT INTO ${tableNames?.LIVECHAT} (tenant_id, contact_id, status, last_message_at) VALUES (?,?,?,NOW())`;
 
-  const Values = [tenant_id, contact_id];
+  const Values = [tenant_id, contact_id, status];
 
   try {
     const [result] = await db.sequelize.query(Query, { replacements: Values });

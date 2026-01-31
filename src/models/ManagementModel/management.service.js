@@ -103,6 +103,7 @@ export const updateManagementService = async (
   mobile,
   profile,
   role,
+  status
 ) => {
   const updateValues = [];
   const uppdateFields = [];
@@ -135,6 +136,11 @@ export const updateManagementService = async (
   if (role) {
     uppdateFields.push(`role = ?`);
     updateValues.push(role);
+  }
+
+  if (status) {
+    uppdateFields.push(`status = ?`);
+    updateValues.push(status);
   }
 
   updateValues.push(targetUserId);
@@ -174,6 +180,18 @@ export const deleteManagmentByIdService = async (management_id) => {
       replacements: [management_id],
     });
 
+    return result;
+  } catch (err) {
+    throw err;
+  }
+};
+
+export const updateManagementPasswordService = async (management_id, password_hash) => {
+  const Query = `UPDATE ${tableNames.MANAGEMENT} SET password = ? WHERE management_id = ? AND is_deleted = false`;
+  try {
+    const [result] = await db.sequelize.query(Query, {
+      replacements: [password_hash, management_id],
+    });
     return result;
   } catch (err) {
     throw err;

@@ -6,7 +6,9 @@ import {
 } from "../../middlewares/auth/authMiddlewares.js";
 import { generateReadableIdFromLast } from "../../utils/generateReadableIdFromLast.js";
 import { missingFieldsChecker } from "../../utils/missingFields.js";
-import { createTenantInvitationService } from "../TenantInvitationModel/tenantinvitation.service.js";
+import {
+  sendTenantInvitationService,
+} from "../TenantInvitationModel/tenantinvitation.service.js";
 import { findTenantByIdService } from "../TenantModel/tenant.service.js";
 import {
   createTenantUserService,
@@ -80,59 +82,14 @@ export const createTenantUsercontroller = async (req, res) => {
       role,
     );
 
-    const tenant_invitation_id = await generateReadableIdFromLast(
-      tableNames.TENANT_INVITATIONS,
-      "invitation_id",
-      "INV",
-    );
-
-    const inviteToken = generateInviteToken({
-      tenant_id,
-      tenant_user_id,
-      email: email,
-    });
-
-    console.log("ddddd" , inviteToken)
-
-    const tokenHash = crypto
-      .createHash("sha256")
-      .update(inviteToken)
-      .digest("hex");
-
-    await createTenantInvitationService(
-      tenant_invitation_id,
+    await sendTenantInvitationService(
       tenant_id,
       tenant_user_id,
       email,
-      tokenHash,
+      name,
+      getloginuserDetails?.company_name,
       loginuser?.unique_id,
     );
-
-    const inviteUrl = `${process.env.FRONTEND_URL}/account/activate?token=${inviteToken}`;
-
-    const __filename = fileURLToPath(import.meta.url);
-    const __dirname = path.dirname(__filename);
-
-    const templatePath = path.join(
-      __dirname,
-      "../../../public/html/tenantInvite/index.html",
-    );
-
-    const source = fs.readFileSync(templatePath, "utf8");
-    const template = handlebars.compile(source);
-
-    const emailHtml = template({
-      name: name,
-      company_name: getloginuserDetails?.company_name,
-      invite_url: inviteUrl,
-      expiry_hours: 48,
-    });
-
-    await sendEmail({
-      to: email,
-      subject: `You're invited to manage ${getloginuserDetails?.company_name} on WhatsNexus`,
-      html: emailHtml,
-    });
 
     return res.status(201).send({
       message: "Tenant created successfully. Invitation email sent to owner.",
@@ -181,9 +138,18 @@ export const loginTenantUserController = async (req, res) => {
       role: user.role,
     };
 
+    const userDetails = { ...user };
+    delete userDetails.password_hash;
+
+    // Fetch tenant details for company name
+    const tenant = await findTenantByIdService(user.tenant_id);
+    if (tenant) {
+      userDetails.company_name = tenant.company_name;
+    }
+
     return res.status(200).send({
       message: "Login successful",
-      user: tokenPayload,
+      user: userDetails,
       tokens: {
         accessToken: generateAccessToken(tokenPayload),
         refreshToken: generateRefreshToken(tokenPayload),

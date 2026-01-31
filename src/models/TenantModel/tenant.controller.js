@@ -9,22 +9,14 @@ import {
   findTenantByIdService,
   getAllTenantService,
   updateTenantService,
-  // updateTenantStatusService,
 } from "./tenant.service.js";
-
-import fs from "fs";
-import path from "path";
-import handlebars from "handlebars";
-import { fileURLToPath } from "url";
-import db from "../../database/index.js";
-import { generateInviteToken } from "../../middlewares/auth/authMiddlewares.js";
-import { sendEmail } from "../../utils/emailService.js";
+;
 import {
-  createTenantInvitationService,
-  getLastTenantInvitationService,
+  sendTenantInvitationService,
 } from "../TenantInvitationModel/tenantinvitation.service.js";
 import {
   createTenantUserService,
+  findTenantUserByIdService,
   updateTenantUserService,
 } from "../TenantUserModel/tenantUser.service.js";
 
@@ -96,57 +88,14 @@ export const createTenantController = async (req, res) => {
       "tenant_admin",
     );
 
-    const tenant_invitation_id = await generateReadableIdFromLast(
-      tableNames.TENANT_INVITATIONS,
-      "invitation_id",
-      "INV",
-    );
-
-    const inviteToken = generateInviteToken({
-      tenant_id,
-      tenant_user_id,
-      email: owner_email,
-    });
-
-    const tokenHash = crypto
-      .createHash("sha256")
-      .update(inviteToken)
-      .digest("hex");
-
-    await createTenantInvitationService(
-      tenant_invitation_id,
+    await sendTenantInvitationService(
       tenant_id,
       tenant_user_id,
       owner_email,
-      tokenHash,
-      loginUSer?.unique_id,
-    );
-
-    const inviteUrl = `${process.env.FRONTEND_URL}/account/activate?token=${inviteToken}`;
-
-    const __filename = fileURLToPath(import.meta.url);
-    const __dirname = path.dirname(__filename);
-
-    const templatePath = path.join(
-      __dirname,
-      "../../../public/html/tenantInvite/index.html",
-    );
-
-    const source = fs.readFileSync(templatePath, "utf8");
-    const template = handlebars.compile(source);
-
-    const emailHtml = template({
       owner_name,
       company_name,
-      invite_url: inviteUrl,
-      expiry_hours: 48,
-    });
-
-    await sendEmail({
-      to: owner_email,
-      subject: `You're invited to manage ${company_name} on WhatsNexus`,
-      html: emailHtml,
-    });
+      loginUSer?.unique_id,
+    );
 
     return res.status(201).json({
       message: "Tenant created successfully. Invitation email sent to owner.",
@@ -320,7 +269,7 @@ export const deleteTenantController = async (req, res) => {
 export const resendTenantInvitationController = async (req, res) => {
   const { tenant_user_id } = req.params;
 
-  if (tenant_user_id) {
+  if (!tenant_user_id) {
     return res.status(400).send({
       message: "Tenant user id invalid",
     });
@@ -329,13 +278,32 @@ export const resendTenantInvitationController = async (req, res) => {
   try {
     const loginUSer = req.user;
 
-    const getlastlink = await getLastTenantInvitationService(tenant_user_id);
-
-    if (!getlastlink) {
-      return res.status(403).send({
-        message: "There no any link can  be sent previously",
+    const tenantUser = await findTenantUserByIdService(tenant_user_id);
+    if (!tenantUser) {
+      return res.status(404).send({
+        message: "Tenant user not found",
       });
     }
+
+    const tenant = await findTenantByIdService(tenantUser.tenant_id);
+    if (!tenant) {
+      return res.status(404).send({
+        message: "Tenant not found",
+      });
+    }
+
+    await sendTenantInvitationService(
+      tenantUser.tenant_id,
+      tenant_user_id,
+      tenantUser.email,
+      tenantUser.name,
+      tenant.company_name,
+      loginUSer?.unique_id,
+    );
+
+    return res.status(200).send({
+      message: "Invitation resent successfully",
+    });
   } catch (err) {
     return res.status(500).send({
       message: err?.message,

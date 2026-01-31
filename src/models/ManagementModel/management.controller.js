@@ -14,6 +14,7 @@ import {
   updateManagementService,
   updateDeleteStatusByIdService,
   deleteManagmentByIdService,
+  updateManagementPasswordService,
 } from "./management.service.js";
 import { tableNames } from "../../database/tableName.js";
 import { generatePassword } from "../../utils/generatePassword.js";
@@ -133,9 +134,12 @@ export const loginManagementController = async (req, res) => {
       role: user.role,
     };
 
+    const userDetails = { ...user };
+    delete userDetails.password;
+
     return res.status(200).send({
       message: "Login successful",
-      user: tokenPayload,
+      user: userDetails,
       tokens: {
         accessToken: generateAccessToken(tokenPayload),
         refreshToken: generateRefreshToken(tokenPayload),
@@ -215,6 +219,9 @@ export const updateManagementController = async (req, res) => {
       loggedInUser.role === "super_admin" && req.body.role
         ? req.body.role
         : null,
+      loggedInUser.role === "super_admin" && req.body.status
+        ? req.body.status
+        : null
     );
 
     return res.status(200).send({

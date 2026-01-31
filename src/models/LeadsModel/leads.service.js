@@ -25,7 +25,7 @@ export const createLeadService = async (tenant_id, contact_id) => {
 export const getLeadByPhoneService = async (tenant_id, contact_id) => {
   const Query = `
   
-  SELECT * FROM ${tableNames?.LEADS} WHERE tenant_id = ? AND contact_id = ? LIMIT 1`;
+  SELECT * FROM ${tableNames?.LEADS} WHERE tenant_id = ? AND contact_id = ? AND is_deleted = false LIMIT 1`;
 
   try {
     const [result] = await db.sequelize.query(Query, {
@@ -41,7 +41,7 @@ export const getLeadListService = async (tenant_id) => {
   const Query = `
   SELECT led.* , cta.* FROM ${tableNames?.LEADS} as led
   LEFT JOIN ${tableNames?.CONTACTS} as cta on (cta.id = led.contact_id)
-  WHERE led.tenant_id IN (?) 
+  WHERE led.tenant_id IN (?) AND led.is_deleted = false
   ORDER BY led.last_user_message_at DESC`;
 
   try {
@@ -58,7 +58,7 @@ export const getLeadListService = async (tenant_id) => {
 export const updateLeadService = async (tenant_id, contact_id) => {
   const { heat_state, heat_score } = calculateHeatState(new Date());
 
-  const Query = `UPDATE ${tableNames?.LEADS} SET last_user_message_at = Now() , heat_state = ?, score = ? , summary_status = ?  WHERE tenant_id = ? AND contact_id = ?`;
+  const Query = `UPDATE ${tableNames?.LEADS} SET last_user_message_at = Now() , heat_state = ?, score = ? , summary_status = ?  WHERE tenant_id = ? AND contact_id = ? AND is_deleted = false`;
 
   try {
     const [result] = await db.sequelize.query(Query, {
@@ -74,7 +74,7 @@ export const updateLeadService = async (tenant_id, contact_id) => {
 export const updateAdminLeadService = async (tenant_id, contact_id) => {
   const { heat_state, heat_score } = calculateHeatState(new Date());
 
-  const Query = `UPDATE ${tableNames?.LEADS} SET last_admin_reply_at = Now() , heat_state = ?, score = ? , summary_status = ?  WHERE tenant_id = ? AND contact_id = ?`;
+  const Query = `UPDATE ${tableNames?.LEADS} SET last_admin_reply_at = Now() , heat_state = ?, score = ? , summary_status = ?  WHERE tenant_id = ? AND contact_id = ? AND is_deleted = false`;
 
   try {
     const [result] = await db.sequelize.query(Query, {
@@ -107,6 +107,7 @@ export const startLeadHeatDecayCronService = () => {
             WHEN TIMESTAMPDIFF(HOUR, last_user_message_at, NOW()) <= 72 THEN 30
             ELSE 10
           END
+        WHERE is_deleted = false
     `);
 
       console.log("Heat decay cron finished");
@@ -163,7 +164,7 @@ export const getLeadSummaryService = async (tenant_id, phone, contact_id) => {
 
       const aiSummary = await AiService("system", SUMMARIZE_PROMPT);
 
-      const Query = `UPDATE ${tableNames.LEADS} SET ai_summary = ? , summary_status = ?  WHERE tenant_id = ? AND contact_id = ? `;
+      const Query = `UPDATE ${tableNames.LEADS} SET ai_summary = ? , summary_status = ?  WHERE tenant_id = ? AND contact_id = ? AND is_deleted = false `;
 
       await db.sequelize.query(Query, {
         replacements: [aiSummary, "old", tenant_id, contact_id],
@@ -174,6 +175,38 @@ export const getLeadSummaryService = async (tenant_id, phone, contact_id) => {
         has_data: true,
       };
     }
+  } catch (err) {
+    throw err;
+  }
+};
+// ... existing code ...
+
+export const updateLeadStatusService = async (
+  tenant_id,
+  contact_id,
+  status,
+  heat_state,
+) => {
+  const Query = `UPDATE ${tableNames?.LEADS} SET status = ?, heat_state = ? WHERE tenant_id = ? AND contact_id = ? AND is_deleted = false`;
+
+  try {
+    const [result] = await db.sequelize.query(Query, {
+      replacements: [status, heat_state, tenant_id, contact_id],
+    });
+    return result;
+  } catch (err) {
+    throw err;
+  }
+};
+
+export const deleteLeadService = async (tenant_id, contact_id) => {
+  const Query = `UPDATE ${tableNames?.LEADS} SET is_deleted = true, deleted_at = NOW() WHERE tenant_id = ? AND contact_id = ? AND is_deleted = false`;
+
+  try {
+    const [result] = await db.sequelize.query(Query, {
+      replacements: [tenant_id, contact_id],
+    });
+    return result;
   } catch (err) {
     throw err;
   }

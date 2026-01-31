@@ -6,13 +6,15 @@ export const createContactService = async (
   phone,
   name,
   profile_pic,
+  wa_id = null,
+  email = null,
 ) => {
   const Query = `
   INSERT INTO ${tableNames?.CONTACTS} 
-  (tenant_id, phone, name, profile_pic, last_message_at ) VALUES (?,?,?,?, NOW())`;
+  (tenant_id, phone, name, profile_pic, wa_id, email, is_blocked, last_message_at ) VALUES (?,?,?,?,?,?,?,NOW())`;
 
   try {
-    const Values = [tenant_id, phone, name, profile_pic];
+    const Values = [tenant_id, phone, name, profile_pic, wa_id, email, false];
 
     const [result] = await db.sequelize.query(Query, { replacements: Values });
     return result;
@@ -25,7 +27,7 @@ export const getContactByPhoneAndTenantIdService = async (tenant_id, phone) => {
   try {
     const Values = [tenant_id, phone];
 
-    const Query = `SELECT * FROM ${tableNames?.CONTACTS} WHERE tenant_id = ? AND phone = ? LIMIT 1 `;
+    const Query = `SELECT * FROM ${tableNames?.CONTACTS} WHERE tenant_id = ? AND phone = ? AND is_deleted = false LIMIT 1 `;
 
     const [result] = await db.sequelize.query(Query, { replacements: Values });
 
@@ -39,7 +41,7 @@ export const getContactByIdAndTenantIdService = async (id, tenant_id) => {
   try {
     const Values = [id, tenant_id];
 
-    const Query = `SELECT * FROM ${tableNames?.CONTACTS} WHERE id = ? AND tenant_id = ? LIMIT 1 `;
+    const Query = `SELECT * FROM ${tableNames?.CONTACTS} WHERE id = ? AND tenant_id = ? AND is_deleted = false LIMIT 1 `;
 
     const [result] = await db.sequelize.query(Query, { replacements: Values });
 
@@ -51,13 +53,59 @@ export const getContactByIdAndTenantIdService = async (id, tenant_id) => {
 
 export const getAllContactsService = async (tenant_id) => {
   try {
-    const Query = `SELECT * FROM ${tableNames?.CONTACTS} WHERE tenant_id IN (?) ORDER BY id DESC`;
+    const Query = `SELECT * FROM ${tableNames?.CONTACTS} WHERE tenant_id IN (?) AND is_deleted = false ORDER BY id DESC`;
 
     const [result] = await db.sequelize.query(Query, {
       replacements: [tenant_id],
     });
     return result;
   } catch (err) {
+    throw err;
+  }
+};
+
+export const updateContactService = async (
+  id,
+  tenant_id,
+  name,
+  email,
+  profile_pic,
+  is_blocked
+) => {
+  const Query = `
+  UPDATE ${tableNames?.CONTACTS} 
+  SET name = ?, email = ?, profile_pic = ?, is_blocked = ?
+  WHERE id = ? AND tenant_id = ?`;
+
+  try {
+    const Values = [name, email, profile_pic, is_blocked, id, tenant_id];
+
+    const [result] = await db.sequelize.query(Query, { replacements: Values });
+    return result;
+  } catch (err) {
+    throw err;
+  }
+};
+
+export const deleteContactService = async (id, tenant_id) => {
+  const transaction = await db.sequelize.transaction();
+  try {
+    const Query1 = `UPDATE ${tableNames?.CONTACTS} SET is_deleted = true, deleted_at = NOW() WHERE id = ? AND tenant_id = ?`;
+    const Query2 = `UPDATE ${tableNames?.LEADS} SET is_deleted = true, deleted_at = NOW() WHERE contact_id = ? AND tenant_id = ?`;
+
+    await db.sequelize.query(Query1, {
+      replacements: [id, tenant_id],
+      transaction,
+    });
+    await db.sequelize.query(Query2, {
+      replacements: [id, tenant_id],
+      transaction,
+    });
+
+    await transaction.commit();
+    return true;
+  } catch (err) {
+    await transaction.rollback();
     throw err;
   }
 };

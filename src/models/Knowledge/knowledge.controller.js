@@ -175,7 +175,7 @@ export const searchKnowledgeChunksController = async (req, res) => {
     return res.status(400).send({ message: "Invalid tenant context" });
   }
 
-  if (question) {
+  if (!question) {
     return res.status(400).send({
       message: "Knowledge search question or required",
     });

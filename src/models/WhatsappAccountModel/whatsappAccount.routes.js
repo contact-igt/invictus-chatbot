@@ -1,35 +1,42 @@
 import express from "express";
 import {
+  manualConnectWhatsappController,
+  whatsappOAuthCallbackController,
+  testWhatsappAccountController,
   activateWhatsappAccountController,
-  createWhatsappAccountController,
-  getWhatsappAccountByIdController,
-  testWhatsappAccountConnectionController,
-  whatsappCallbackController,
+  getWhatsappAccountController,
 } from "./whatsappAccount.controller.js";
-import { authenticate } from "../../middlewares/auth/authMiddlewares.js";
 
-const Router = express.Router();
-
-Router.get("/callback", whatsappCallbackController);
-
-Router.post("/whatsapp-account", authenticate, createWhatsappAccountController);
-
-Router.get(
-  "/whatsapp-accounts",
+import {
   authenticate,
-  getWhatsappAccountByIdController,
+  authorize,
+} from "../../middlewares/auth/authMiddlewares.js";
+
+const router = express.Router();
+
+router.get("/whatsapp/oauth/callback", whatsappOAuthCallbackController);
+
+router.post(
+  "/whatsapp-account/manual",
+  authenticate,
+  authorize({ user_type: "tenant", roles: ["tenant_admin"] }),
+  manualConnectWhatsappController,
 );
 
-Router.get(
-  "/whatsapp-account/test-connect",
+router.get("/whatsapp-account", authenticate, getWhatsappAccountController);
+
+router.post(
+  "/whatsapp-account/test",
   authenticate,
-  testWhatsappAccountConnectionController,
+  authorize({ user_type: "tenant", roles: ["tenant_admin"] }),
+  testWhatsappAccountController,
 );
 
-Router.put(
-  "/whatsapp-account/status",
+router.post(
+  "/whatsapp-account/activate",
   authenticate,
+  authorize({ user_type: "tenant", roles: ["tenant_admin"] }),
   activateWhatsappAccountController,
 );
 
-export default Router;
+export default router;

@@ -1,69 +1,110 @@
 import { tableNames } from "../../tableName.js";
 
 export const LeadsTable = (sequelize, Sequelize) => {
-  return sequelize.define(tableNames?.LEADS, {
-    tenant_id: {
-      type: Sequelize.INTEGER,
-      allowNull: false,
-    },
+  return sequelize.define(
+    tableNames.LEADS,
+    {
+      tenant_id: {
+        type: Sequelize.STRING,
+        allowNull: false,
+      },
 
-    contact_id: {
-      type: Sequelize.INTEGER,
-      allowNull: false,
-      unique: true,
-    },
+      contact_id: {
+        type: Sequelize.INTEGER,
+        allowNull: false,
+      },
 
-    score: {
-      type: Sequelize.INTEGER,
-      allowNull: false,
-      defaultValue: 0,
-    },
+      score: {
+        type: Sequelize.INTEGER,
+        allowNull: false,
+        defaultValue: 0,
+      },
 
-    heat_state: {
-      type: Sequelize.ENUM("hot", "warm", "cold", "supercold"),
-      allowNull: false,
-      defaultValue: "cold",
-    },
+      heat_state: {
+        type: Sequelize.ENUM("hot", "warm", "cold", "supercold"),
+        allowNull: false,
+        defaultValue: "cold",
+      },
 
-    ai_summary: {
-      type: Sequelize.TEXT,
-      allowNull: true,
-    },
+      ai_summary: {
+        type: Sequelize.TEXT,
+        allowNull: true,
+      },
 
-    summary_status: {
-      type: Sequelize.ENUM("new", "old"),
-      allowNull: false,
-      defaultValue: "new",
-    },
+      summary_status: {
+        type: Sequelize.ENUM("new", "old"),
+        allowNull: false,
+        defaultValue: "new",
+      },
 
-    last_user_message_at: {
-      type: Sequelize.DATE,
-      allowNull: true,
-    },
+      last_user_message_at: {
+        type: Sequelize.DATE,
+        allowNull: true,
+      },
 
-    last_admin_reply_at: {
-      type: Sequelize.DATE,
-      allowNull: true,
-    },
+      last_admin_reply_at: {
+        type: Sequelize.DATE,
+        allowNull: true,
+      },
 
-    status: {
-      type: Sequelize.ENUM("active", "archived", "blocked"),
-      allowNull: false,
-      defaultValue: "active",
-    },
+      status: {
+        type: Sequelize.ENUM("active", "archived", "blocked"),
+        allowNull: false,
+        defaultValue: "active",
+      },
 
-    createdAt: {
-      type: "TIMESTAMP",
-      allowNull: true,
-      defaultValue: sequelize.literal("CURRENT_TIMESTAMP"),
-      field: "created_at",
-    },
+      is_deleted: {
+        type: Sequelize.BOOLEAN,
+        allowNull: false,
+        defaultValue: false,
+      },
 
-    updatedAt: {
-      type: "TIMESTAMP",
-      allowNull: true,
-      defaultValue: sequelize.literal("CURRENT_TIMESTAMP"),
-      field: "updated_at",
+      deleted_at: {
+        type: Sequelize.DATE,
+        allowNull: true,
+      },
+
+      createdAt: {
+        type: Sequelize.DATE,
+        allowNull: false,
+        defaultValue: sequelize.literal("CURRENT_TIMESTAMP"),
+        field: "created_at",
+      },
+
+      updatedAt: {
+        type: Sequelize.DATE,
+        allowNull: false,
+        defaultValue: sequelize.literal("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"),
+        field: "updated_at",
+      },
     },
-  });
+    {
+      tableName: tableNames.LEADS,
+      timestamps: true,
+      underscored: true,
+      indexes: [
+        {
+          name: "idx_lead_status",
+          fields: ["tenant_id", "status", "is_deleted"],
+        },
+        {
+          name: "idx_lead_heat",
+          fields: ["tenant_id", "heat_state", "is_deleted"],
+        },
+        {
+          name: "unique_lead_contact_active",
+          unique: true,
+          fields: ["contact_id", "is_deleted"],
+        },
+        {
+          name: "idx_lead_last_message",
+          fields: ["last_user_message_at"],
+        },
+        {
+          name: "idx_lead_deleted",
+          fields: ["is_deleted"],
+        },
+      ],
+    }
+  );
 };

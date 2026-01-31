@@ -53,9 +53,60 @@ export const sendWhatsAppMessage = async (tenant_id, to, message) => {
         "Content-Type": "application/json",
       },
       httpsAgent,
-      timeout: 30000,
     },
   );
+};
+
+export const sendWhatsAppTemplate = async (
+  tenant_id,
+  to,
+  templateName,
+  languageCode,
+  components,
+) => {
+  const [rows] = await db.sequelize.query(
+    `
+    SELECT phone_number_id, access_token
+    FROM ${tableNames.WHATSAPP_ACCOUNT}
+    WHERE tenant_id = ?
+      AND status = 'active'
+    LIMIT 1
+    `,
+    { replacements: [tenant_id] },
+  );
+
+  if (!rows.length) {
+    throw new Error("No active WhatsApp account for tenant");
+  }
+
+  const { phone_number_id, access_token } = rows[0];
+
+  const payload = {
+    messaging_product: "whatsapp",
+    to,
+    type: "template",
+    template: {
+      name: templateName,
+      language: {
+        code: languageCode,
+      },
+      components: components || [],
+    },
+  };
+
+  await axios.post(
+    `https://graph.facebook.com/v19.0/${phone_number_id}/messages`,
+    payload,
+    {
+      headers: {
+        Authorization: `Bearer ${access_token}`,
+        "Content-Type": "application/json",
+      },
+      httpsAgent,
+    },
+  );
+
+  return { phone_number_id };
 };
 
 export const sendTypingIndicator = async (tenant_id, phone_number_id, to) => {
@@ -210,7 +261,7 @@ export const getOpenAIReply = async (tenant_id, phone, userMessage) => {
         ? chunks.join("\n\n")
         : "No relevant knowledge available.";
 
-const COMMON_BASE_PROMPT = `
+    const COMMON_BASE_PROMPT = `
 
 ------------ COMMON BASE PROMPT --------------
 
@@ -334,9 +385,9 @@ When in doubt:
 - Do not guess
 
 `;
-  
 
-const systemPrompt = `
+
+    const systemPrompt = `
 
 ${COMMON_BASE_PROMPT}
 

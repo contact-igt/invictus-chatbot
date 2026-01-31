@@ -14,9 +14,7 @@ export const ManagementTable = (sequelize, Sequelize) => {
       management_id: {
         type: Sequelize.STRING,
         allowNull: false,
-        unique: true,
       },
-
 
       title: {
         type: Sequelize.ENUM("Dr", "Mr", "Ms", "Mrs"),
@@ -31,7 +29,6 @@ export const ManagementTable = (sequelize, Sequelize) => {
       email: {
         type: Sequelize.STRING,
         allowNull: false,
-        unique: true,
         validate: { isEmail: true },
       },
 
@@ -42,7 +39,6 @@ export const ManagementTable = (sequelize, Sequelize) => {
 
       mobile: {
         type: Sequelize.STRING,
-        unique: true,
         allowNull: true,
       },
 
@@ -64,6 +60,7 @@ export const ManagementTable = (sequelize, Sequelize) => {
       status: {
         type: Sequelize.ENUM("active", "inactive"),
         defaultValue: "active",
+        allowNull: false,
       },
 
       is_deleted: {
@@ -87,9 +84,41 @@ export const ManagementTable = (sequelize, Sequelize) => {
       updatedAt: {
         type: Sequelize.DATE,
         allowNull: false,
-        defaultValue: sequelize.literal("CURRENT_TIMESTAMP"),
+        defaultValue: sequelize.literal(
+          "CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"
+        ),
         field: "updated_at",
       },
+    },
+    {
+      tableName: tableNames.MANAGEMENT,
+      timestamps: true,
+      underscored: true,
+      indexes: [
+        {
+          name: "unique_mgmt_id",
+          unique: true,
+          fields: ["management_id"],
+        },
+        {
+          name: "unique_mgmt_email",
+          unique: true,
+          fields: ["email"],
+        },
+        {
+          name: "unique_mgmt_mobile",
+          unique: true,
+          fields: ["mobile"],
+        },
+        {
+          name: "idx_mgmt_role",
+          fields: ["role"],
+        },
+        {
+          name: "idx_mgmt_deleted",
+          fields: ["is_deleted"],
+        },
+      ],
     }
   );
 };

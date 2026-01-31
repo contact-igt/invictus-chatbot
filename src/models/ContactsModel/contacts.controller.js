@@ -1,8 +1,11 @@
 import { missingFieldsChecker } from "../../utils/missingFields.js";
 import {
   createContactService,
+  deleteContactService,
   getAllContactsService,
+  getContactByIdAndTenantIdService,
   getContactByPhoneAndTenantIdService,
+  updateContactService,
 } from "./contacts.service.js";
 
 export const createContactController = async (req, res) => {
@@ -72,4 +75,74 @@ export const getAllContactsController = async (req, res) => {
   }
 };
 
+export const getContactByIdController = async (req, res) => {
+  const tenant_id = req.user.tenant_id;
+  const { id } = req.params;
 
+  if (!tenant_id) {
+    return res.status(400).send({ message: "Tenant id missing" });
+  }
+
+  try {
+    const response = await getContactByIdAndTenantIdService(id, tenant_id);
+    if (!response) {
+      return res.status(404).send({ message: "Contact not found" });
+    }
+    return res.status(200).send({
+      message: "success",
+      data: response,
+    });
+  } catch (err) {
+    return res.status(500).send({
+      message: err?.message,
+    });
+  }
+};
+
+export const updateContactController = async (req, res) => {
+  const tenant_id = req.user.tenant_id;
+  const { id } = req.params;
+  const { name, email, profile_pic, is_blocked } = req.body;
+
+  if (!tenant_id) {
+    return res.status(400).send({ message: "Tenant id missing" });
+  }
+
+  try {
+    await updateContactService(
+      id,
+      tenant_id,
+      name,
+      email,
+      profile_pic,
+      is_blocked
+    );
+    return res.status(200).send({
+      message: "Contact updated successfully",
+    });
+  } catch (err) {
+    return res.status(500).send({
+      message: err?.message,
+    });
+  }
+};
+
+export const deleteContactController = async (req, res) => {
+  const tenant_id = req.user.tenant_id;
+  const { id } = req.params;
+
+  if (!tenant_id) {
+    return res.status(400).send({ message: "Tenant id missing" });
+  }
+
+  try {
+    await deleteContactService(id, tenant_id);
+    return res.status(200).send({
+      message: "Contact deleted successfully",
+    });
+  } catch (err) {
+    return res.status(500).send({
+      message: err?.message,
+    });
+  }
+};

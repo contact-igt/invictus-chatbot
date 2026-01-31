@@ -144,17 +144,26 @@ export const updateTenantUserService = async (name, email, email_at) => {
 export const getAllTenantUsersService = async (tenant_id) => {
   try {
     const query = `
-    SELECT
-      tenant_user_id,
-      name,
-      email,
-      role,
-      status,
-      created_at
-    FROM ${tableNames.TENANT_USERS}
-    WHERE tenant_id = ?
-      AND is_deleted = false
-    ORDER BY created_at DESC
+    SELECT 
+      tu.tenant_user_id,
+      tu.name,
+      tu.email,
+      tu.role,
+      COALESCE(ti.status, tu.status) as status,
+      tu.created_at
+    FROM ${tableNames.TENANT_USERS} tu
+    LEFT JOIN (
+      SELECT tenant_user_id, status
+      FROM ${tableNames.TENANT_INVITATIONS}
+      WHERE id IN (
+        SELECT MAX(id)
+        FROM ${tableNames.TENANT_INVITATIONS}
+        GROUP BY tenant_user_id
+      )
+    ) ti ON tu.tenant_user_id = ti.tenant_user_id
+    WHERE tu.tenant_id = ?
+      AND tu.is_deleted = false
+    ORDER BY tu.created_at DESC
   `;
 
     const [rows] = await db.sequelize.query(query, {

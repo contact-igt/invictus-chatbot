@@ -53,10 +53,21 @@ export const createTenantService = async (
 
 export const getAllTenantService = async () => {
   const Query = `
-  SELECT * 
-  FROM ${tableNames?.TENANTS} 
-  WHERE is_deleted IN(?)
-  ORDER BY tenant_id DESC  `;
+  SELECT 
+    t.*,
+    COALESCE(ti.status, t.status) as status
+  FROM ${tableNames?.TENANTS} t
+  LEFT JOIN (
+    SELECT email, status, tenant_id
+    FROM ${tableNames.TENANT_INVITATIONS}
+    WHERE id IN (
+      SELECT MAX(id)
+      FROM ${tableNames.TENANT_INVITATIONS}
+      GROUP BY tenant_id, email
+    )
+  ) ti ON t.tenant_id = ti.tenant_id AND t.owner_email = ti.email
+  WHERE t.is_deleted IN(?)
+  ORDER BY t.tenant_id DESC  `;
 
   try {
     const [result] = await db.sequelize.query(Query, { replacements: [0] });
@@ -155,9 +166,9 @@ export const updateTenantService = async (
 // };
 
 export const deleteTenantStatusService = async (tenant_id) => {
-  const Query = `UPDATE ${tableNames?.TENANTS} SET is_deleted = ? , deleted_at = NOW() WHERE tenant_id = ?`;
+  const Query = `UPDATE ${tableNames?.TENANTS} SET is_deleted = ? , deleted_at = NOW() WHERE tenant_id = ? AND is_deleted = false`;
 
-  const Query2 = `UPDATE ${tableNames?.TENANT_USERS} SET is_deleted = ? , deleted_at = NOW() WHERE tenant_id IN(?)`;
+  const Query2 = `UPDATE ${tableNames?.TENANT_USERS} SET is_deleted = ? , deleted_at = NOW() WHERE tenant_id IN(?) AND is_deleted = false`;
 
   try {
     const [result] = await db.sequelize.query(Query, {

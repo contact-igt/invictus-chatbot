@@ -22,7 +22,10 @@ import {
 export const verifyTenantInvitationController = async (req, res) => {
   const { token } = req.query;
   if (!token) {
-    return res.status(400).send({ message: "Token is required" });
+    return res.status(400).send({
+      valid: false,
+      message: "Token is required",
+    });
   }
 
   try {
@@ -30,16 +33,22 @@ export const verifyTenantInvitationController = async (req, res) => {
 
     const invitation = await getInvitationByTokenHashService(tokenHash);
 
-    const getTenantDetails = await findTenantByIdService(invitation?.tenant_id);
-
-    const getTenantUserDetails = await findTenantUserByIdService(
-      invitation?.tenant_user_id,
-    );
-
     if (!invitation) {
       return res.status(404).send({
         valid: false,
         message: "Invitation link is invalid",
+      });
+    }
+
+    const [getTenantDetails, getTenantUserDetails] = await Promise.all([
+      findTenantByIdService(invitation.tenant_id),
+      findTenantUserByIdService(invitation.tenant_user_id),
+    ]);
+
+    if (!getTenantDetails || !getTenantUserDetails) {
+      return res.status(403).send({
+        valid: false,
+        message: "Invitation details are incomplete or invalid",
       });
     }
 
@@ -97,12 +106,6 @@ export const verifyTenantInvitationController = async (req, res) => {
       });
     }
 
-    if (!getTenantDetails) {
-      return res.status(403).send({
-        message: "Tenant details invalid",
-      });
-    }
-
     return res.status(200).send({
       message: "success",
       valid: true,
@@ -111,11 +114,10 @@ export const verifyTenantInvitationController = async (req, res) => {
       company_name: getTenantDetails?.company_name,
       owner_name: getTenantDetails?.owner_name,
       email: invitation.email,
-      // tenant_id: invitation.tenant_id,
-      // tenant_user_id: invitation.tenant_user_id,
     });
   } catch (err) {
     return res.status(500).send({
+      valid: false,
       message: err?.message,
     });
   }
@@ -130,13 +132,19 @@ export const acceptTenantInvitationController = async (req, res) => {
     const invitation = await getInvitationByTokenHashService(tokenHash);
 
     if (!invitation || invitation.status !== "pending") {
-      return res.status(403).send({ message: "Invalid invitation" });
+      return res.status(403).send({
+        valid: false,
+        message: "Invalid invitation",
+      });
     }
 
     if (new Date(invitation.expires_at) < new Date()) {
       await updateInvitationStatusService(invitation?.invitation_id, "expired");
 
-      return res.status(403).send({ message: "Invitation expired" });
+      return res.status(403).send({
+        valid: false,
+        message: "Invitation expired",
+      });
     }
 
     await updateInvitationStatusService(invitation.invitation_id, "accepted");
@@ -149,6 +157,7 @@ export const acceptTenantInvitationController = async (req, res) => {
     });
   } catch (err) {
     return res.status(500).send({
+      valid: false,
       message: err?.message,
     });
   }
@@ -163,7 +172,10 @@ export const rejectTenantInvitationController = async (req, res) => {
     const invitation = await getInvitationByTokenHashService(tokenHash);
 
     if (!invitation || invitation.status !== "pending") {
-      return res.status(403).send({ message: "Invalid invitation" });
+      return res.status(403).send({
+        valid: false,
+        message: "Invalid invitation",
+      });
     }
 
     await updateInvitationStatusService(invitation.invitation_id, "revoked");
@@ -174,6 +186,7 @@ export const rejectTenantInvitationController = async (req, res) => {
     });
   } catch (err) {
     return res.status(500).send({
+      valid: false,
       message: err?.message,
     });
   }
@@ -184,7 +197,10 @@ export const setTenantPasswordController = async (req, res) => {
     const { token, password } = req.body;
 
     if (!password) {
-      return res.status(400).send({ message: "Password required" });
+      return res.status(400).send({
+        valid: false,
+        message: "Password required",
+      });
     }
 
     const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
@@ -192,7 +208,10 @@ export const setTenantPasswordController = async (req, res) => {
     const invitation = await getInvitationByTokenHashService(tokenHash);
 
     if (!invitation || invitation.status !== "accepted") {
-      return res.status(403).send({ message: "Invalid invitation" });
+      return res.status(403).send({
+        valid: false,
+        message: "Invalid invitation",
+      });
     }
 
     const tenantuserpaylod = await findTenantUserByIdService(
@@ -201,6 +220,7 @@ export const setTenantPasswordController = async (req, res) => {
 
     if (!tenantuserpaylod) {
       return res.status(400).send({
+        valid: false,
         message: "Invalid tenant user",
       });
     }
@@ -212,22 +232,40 @@ export const setTenantPasswordController = async (req, res) => {
       invitation.tenant_user_id,
     );
 
-    const payload = {
-      id: tenantuserpaylod?.id,
-      unique_id: tenantuserpaylod?.tenant_user_id,
+    // Update invitation status to completed
+    await updateInvitationStatusService(invitation.invitation_id, "completed");
+
+    // Fetch full user details (similar to login)
+    const user = await findTenantUserByIdService(invitation.tenant_user_id);
+    const userDetails = { ...user };
+    delete userDetails.password_hash;
+
+    // Fetch tenant details for company name
+    const tenant = await findTenantByIdService(invitation.tenant_id);
+    if (tenant) {
+      userDetails.company_name = tenant.company_name;
+    }
+
+    const tokenPayload = {
+      id: user.id,
+      unique_id: user.tenant_user_id,
       user_type: "tenant",
       tenant_id: invitation.tenant_id,
-      role: tenantuserpaylod?.role,
+      role: user.role,
     };
 
     return res.status(200).send({
+      valid: true,
       message: "Password set successfully",
-      user: payload,
-      accessToken: generateAccessToken(payload),
-      refreshToken: generateRefreshToken(payload),
+      user: userDetails,
+      tokens: {
+        accessToken: generateAccessToken(tokenPayload),
+        refreshToken: generateRefreshToken(tokenPayload),
+      },
     });
   } catch (err) {
     return res.status(500).send({
+      valid: false,
       message: err?.message,
     });
   }
