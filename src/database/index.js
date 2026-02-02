@@ -19,6 +19,8 @@ import { WhatsappTemplateComponentTable } from "./tables/WhatsappTemplateCompone
 import { WhatsappTemplateVariableTable } from "./tables/WhatsappTemplateVariablesTable/index.js";
 import { WhatsappTemplateSyncLogTable } from "./tables/WhatsappTemplateSyncLogsTable/index.js";
 import { WhatsappAccountTable } from "./tables/WhatsappAccountTable/index.js";
+import { WhatsappCampaignTable } from "./tables/WhatsappCampaignTable/index.js";
+import { WhatsappCampaignRecipientTable } from "./tables/WhatsappCampaignRecipientTable/index.js";
 import { SequencesTable } from "./tables/SequencesTable/index.js";
 
 
@@ -70,6 +72,12 @@ db.WhatsappTemplateVariables = WhatsappTemplateVariableTable(
   Sequelize,
 );
 db.WhatsappTemplateSyncLogs = WhatsappTemplateSyncLogTable(
+  sequelize,
+  Sequelize,
+);
+
+db.WhatsappCampaigns = WhatsappCampaignTable(sequelize, Sequelize);
+db.WhatsappCampaignRecipients = WhatsappCampaignRecipientTable(
   sequelize,
   Sequelize,
 );
@@ -327,6 +335,42 @@ db.LiveChat.belongsTo(db.Tenants, {
   foreignKey: "tenant_id",
   targetKey: "tenant_id",
   as: "tenant",
+  constraints: false
+});
+
+// Tenant -> WhatsappCampaigns (One-to-Many)
+db.Tenants.hasMany(db.WhatsappCampaigns, {
+  foreignKey: "tenant_id",
+  sourceKey: "tenant_id",
+  as: "campaigns",
+  constraints: false
+});
+db.WhatsappCampaigns.belongsTo(db.Tenants, {
+  foreignKey: "tenant_id",
+  targetKey: "tenant_id",
+  as: "tenant",
+  constraints: false
+});
+
+// WhatsappCampaign -> WhatsappCampaignRecipients (One-to-Many)
+db.WhatsappCampaigns.hasMany(db.WhatsappCampaignRecipients, {
+  foreignKey: "campaign_id",
+  sourceKey: "campaign_id",
+  as: "recipients",
+  constraints: false
+});
+db.WhatsappCampaignRecipients.belongsTo(db.WhatsappCampaigns, {
+  foreignKey: "campaign_id",
+  targetKey: "campaign_id",
+  as: "campaign",
+  constraints: false
+});
+
+// WhatsappCampaign -> WhatsappTemplate (Belongs-to)
+db.WhatsappCampaigns.belongsTo(db.WhatsappTemplates, {
+  foreignKey: "template_id",
+  targetKey: "template_id",
+  as: "template",
   constraints: false
 });
 

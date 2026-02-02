@@ -12,8 +12,6 @@ export const registerManagementService = async (
   password,
   role,
 ) => {
-  const password_hash = await bcrypt.hash(password, 10);
-
   const Query = `
     INSERT INTO ${tableNames.MANAGEMENT}
     (management_id, title, username, email, country_code, mobile, password, role)
@@ -27,7 +25,7 @@ export const registerManagementService = async (
     email,
     country_code,
     mobile,
-    password_hash,
+    password,
     role,
   ];
 
@@ -103,7 +101,7 @@ export const updateManagementService = async (
   mobile,
   profile,
   role,
-  status
+  status,
 ) => {
   const updateValues = [];
   const uppdateFields = [];
@@ -186,7 +184,10 @@ export const deleteManagmentByIdService = async (management_id) => {
   }
 };
 
-export const updateManagementPasswordService = async (management_id, password_hash) => {
+export const updateManagementPasswordService = async (
+  management_id,
+  password_hash,
+) => {
   const Query = `UPDATE ${tableNames.MANAGEMENT} SET password = ? WHERE management_id = ? AND is_deleted = false`;
   try {
     const [result] = await db.sequelize.query(Query, {

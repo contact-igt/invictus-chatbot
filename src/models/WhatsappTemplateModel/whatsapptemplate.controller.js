@@ -11,6 +11,7 @@ import {
   submitWhatsappTemplateService,
   syncAllPendingTemplatesService,
   syncWhatsappTemplateStatusService,
+  updateWhatsappTemplateService,
 } from "./whatsapptemplate.service.js";
 import { missingFieldsChecker } from "../../utils/missingFields.js";
 
@@ -94,6 +95,8 @@ export const createWhatsappTemplateController = async (req, res) => {
   }
 };
 
+
+
 export const submitWhatsappTemplateController = async (req, res) => {
   try {
     const tenant_id = req.user.tenant_id;
@@ -103,7 +106,6 @@ export const submitWhatsappTemplateController = async (req, res) => {
       return res.status(400).json({ message: "Invalid tenant context" });
     }
 
-    // WhatsApp account
     const whatsappAccount = await getWhatsappAccountByTenantService(tenant_id);
     if (!whatsappAccount || whatsappAccount.status !== "active") {
       return res.status(400).json({
@@ -111,7 +113,6 @@ export const submitWhatsappTemplateController = async (req, res) => {
       });
     }
 
-    // Template
     const [[template]] = await db.sequelize.query(
       `
       SELECT * FROM ${tableNames.WHATSAPP_TEMPLATE}
@@ -161,12 +162,25 @@ export const submitWhatsappTemplateController = async (req, res) => {
       data: result,
     });
   } catch (err) {
+    // Handle Meta "Template being deleted" error specifically
+    if (
+      err.metaError &&
+      err.metaError.code === 100 &&
+      err.metaError.error_subcode === 2388023
+    ) {
+      return res.status(409).json({
+        message:
+          "This template name was recently deleted on Meta. Please wait approx. 1 minute before resubmitting, or use a different name.",
+        error_code: "META_TEMPLATE_DELETION_PENDING",
+        meta_error: err.metaError,
+      });
+    }
+
     return res.status(500).json({
       message: err.message,
     });
   }
 };
-
 
 export const syncWhatsappTemplateStatusController = async (req, res) => {
   try {
@@ -291,9 +305,127 @@ export const permanentDeleteTemplateController = async (req, res) => {
   try {
     await permanentDeleteTemplateService(template_id, tenant_id);
     return res.status(200).send({
-      message: "Template permanently deleted successfully from local DB and Meta",
+      message:
+        "Template permanently deleted successfully from local DB and Meta",
     });
   } catch (err) {
     return res.status(500).send({ message: err.message });
+  }
+};
+
+export const updateWhatsappTemplateController = async (req, res) => {
+  try {
+    const tenant_id = req.user.tenant_id;
+    const { template_id } = req.params;
+    const { template_name, category, language, components, variables } =
+      req.body;
+
+    if (!tenant_id) {
+      return res.status(400).json({ message: "Invalid tenant context" });
+    }
+
+    const result = await updateWhatsappTemplateService(
+      template_id,
+      tenant_id,
+      template_name,
+      category,
+      language,
+      components,
+      variables,
+    );
+
+    return res.status(200).json({
+      message: "Template updated successfully",
+      data: result,
+    });
+  } catch (err) {
+    return res.status(500).json({ message: err.message });
+  }
+};
+
+export const resubmitWhatsappTemplateController = async (req, res) => {
+  try {
+    const tenant_id = req.user.tenant_id;
+    const { template_id } = req.params;
+
+    if (!tenant_id) {
+      return res.status(400).json({ message: "Invalid tenant context" });
+    }
+
+    // WhatsApp account
+    const whatsappAccount = await getWhatsappAccountByTenantService(tenant_id);
+    if (!whatsappAccount || whatsappAccount.status !== "active") {
+      return res.status(400).json({
+        message: "WhatsApp account not active",
+      });
+    }
+
+    // Get template
+    const [[template]] = await db.sequelize.query(
+      `
+      SELECT * FROM ${tableNames.WHATSAPP_TEMPLATE}
+      WHERE template_id = ? AND tenant_id = ? AND is_deleted = false
+      `,
+      { replacements: [template_id, tenant_id] },
+    );
+
+    if (!template) {
+      return res.status(404).json({ message: "Template not found" });
+    }
+
+    // Only allow resubmit for draft, rejected, paused
+    if (!["draft", "rejected", "paused"].includes(template.status)) {
+      return res.status(400).json({
+        message: `Cannot resubmit template with status: ${template.status}. Only draft, rejected, or paused templates can be resubmitted.`,
+      });
+    }
+
+    // Get components and variables
+    const [components] = await db.sequelize.query(
+      `
+      SELECT * FROM ${tableNames.WHATSAPP_TEMPLATE_COMPONENTS}
+      WHERE template_id = ?
+      `,
+      { replacements: [template_id] },
+    );
+
+    const [variables] = await db.sequelize.query(
+      `
+      SELECT * FROM ${tableNames.WHATSAPP_TEMPLATE_VARIABLES}
+      WHERE template_id = ?
+      ORDER BY variable_key ASC
+      `,
+      { replacements: [template_id] },
+    );
+
+    const result = await submitWhatsappTemplateService({
+      template,
+      components,
+      variables,
+      whatsappAccount,
+    });
+
+    return res.status(200).json({
+      message: "Template resubmitted successfully",
+      data: result,
+    });
+  } catch (err) {
+    // Handle Meta "Template being deleted" error specifically
+    if (
+      err.metaError &&
+      err.metaError.code === 100 &&
+      err.metaError.error_subcode === 2388023
+    ) {
+      return res.status(409).json({
+        message:
+          "This template name was recently deleted on Meta. Please wait approx. 1 minute before resubmitting, or use a different name.",
+        error_code: "META_TEMPLATE_DELETION_PENDING",
+        meta_error: err.metaError,
+      });
+    }
+
+    return res.status(500).json({
+      message: err.message,
+    });
   }
 };

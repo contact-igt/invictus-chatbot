@@ -12,6 +12,8 @@ import {
   submitWhatsappTemplateController,
   syncAllWhatsappTemplatesController,
   syncWhatsappTemplateStatusController,
+  updateWhatsappTemplateController,
+  resubmitWhatsappTemplateController,
 } from "./whatsapptemplate.controller.js";
 
 const router = express.Router();
@@ -64,6 +66,23 @@ router.get(
   getTemplateByIdController,
 );
 
+
+router.put(
+  "/whatsapp-template/:template_id",
+  authenticate,
+  authorize({ user_type: "tenant", roles: ["tenant_admin", "staff"] }),
+  updateWhatsappTemplateController,
+);
+
+router.post(
+  "/whatsapp-template/:template_id/resubmit",
+  authenticate,
+  authorize({
+    user_type: "tenant",
+    roles: ["tenant_admin", "staff"],
+  }),
+  resubmitWhatsappTemplateController,
+);
 
 router.delete(
   "/whatsapp-template/:template_id/soft",

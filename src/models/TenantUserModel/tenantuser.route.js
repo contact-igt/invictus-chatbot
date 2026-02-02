@@ -27,6 +27,7 @@ Router.post(
 
 Router.post("/tenant-user/login", loginTenantUserController);
 
+
 Router.get(
   "/tenant-users",
   authenticate,

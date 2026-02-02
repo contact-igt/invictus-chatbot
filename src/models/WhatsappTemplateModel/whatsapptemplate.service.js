@@ -4,7 +4,6 @@ import axios from "axios";
 import { getWhatsappAccountByTenantService } from "../WhatsappAccountModel/whatsappAccount.service.js";
 import { generateReadableIdFromLast } from "../../utils/generateReadableIdFromLast.js";
 
-
 const STATUS_MAP = {
   IN_REVIEW: "pending",
   PENDING: "pending",
@@ -44,7 +43,7 @@ export const checkTemplateNameExistsOnMetaService = async (
     // If it's a 404 or specific error saying template not found, return false
     if (err.response?.status === 404) return false;
     console.error("Meta template name check error:", err.message);
-    // On other errors, we might want to throw or allow local creation. 
+    // On other errors, we might want to throw or allow local creation.
     // Usually safest to throw if the check itself failed (e.g. auth issue).
     throw new Error(`Failed to check template name on Meta: ${err.message}`);
   }
@@ -144,6 +143,7 @@ export const createWhatsappTemplateService = async (
     }
 
     for (const variable of variables) {
+      const varKey = variable.key.replace(/[{}]/g, ""); // Strip braces for consistency
       await db.sequelize.query(
         `
         INSERT INTO ${tableNames.WHATSAPP_TEMPLATE_VARIABLES}
@@ -151,7 +151,7 @@ export const createWhatsappTemplateService = async (
         VALUES (?, ?, ?)
         `,
         {
-          replacements: [template_id, variable.key, variable.sample],
+          replacements: [template_id, varKey, variable.sample],
           transaction,
         },
       );
@@ -195,6 +195,37 @@ export const submitWhatsappTemplateService = async ({
     }
 
     // ─────────────────────────────────────────
+    // Validate variable density (Meta requirement)
+    // ─────────────────────────────────────────
+    // Meta requires stricter density: minimum 5 words per variable OR 15 total words
+    const variableCount = (bodyText.match(/{{\d+}}/g) || []).length;
+    const bodyWordCount = bodyText
+      .replace(/{{\d+}}/g, "")
+      .trim()
+      .split(/\s+/)
+      .filter((w) => w.length > 0).length;
+
+    // Meta requires either:
+    // 1. At least 5 words per variable, OR
+    // 2. At least 15 total words
+    const minWordsPerVariable = 5;
+    const minTotalWords = 15;
+    const minRequiredWords = variableCount * minWordsPerVariable;
+
+    if (
+      variableCount > 0 &&
+      bodyWordCount < minRequiredWords &&
+      bodyWordCount < minTotalWords
+    ) {
+      throw new Error(
+        `Template text is too short. You have ${variableCount} variable(s) with only ${bodyWordCount} word(s). ` +
+        `Meta requires either: (a) at least ${minWordsPerVariable} words per variable (${minRequiredWords} total for your template), OR ` +
+        `(b) a minimum of ${minTotalWords} words total. ` +
+        `Please add more descriptive text to your template.`,
+      );
+    }
+
+    // ─────────────────────────────────────────
     // Build Meta components
     // ─────────────────────────────────────────
     const metaComponents = [];
@@ -209,8 +240,13 @@ export const submitWhatsappTemplateService = async ({
       };
 
       // If text header has variables, we need examples
-      if (headerObj.format === "TEXT" && header.text_content?.includes("{{1}}")) {
-        const headerVar = variables.find(v => v.variable_key === "1" || v.variable_key === "header_1");
+      if (
+        headerObj.format === "TEXT" &&
+        header.text_content?.includes("{{1}}")
+      ) {
+        const headerVar = variables.find(
+          (v) => v.variable_key === "1" || v.variable_key === "header_1",
+        );
         if (headerVar) {
           headerObj.example = { header_text: [headerVar.sample_value] };
         }
@@ -219,30 +255,79 @@ export const submitWhatsappTemplateService = async ({
     }
 
     // BODY
-    const sortedVariables = variables
-      .sort((a, b) => a.variable_key.localeCompare(b.variable_key))
+    // Sort ALL variables numerically by their key (1, 2, 3, etc.)
+    if (!variables || variables.length === 0) {
+      console.error(
+        "❌ No variables found for template:",
+        template.template_id,
+      );
+    }
+
+    const sortedVariables = (variables || [])
+      .sort((a, b) => parseInt(a.variable_key) - parseInt(b.variable_key))
       .map((v) => v.sample_value);
+
+    console.log("📊 Variables Debug:", {
+      template_id: template.template_id,
+      variables_count: (variables || []).length,
+      sorted_variables_count: sortedVariables.length,
+      sorted_variables: sortedVariables,
+      variables_raw: variables,
+    });
 
     // Calculate total placeholders across all components
     let totalPlaceholderCount = (bodyText.match(/{{\d+}}/g) || []).length;
     if (header && header.header_format === "text" && header.text_content) {
-      totalPlaceholderCount += (header.text_content.match(/{{\d+}}/g) || []).length;
+      totalPlaceholderCount += (header.text_content.match(/{{\d+}}/g) || [])
+        .length;
     }
 
-    if (totalPlaceholderCount !== sortedVariables.length) {
-      throw new Error(`Variable count mismatch: expected ${totalPlaceholderCount} but got ${sortedVariables.length}`);
+    // Also count variables in footer
+    const footer = components.find((c) => c.component_type === "footer");
+    if (footer && footer.text_content) {
+      totalPlaceholderCount += (footer.text_content.match(/{{\d+}}/g) || [])
+        .length;
     }
 
-    metaComponents.push({
-      type: "BODY",
-      text: bodyText,
-      example: {
-        body_text: [sortedVariables],
-      },
+    if (totalPlaceholderCount !== variables.length) {
+      throw new Error(
+        `Variable count mismatch: expected ${totalPlaceholderCount} but got ${variables.length}`,
+      );
+    }
+
+    // Extract only variables used in BODY text for the example field
+    const bodyVariablesMatch = bodyText.match(/{{\d+}}/g) || [];
+    const bodyVariableKeys = bodyVariablesMatch.map((match) =>
+      parseInt(match.replace(/[{}]/g, "")),
+    );
+    const bodyVariablesExample = bodyVariableKeys.map(
+      (key) => sortedVariables[key - 1],
+    );
+
+    console.log("📊 BODY Variables Example:", {
+      bodyVariableKeys,
+      bodyVariablesExample,
     });
 
+    const bodyComponent = {
+      type: "BODY",
+      text: bodyText,
+    };
+
+    // ⚠️ Meta API requires examples for ALL variables in the body
+    // Format must be an array of arrays: [[val1, val2, val3]]
+    if (bodyVariablesExample.length > 0) {
+      bodyComponent.example = {
+        body_text: [bodyVariablesExample],
+      };
+      console.log(
+        `✅ Added example for BODY with ${bodyVariablesExample.length} variable(s)`,
+      );
+    }
+
+    metaComponents.push(bodyComponent);
+
     // FOOTER (optional)
-    const footer = components.find((c) => c.component_type === "footer");
     if (footer) {
       metaComponents.push({
         type: "FOOTER",
@@ -261,19 +346,60 @@ export const submitWhatsappTemplateService = async ({
       components: metaComponents,
     };
 
+    console.log(
+      "🚀 Meta Payload being sent:",
+      JSON.stringify(payload, null, 2),
+    );
+
+    console.log("📋 BODY Component Details:", {
+      bodyComponent: metaComponents.find((c) => c.type === "BODY"),
+      bodyComponentString: JSON.stringify(
+        metaComponents.find((c) => c.type === "BODY"),
+      ),
+    });
+
+    // Debug: Validate payload structure
+    console.log("🔍 Payload Structure Validation:", {
+      hasComponents: !!payload.components,
+      componentCount: payload.components?.length,
+      bodyComponentIndex: payload.components?.findIndex(
+        (c) => c.type === "BODY",
+      ),
+      bodyComponentHasExample: !!payload.components?.find(
+        (c) => c.type === "BODY",
+      )?.example,
+    });
+
     // ─────────────────────────────────────────
     // Submit to Meta
     // ─────────────────────────────────────────
-    const response = await axios.post(
-      `https://graph.facebook.com/v23.0/${whatsappAccount.waba_id}/message_templates`,
-      payload,
-      {
-        headers: {
-          Authorization: `Bearer ${whatsappAccount.access_token}`,
-          "Content-Type": "application/json",
+    let response;
+    try {
+      console.log("🔐 Meta Account Details:", {
+        waba_id: whatsappAccount?.waba_id,
+        access_token_exists: !!whatsappAccount?.access_token,
+        access_token_length: whatsappAccount?.access_token?.length,
+        access_token_first_20: whatsappAccount?.access_token?.substring(0, 20),
+      });
+
+      response = await axios.post(
+        `https://graph.facebook.com/v24.0/${whatsappAccount.waba_id}/message_templates`,
+        payload,
+        {
+          headers: {
+            Authorization: `Bearer ${whatsappAccount.access_token}`,
+            "Content-Type": "application/json",
+          },
         },
-      },
-    );
+      );
+    } catch (metaErr) {
+      console.error("❌ Meta API Error Response:", {
+        status: metaErr.response?.status,
+        data: metaErr.response?.data,
+        headers: metaErr.response?.headers,
+      });
+      throw metaErr;
+    }
 
     const metaTemplateId = response.data.id;
     const metaStatus = response.data.status || "IN_REVIEW";
@@ -327,7 +453,12 @@ export const submitWhatsappTemplateService = async ({
       err.response?.data?.error?.message ||
       err.message;
 
-    throw new Error(`Template submission failed: ${metaMsg}`);
+    // Enhance error object with Meta details for the controller to handle
+    const error = new Error(`Template submission failed: ${metaMsg}`);
+    if (err.response?.data?.error) {
+      error.metaError = err.response.data.error;
+    }
+    throw error;
   }
 };
 
@@ -492,7 +623,8 @@ export const getTemplateByIdService = async (template_id, tenant_id) => {
     is_submitted: !!template.meta_template_id,
     can_edit: ["draft", "rejected"].includes(template.status),
     can_submit: template.status === "draft",
-    display_status: template.status.charAt(0).toUpperCase() + template.status.slice(1),
+    display_status:
+      template.status.charAt(0).toUpperCase() + template.status.slice(1),
     components,
     variables,
     logs,
@@ -531,7 +663,7 @@ export const pullTemplatesFromMetaService = async (tenant_id) => {
       // Check if exists (including soft-deleted)
       const [[existing]] = await db.sequelize.query(
         `SELECT * FROM ${tableNames.WHATSAPP_TEMPLATE} WHERE (meta_template_id = ? OR (tenant_id = ? AND template_name = ?))`,
-        { replacements: [metaT.id, tenant_id, metaT.name], transaction }
+        { replacements: [metaT.id, tenant_id, metaT.name], transaction },
       );
 
       if (existing) {
@@ -544,13 +676,20 @@ export const pullTemplatesFromMetaService = async (tenant_id) => {
         if (existing.status !== localStatus || !existing.meta_template_id) {
           await db.sequelize.query(
             `UPDATE ${tableNames.WHATSAPP_TEMPLATE} SET status = ?, meta_template_id = ? WHERE template_id = ?`,
-            { replacements: [localStatus, metaT.id, existing.template_id], transaction }
+            {
+              replacements: [localStatus, metaT.id, existing.template_id],
+              transaction,
+            },
           );
           syncedCount.updated++;
         }
       } else {
         // Import new template
-        const template_id = await generateReadableIdFromLast(tableNames.WHATSAPP_TEMPLATE, "template_id", "WT");
+        const template_id = await generateReadableIdFromLast(
+          tableNames.WHATSAPP_TEMPLATE,
+          "template_id",
+          "WT",
+        );
 
         await db.sequelize.query(
           `INSERT INTO ${tableNames.WHATSAPP_TEMPLATE} 
@@ -565,10 +704,10 @@ export const pullTemplatesFromMetaService = async (tenant_id) => {
               metaT.language,
               localStatus,
               metaT.id,
-              "system" // Imported
+              "system", // Imported
             ],
-            transaction
-          }
+            transaction,
+          },
         );
 
         // Import components
@@ -577,27 +716,31 @@ export const pullTemplatesFromMetaService = async (tenant_id) => {
           let format = comp.format ? comp.format.toLowerCase() : null;
           let type = comp.type.toLowerCase();
 
-          if (type === 'body' || type === 'footer' || type === 'header') {
+          if (type === "body" || type === "footer" || type === "header") {
             await db.sequelize.query(
               `INSERT INTO ${tableNames.WHATSAPP_TEMPLATE_COMPONENTS}
                 (template_id, component_type, header_format, text_content)
                 VALUES (?, ?, ?, ?)`,
               {
                 replacements: [template_id, type, format, text],
-                transaction
-              }
+                transaction,
+              },
             );
 
             // Extract variables from body or text header
-            if ((type === 'body' || (type === 'header' && format === 'text')) && text) {
+            if (
+              (type === "body" || (type === "header" && format === "text")) &&
+              text
+            ) {
               const matches = text.match(/{{\d+}}/g);
               if (matches) {
                 const uniqueVars = [...new Set(matches)];
                 for (const vKey of uniqueVars) {
+                  const varKey = vKey.replace(/[{}]/g, "");
                   // Only insert if not already present for this template (in case same var key in header and body)
                   const [[existingVar]] = await db.sequelize.query(
                     `SELECT * FROM ${tableNames.WHATSAPP_TEMPLATE_VARIABLES} WHERE template_id = ? AND variable_key = ?`,
-                    { replacements: [template_id, vKey.replace(/[{}]/g, '')], transaction }
+                    { replacements: [template_id, varKey], transaction },
                   );
 
                   if (!existingVar) {
@@ -606,9 +749,9 @@ export const pullTemplatesFromMetaService = async (tenant_id) => {
                         (template_id, variable_key, sample_value)
                         VALUES (?, ?, ?)`,
                       {
-                        replacements: [template_id, vKey.replace(/[{}]/g, ''), 'Sample Data'],
-                        transaction
-                      }
+                        replacements: [template_id, varKey, "Sample Data"],
+                        transaction,
+                      },
                     );
                   }
                 }
@@ -622,7 +765,6 @@ export const pullTemplatesFromMetaService = async (tenant_id) => {
 
     await transaction.commit();
     return syncedCount;
-
   } catch (err) {
     await transaction.rollback();
     throw new Error(`Pull from Meta failed: ${err.message}`);
@@ -652,6 +794,19 @@ export const softDeleteTemplateService = async (template_id, tenant_id) => {
       },
     );
 
+    // Log the soft delete action
+    await db.sequelize.query(
+      `
+      INSERT INTO ${tableNames.WHATSAPP_TEMPLATE_SYNC_LOGS}
+      (template_id, action, meta_status)
+      VALUES (?, 'soft_delete', ?)
+      `,
+      {
+        replacements: [template_id, template.status],
+        transaction,
+      },
+    );
+
     await transaction.commit();
     return true;
   } catch (err) {
@@ -660,7 +815,10 @@ export const softDeleteTemplateService = async (template_id, tenant_id) => {
   }
 };
 
-export const permanentDeleteTemplateService = async (template_id, tenant_id) => {
+export const permanentDeleteTemplateService = async (
+  template_id,
+  tenant_id,
+) => {
   const transaction = await db.sequelize.transaction();
   try {
     const whatsappAccount = await getWhatsappAccountByTenantService(tenant_id);
@@ -679,26 +837,32 @@ export const permanentDeleteTemplateService = async (template_id, tenant_id) => 
 
     // Deletion from Meta is mandatory for permanent delete
     if (!whatsappAccount || whatsappAccount.status !== "active") {
-      throw new Error("Active WhatsApp account required for permanent deletion from Meta");
-    }
-
-    if (!template.template_name) {
-      throw new Error("Template name is missing, cannot delete from Meta");
-    }
-
-    try {
-      await axios.delete(
-        `https://graph.facebook.com/v23.0/${whatsappAccount.waba_id}/message_templates`,
-        {
-          params: { name: template.template_name },
-          headers: { Authorization: `Bearer ${whatsappAccount.access_token}` },
-        }
+      throw new Error(
+        "Active WhatsApp account required for permanent deletion from Meta",
       );
-    } catch (metaErr) {
-      // If 404, template doesn't exist on Meta, which is fine for us
-      if (metaErr.response?.status !== 404) {
-        const metaMsg = metaErr.response?.data?.error?.message || metaErr.message;
-        throw new Error(`Failed to delete from Meta: ${metaMsg}`);
+    }
+
+    // Only delete from Meta if template was submitted (has meta_template_id and template_name)
+    if (template.meta_template_id && template.template_name) {
+      try {
+        // Use WABA endpoint with template name - this is the correct Meta API for deletion
+        await axios.delete(
+          `https://graph.facebook.com/v23.0/${whatsappAccount.waba_id}/message_templates`,
+          {
+            params: { name: template.template_name },
+            headers: {
+              Authorization: `Bearer ${whatsappAccount.access_token}`,
+            },
+          },
+        );
+      } catch (metaErr) {
+        // If 404 or other errors, log but don't fail - local deletion is more important
+        console.error(
+          "Meta template deletion warning:",
+          metaErr.response?.data?.error?.message || metaErr.message,
+        );
+        // Don't throw - we still want to delete from local DB
+        // Meta deletion is a courtesy, local DB deletion is mandatory
       }
     }
 
@@ -707,23 +871,224 @@ export const permanentDeleteTemplateService = async (template_id, tenant_id) => 
 
     await db.sequelize.query(
       `DELETE FROM ${tableNames.WHATSAPP_TEMPLATE_COMPONENTS} WHERE template_id = ?`,
-      tableReplacements
+      tableReplacements,
     );
     await db.sequelize.query(
       `DELETE FROM ${tableNames.WHATSAPP_TEMPLATE_VARIABLES} WHERE template_id = ?`,
-      tableReplacements
+      tableReplacements,
     );
     await db.sequelize.query(
       `DELETE FROM ${tableNames.WHATSAPP_TEMPLATE_SYNC_LOGS} WHERE template_id = ?`,
-      tableReplacements
+      tableReplacements,
     );
     await db.sequelize.query(
       `DELETE FROM ${tableNames.WHATSAPP_TEMPLATE} WHERE template_id = ?`,
-      tableReplacements
+      tableReplacements,
     );
 
     await transaction.commit();
-    return true;
+    return { success: true, message: "Template permanently deleted" };
+  } catch (err) {
+    await transaction.rollback();
+    throw err;
+  }
+};
+
+export const updateWhatsappTemplateService = async (
+  template_id,
+  tenant_id,
+  template_name,
+  category,
+  language,
+  components,
+  variables,
+) => {
+  const transaction = await db.sequelize.transaction();
+
+  try {
+    // Fetch current template
+    const [[template]] = await db.sequelize.query(
+      `SELECT * FROM ${tableNames.WHATSAPP_TEMPLATE} WHERE template_id = ? AND tenant_id = ? AND is_deleted = false`,
+      { replacements: [template_id, tenant_id], transaction },
+    );
+
+    if (!template) {
+      throw new Error("Template not found");
+    }
+
+    // Only allow editing draft, rejected, paused
+    if (!["draft", "rejected", "paused"].includes(template.status)) {
+      throw new Error(
+        `Cannot edit template with status: ${template.status}. Only draft, rejected, or paused templates can be edited.`,
+      );
+    }
+
+    // Validate body component
+    if (!components?.body?.text) {
+      throw new Error("Body component text is required");
+    }
+
+    const bodyText = components.body.text.trim();
+
+    // Meta rules for body text
+    if (/^{{\d+}}/.test(bodyText)) {
+      throw new Error("Body cannot start with a variable");
+    }
+
+    if (/{{\d+}}[.!?,]*$/.test(bodyText)) {
+      throw new Error("Body cannot end with a variable");
+    }
+
+    // Update main template
+    await db.sequelize.query(
+      `
+      UPDATE ${tableNames.WHATSAPP_TEMPLATE}
+      SET template_name = ?, category = ?, language = ?, updated_by = ?
+      WHERE template_id = ? AND is_deleted = false
+      `,
+      {
+        replacements: [
+          template_name || template.template_name,
+          category || template.category,
+          language || template.language,
+          template.updated_by,
+          template_id,
+        ],
+        transaction,
+      },
+    );
+
+    // Delete and recreate components
+    await db.sequelize.query(
+      `DELETE FROM ${tableNames.WHATSAPP_TEMPLATE_COMPONENTS} WHERE template_id = ?`,
+      { replacements: [template_id], transaction },
+    );
+
+    // Insert new body component
+    await db.sequelize.query(
+      `
+      INSERT INTO ${tableNames.WHATSAPP_TEMPLATE_COMPONENTS}
+      (template_id, component_type, text_content)
+      VALUES (?, 'body', ?)
+      `,
+      { replacements: [template_id, components.body.text], transaction },
+    );
+
+    // Insert header if provided
+    if (components.header) {
+      await db.sequelize.query(
+        `
+        INSERT INTO ${tableNames.WHATSAPP_TEMPLATE_COMPONENTS}
+        (template_id, component_type, header_format, text_content)
+        VALUES (?, 'header', ?, ?)
+        `,
+        {
+          replacements: [
+            template_id,
+            components.header.format || "text",
+            components.header.text || null,
+          ],
+          transaction,
+        },
+      );
+    }
+
+    // Insert footer if provided
+    if (components.footer) {
+      await db.sequelize.query(
+        `
+        INSERT INTO ${tableNames.WHATSAPP_TEMPLATE_COMPONENTS}
+        (template_id, component_type, text_content)
+        VALUES (?, 'footer', ?)
+        `,
+        {
+          replacements: [template_id, components.footer.text || null],
+          transaction,
+        },
+      );
+    }
+
+    // Delete and recreate variables
+    await db.sequelize.query(
+      `DELETE FROM ${tableNames.WHATSAPP_TEMPLATE_VARIABLES} WHERE template_id = ?`,
+      { replacements: [template_id], transaction },
+    );
+
+    // Auto-extract variables from body text (bodyText already defined above)
+    const extractedVariables = new Map(); // Use Map to avoid duplicates
+
+    // Extract {{1}}, {{2}}, etc. from body
+    const matches = bodyText.match(/{{\d+}}/g);
+    if (matches) {
+      const uniqueMatches = [...new Set(matches)];
+      for (const match of uniqueMatches) {
+        const varKey = match.replace(/[{}]/g, "");
+        if (!extractedVariables.has(varKey)) {
+          extractedVariables.set(varKey, "Sample Data");
+        }
+      }
+    }
+
+    // Extract from header if provided
+    if (components.header?.text) {
+      const headerMatches = components.header.text.match(/{{\d+}}/g);
+      if (headerMatches) {
+        const uniqueMatches = [...new Set(headerMatches)];
+        for (const match of uniqueMatches) {
+          const varKey = match.replace(/[{}]/g, "");
+          if (!extractedVariables.has(varKey)) {
+            extractedVariables.set(varKey, "Sample Data");
+          }
+        }
+      }
+    }
+
+    // Merge with manually provided variables (manual ones override extracted)
+    if (variables && Array.isArray(variables)) {
+      for (const variable of variables) {
+        const varKey = variable.key.replace(/[{}]/g, ""); // Clean up key
+        extractedVariables.set(varKey, variable.sample);
+      }
+    }
+
+    // Insert all variables
+    for (const [varKey, sampleValue] of extractedVariables) {
+      await db.sequelize.query(
+        `
+        INSERT INTO ${tableNames.WHATSAPP_TEMPLATE_VARIABLES}
+        (template_id, variable_key, sample_value)
+        VALUES (?, ?, ?)
+        `,
+        {
+          replacements: [template_id, varKey, sampleValue],
+          transaction,
+        },
+      );
+    }
+
+    // Log the update action
+    await db.sequelize.query(
+      `
+      INSERT INTO ${tableNames.WHATSAPP_TEMPLATE_SYNC_LOGS}
+      (template_id, action, meta_status)
+      VALUES (?, 'update', ?)
+      `,
+      {
+        replacements: [template_id, template.status],
+        transaction,
+      },
+    );
+
+    await transaction.commit();
+
+    return {
+      template_id,
+      template_name: template_name || template.template_name,
+      category: category || template.category,
+      language: language || template.language,
+      status: template.status,
+      message: "Template updated successfully",
+    };
   } catch (err) {
     await transaction.rollback();
     throw err;

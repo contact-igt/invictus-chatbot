@@ -17,7 +17,7 @@ export const generateAccessToken = (user) => {
       role: user.role,
     },
     ServerEnvironmentConfig.jwt_key,
-    { expiresIn: "15m" },
+    { expiresIn: "24h" },
   );
 };
 
@@ -88,7 +88,7 @@ export const authenticate = async (req, res, next) => {
     if (decoded.user_type === "tenant") {
       const user = await findTenantUserByIdService(decoded.unique_id);
 
-      console.log("tenatdecose" , user)
+      console.log("tenatdecose", user)
 
 
       if (!user) {
