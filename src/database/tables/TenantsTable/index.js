@@ -29,7 +29,6 @@ export const TenantsTable = (sequelize, Sequelize) => {
       owner_email: {
         type: Sequelize.STRING,
         allowNull: false,
-        unique: true,
         validate: { isEmail: true },
       },
 
@@ -41,7 +40,6 @@ export const TenantsTable = (sequelize, Sequelize) => {
       owner_mobile: {
         type: Sequelize.STRING,
         allowNull: true,
-        unique: true,
       },
 
       type: {

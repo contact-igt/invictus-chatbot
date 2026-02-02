@@ -9,10 +9,10 @@ import {
 } from "./contacts.service.js";
 
 export const createContactController = async (req, res) => {
-  const { tenant_id, phone, name, profile_pic } = req.body;
+  const tenant_id = req.user.tenant_id; // Get from authenticated user
+  const { phone, name, profile_pic } = req.body;
 
   const requiredFields = {
-    tenant_id,
     phone,
   };
 
@@ -24,26 +24,26 @@ export const createContactController = async (req, res) => {
   }
 
   try {
-    const checkDoubeUser = await getContactByPhoneAndTenantIdService(
+    const existingContact = await getContactByPhoneAndTenantIdService(
       tenant_id,
       phone,
     );
 
-    if (checkDoubeUser?.length > 0) {
-      return res.status(404).send({
-        message: "This contact already created",
+    if (existingContact) {
+      return res.status(409).send({
+        message: "This contact already exists",
       });
     }
 
     await createContactService(
       tenant_id,
       phone,
-      name ? name : null,
-      profile_pic ? profile_pic : null,
+      name || null,
+      profile_pic || null,
     );
 
-    return res.status(200).send({
-      message: "success",
+    return res.status(201).send({
+      message: "Contact created successfully",
     });
   } catch (err) {
     return res.status(500).send({

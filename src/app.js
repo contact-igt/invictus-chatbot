@@ -21,6 +21,7 @@ import TenantInvitationRouter from "./models/TenantInvitationModel/tenantinvitat
 import TenantUserRouter from "./models/TenantUserModel/tenantuser.route.js"
 import WhatsappTemplateRouter from "./models/WhatsappTemplateModel/whatsapptemplate.routes.js"
 import WhatsappCampaignRouter from "./models/WhatsappCampaignModel/whatsappcampaign.routes.js"
+import ContactGroupRouter from "./models/ContactGroupModel/contactGroup.routes.js"
 import { startCampaignSchedulerService } from "./models/WhatsappCampaignModel/whatsappcampaign.service.js";
 import { startLeadHeatDecayCronService } from "./models/LeadsModel/leads.service.js";
 import { startLiveChatCleanupService } from "./models/LiveChatModel/livechat.service.js";
@@ -60,7 +61,8 @@ app.use(
   TenantInvitationRouter,
   TenantUserRouter,
   WhatsappTemplateRouter,
-  WhatsappCampaignRouter
+  WhatsappCampaignRouter,
+  ContactGroupRouter
 );
 
 startLeadHeatDecayCronService();
@@ -71,7 +73,9 @@ app.get("/", (req, res) => {
   res.json({ status: "OK" });
 });
 
-await db.sequelize.sync({ alter: true });
+
+
+await db.sequelize.sync(); // Removed { alter: true } to prevent duplicate indexes
 console.log("DB connected");
 
 const PORT = process.env.PORT || 8000;

@@ -6,11 +6,19 @@ import cron from "node-cron";
 
 /**
  * Creates a new campaign and populates its recipients.
+ * Supports three audience types: manual, group, csv
  */
 export const createCampaignService = async (tenant_id, data, created_by) => {
     const transaction = await db.sequelize.transaction();
     try {
-        const { campaign_name, campaign_type, template_id, recipients, scheduled_at } = data;
+        const {
+            campaign_name,
+            campaign_type,
+            template_id,
+            audience_type, // "manual" | "group" | "csv"
+            audience_data, // Array of recipients OR group_id
+            scheduled_at
+        } = data;
 
         // 1. Generate Campaign ID
         const campaign_id = await generateReadableIdFromLast(
@@ -20,7 +28,47 @@ export const createCampaignService = async (tenant_id, data, created_by) => {
             5
         );
 
-        // 2. Create Campaign Record
+        // 2. Resolve recipients based on audience_type
+        let recipients = [];
+
+        if (audience_type === "manual" || audience_type === "csv") {
+            // Manual: Frontend sends array of { mobile_number, name?, dynamic_variables?: [...] }
+            // CSV: Frontend parses CSV and sends same format
+            recipients = audience_data.map((item) => ({
+                mobile_number: item.mobile_number,
+                contact_id: item.contact_id || null,
+                dynamic_variables: item.dynamic_variables || null, // e.g., ['John', '10:00 AM']
+            }));
+        } else if (audience_type === "group") {
+            // Group: Fetch all members from the group
+            const group_id = audience_data; // audience_data is just the group_id string
+
+            const groupMembers = await db.ContactGroupMembers.findAll({
+                where: { group_id, tenant_id },
+                include: [
+                    {
+                        model: db.Contacts,
+                        as: "contact",
+                        attributes: ["contact_id", "phone", "name"],
+                        where: { is_deleted: false },
+                    },
+                ],
+            });
+
+            if (groupMembers.length === 0) {
+                throw new Error("Group has no members or does not exist");
+            }
+
+            recipients = groupMembers.map((member) => ({
+                mobile_number: member.contact.phone,
+                contact_id: member.contact.contact_id,
+                dynamic_variables: null, // Groups don't have per-contact variables by default
+            }));
+        } else {
+            throw new Error("Invalid audience_type. Must be 'manual', 'group', or 'csv'");
+        }
+
+        // 3. Create Campaign Record
         const campaign = await db.WhatsappCampaigns.create(
             {
                 campaign_id,
@@ -36,11 +84,12 @@ export const createCampaignService = async (tenant_id, data, created_by) => {
             { transaction }
         );
 
-        // 3. Bulk Create Recipients
+        // 4. Bulk Create Recipients with dynamic_variables
         const recipientData = recipients.map((r) => ({
             campaign_id,
             mobile_number: r.mobile_number,
             contact_id: r.contact_id || null,
+            dynamic_variables: r.dynamic_variables, // Store the array of values
             status: "pending",
         }));
 
@@ -147,12 +196,15 @@ export const executeCampaignBatchService = async (campaign_id, tenant_id, batchS
 
     for (const recipient of recipients) {
         try {
+            // Use dynamic_variables if available, otherwise send empty array
+            const variables = recipient.dynamic_variables || [];
+
             const response = await sendWhatsAppTemplate(
                 tenant_id,
                 recipient.mobile_number,
                 campaign.template.template_name,
                 campaign.template.language,
-                [] // TODO: Support dynamic variables from CSV/Group later
+                variables // Now supports dynamic variables like ['John', '10:00 AM']
             );
 
             await recipient.update({

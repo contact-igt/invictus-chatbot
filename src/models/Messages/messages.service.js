@@ -79,7 +79,7 @@ export const getChatListService = async (tenant_id) => {
     ON m.contact_id = lm.contact_id
    AND m.created_at = lm.last_message_time
   JOIN contacts c
-    ON c.id = m.contact_id
+    ON c.contact_id = m.contact_id
   LEFT JOIN ${tableNames.LIVECHAT} lc
     ON lc.contact_id = m.contact_id
    AND lc.tenant_id = ?

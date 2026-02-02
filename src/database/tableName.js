@@ -14,6 +14,8 @@ export const tableNames = {
   KNOWLEDGECHUNKS: "knowledge_chunks",
   AIPROMPT: "ai_prompts",
   CONTACTS: "contacts",
+  CONTACT_GROUPS: "contact_groups",
+  CONTACT_GROUP_MEMBERS: "contact_group_members",
   MESSAGES: "messages",
   PROCESSEDMESSAGE: "processed_messages",
   CHATLOCKS: "chat_locks",

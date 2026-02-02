@@ -1,8 +1,8 @@
 import { tableNames } from "../../tableName.js";
 
-export const WhatsappCampaignRecipientTable = (sequelize, Sequelize) => {
+export const ContactGroupTable = (sequelize, Sequelize) => {
     return sequelize.define(
-        tableNames.WHATSAPP_CAMPAIGN_RECIPIENT,
+        tableNames.CONTACT_GROUPS,
         {
             id: {
                 type: Sequelize.INTEGER,
@@ -11,46 +11,30 @@ export const WhatsappCampaignRecipientTable = (sequelize, Sequelize) => {
                 primaryKey: true,
             },
 
-            campaign_id: {
+            group_id: {
                 type: Sequelize.STRING,
                 allowNull: false,
             },
 
-            contact_id: {
-                type: Sequelize.STRING,
-                allowNull: true,
-            },
-
-            mobile_number: {
+            tenant_id: {
                 type: Sequelize.STRING,
                 allowNull: false,
             },
 
-            status: {
-                type: Sequelize.ENUM("pending", "sent", "delivered", "read", "failed"),
-                defaultValue: "pending",
+            group_name: {
+                type: Sequelize.STRING,
                 allowNull: false,
             },
 
-            meta_message_id: {
-                type: Sequelize.STRING,
-                allowNull: true,
-            },
-
-            error_message: {
+            description: {
                 type: Sequelize.TEXT,
                 allowNull: true,
-            },
-
-            dynamic_variables: {
-                type: Sequelize.JSON,
-                allowNull: true,
-                comment: "Array of variable values for template placeholders, e.g., ['John', '10:00 AM']",
             },
 
             is_deleted: {
                 type: Sequelize.BOOLEAN,
                 defaultValue: false,
+                allowNull: false,
             },
 
             deleted_at: {
@@ -68,32 +52,29 @@ export const WhatsappCampaignRecipientTable = (sequelize, Sequelize) => {
             updatedAt: {
                 type: Sequelize.DATE,
                 allowNull: false,
-                defaultValue: sequelize.literal(
-                    "CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP",
-                ),
                 field: "updated_at",
             },
         },
+
+
         {
-            tableName: tableNames.WHATSAPP_CAMPAIGN_RECIPIENT,
+            tableName: tableNames.CONTACT_GROUPS,
             timestamps: true,
             underscored: true,
             indexes: [
                 {
-                    name: "idx_recipient_campaign",
-                    fields: ["campaign_id"],
+                    name: "unique_group_id",
+                    unique: true,
+                    fields: ["group_id"],
                 },
                 {
-                    name: "idx_recipient_status",
-                    fields: ["status"],
+                    name: "unique_tenant_group_name",
+                    unique: true,
+                    fields: ["tenant_id", "group_name", "is_deleted"],
                 },
                 {
-                    name: "idx_recipient_meta_id",
-                    fields: ["meta_message_id"],
-                },
-                {
-                    name: "idx_recipient_mobile",
-                    fields: ["mobile_number"],
+                    name: "idx_tenant_group",
+                    fields: ["tenant_id", "is_deleted"],
                 },
             ],
         },

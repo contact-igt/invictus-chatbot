@@ -10,7 +10,7 @@ export const LiveChatTable = (sequelize, Sequelize) => {
       },
 
       contact_id: {
-        type: Sequelize.INTEGER,
+        type: Sequelize.STRING,
         allowNull: false,
       },
 

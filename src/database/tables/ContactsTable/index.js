@@ -4,6 +4,18 @@ export const ContactsTable = (sequelize, Sequelize) => {
   return sequelize.define(
     tableNames.CONTACTS,
     {
+      id: {
+        type: Sequelize.INTEGER,
+        allowNull: false,
+        autoIncrement: true,
+        primaryKey: true,
+      },
+
+      contact_id: {
+        type: Sequelize.STRING,
+        allowNull: false,
+      },
+
       tenant_id: {
         type: Sequelize.STRING,
         allowNull: false,
@@ -77,6 +89,11 @@ export const ContactsTable = (sequelize, Sequelize) => {
       timestamps: true,
       underscored: true,
       indexes: [
+        {
+          name: "unique_contact_id",
+          unique: true,
+          fields: ["contact_id"],
+        },
         {
           name: "unique_contact_phone_tenant",
           unique: true,

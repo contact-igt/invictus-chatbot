@@ -21,7 +21,11 @@ import {
   getLeadByPhoneService,
   updateLeadService,
 } from "../LeadsModel/leads.service.js";
-import { createLiveChatService, getLivechatByIdService } from "../LiveChatModel/livechat.service.js";
+import {
+  createLiveChatService,
+  getLivechatByIdService,
+  updateLiveChatTimestampService
+} from "../LiveChatModel/livechat.service.js";
 
 export const verifyWebhook = (req, res) => {
   const mode = req.query["hub.mode"];
@@ -92,15 +96,19 @@ export const receiveMessage = async (req, res) => {
       );
     }
 
-    const livelist = await getLivechatByIdService(tenant_id, contactsaved?.id);
+    const livelist = await getLivechatByIdService(tenant_id, contactsaved?.contact_id);
 
     if (!livelist) {
-      await createLiveChatService(tenant_id, contactsaved?.id);
+      // Create new live chat entry
+      await createLiveChatService(tenant_id, contactsaved?.contact_id);
+    } else {
+      // Update timestamp to reset 24-hour window
+      await updateLiveChatTimestampService(tenant_id, contactsaved?.contact_id);
     }
 
     await createUserMessageService(
       tenant_id,
-      contactsaved?.id,
+      contactsaved?.contact_id,
       phone_number_id,
       phone,
       messageId,
@@ -110,11 +118,11 @@ export const receiveMessage = async (req, res) => {
       text,
     );
 
-    let leadSaved = await getLeadByPhoneService(tenant_id, contactsaved?.id);
+    let leadSaved = await getLeadByPhoneService(tenant_id, contactsaved?.contact_id);
 
     if (!leadSaved) {
-      await createLeadService(tenant_id, contactsaved?.id);
-      leadSaved = await getLeadByPhoneService(tenant_id, contactsaved?.id);
+      await createLeadService(tenant_id, contactsaved?.contact_id);
+      leadSaved = await getLeadByPhoneService(tenant_id, contactsaved?.contact_id);
     }
 
     await updateLeadService(tenant_id, leadSaved?.contact_id);
@@ -153,10 +161,10 @@ export const receiveMessage = async (req, res) => {
 
           await createUserMessageService(
             tenant_id,
-            contactsaved?.id,
+            contactsaved?.contact_id,
             phone_number_id,
             phone,
-            messageId,
+            null, // Bot messages should not use user messageId as wamid
             name,
             "bot",
             null,
@@ -181,10 +189,10 @@ export const receiveMessage = async (req, res) => {
 
         await createUserMessageService(
           tenant_id,
-          contactsaved?.id,
+          contactsaved?.contact_id,
           phone_number_id,
           phone,
-          messageId,
+          null, // Bot messages should not use user messageId as wamid
           name,
           "bot",
           null,

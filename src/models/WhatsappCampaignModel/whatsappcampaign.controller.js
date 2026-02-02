@@ -7,7 +7,7 @@ import {
 
 export const createCampaignController = async (req, res) => {
     const tenant_id = req.user.tenant_id;
-    const created_by = req.user.user_id || "system";
+    const created_by = req.user.unique_id || "system";
 
     try {
         const campaign = await createCampaignService(tenant_id, req.body, created_by);

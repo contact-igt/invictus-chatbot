@@ -21,6 +21,8 @@ import { WhatsappTemplateSyncLogTable } from "./tables/WhatsappTemplateSyncLogsT
 import { WhatsappAccountTable } from "./tables/WhatsappAccountTable/index.js";
 import { WhatsappCampaignTable } from "./tables/WhatsappCampaignTable/index.js";
 import { WhatsappCampaignRecipientTable } from "./tables/WhatsappCampaignRecipientTable/index.js";
+import { ContactGroupTable } from "./tables/ContactGroupTable/index.js";
+import { ContactGroupMemberTable } from "./tables/ContactGroupMemberTable/index.js";
 import { SequencesTable } from "./tables/SequencesTable/index.js";
 
 
@@ -87,6 +89,8 @@ db.KnowledgeSources = KnowledgeSourcesTable(sequelize, Sequelize);
 db.KnowledgeChunks = KnowledgeChunksTable(sequelize, Sequelize);
 db.AiPrompt = AiPromptTable(sequelize, Sequelize);
 db.Contacts = ContactsTable(sequelize, Sequelize);
+db.ContactGroups = ContactGroupTable(sequelize, Sequelize);
+db.ContactGroupMembers = ContactGroupMemberTable(sequelize, Sequelize);
 db.Messages = MessagesTable(sequelize, Sequelize);
 db.ProcessedMessage = ProcessedMessagesTable(sequelize, Sequelize);
 db.ChatLocks = ChatLocksTable(sequelize, Sequelize);
@@ -371,6 +375,48 @@ db.WhatsappCampaigns.belongsTo(db.WhatsappTemplates, {
   foreignKey: "template_id",
   targetKey: "template_id",
   as: "template",
+  constraints: false
+});
+
+// Tenant -> ContactGroups (One-to-Many)
+db.Tenants.hasMany(db.ContactGroups, {
+  foreignKey: "tenant_id",
+  sourceKey: "tenant_id",
+  as: "contactGroups",
+  constraints: false
+});
+db.ContactGroups.belongsTo(db.Tenants, {
+  foreignKey: "tenant_id",
+  targetKey: "tenant_id",
+  as: "tenant",
+  constraints: false
+});
+
+// ContactGroup -> ContactGroupMembers (One-to-Many)
+db.ContactGroups.hasMany(db.ContactGroupMembers, {
+  foreignKey: "group_id",
+  sourceKey: "group_id",
+  as: "members",
+  constraints: false
+});
+db.ContactGroupMembers.belongsTo(db.ContactGroups, {
+  foreignKey: "group_id",
+  targetKey: "group_id",
+  as: "group",
+  constraints: false
+});
+
+// Contact -> ContactGroupMembers (One-to-Many)
+db.Contacts.hasMany(db.ContactGroupMembers, {
+  foreignKey: "contact_id",
+  sourceKey: "id",
+  as: "groupMemberships",
+  constraints: false
+});
+db.ContactGroupMembers.belongsTo(db.Contacts, {
+  foreignKey: "contact_id",
+  targetKey: "id",
+  as: "contact",
   constraints: false
 });
 

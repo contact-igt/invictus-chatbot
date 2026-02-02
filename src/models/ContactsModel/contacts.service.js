@@ -1,5 +1,6 @@
 import db from "../../database/index.js";
 import { tableNames } from "../../database/tableName.js";
+import { generateReadableIdFromLast } from "../../utils/generateReadableIdFromLast.js";
 
 export const createContactService = async (
   tenant_id,
@@ -9,12 +10,21 @@ export const createContactService = async (
   wa_id = null,
   email = null,
 ) => {
-  const Query = `
-  INSERT INTO ${tableNames?.CONTACTS} 
-  (tenant_id, phone, name, profile_pic, wa_id, email, is_blocked, last_message_at ) VALUES (?,?,?,?,?,?,?,NOW())`;
-
   try {
-    const Values = [tenant_id, phone, name, profile_pic, wa_id, email, false];
+    // Generate contact_id
+    const contact_id = await generateReadableIdFromLast(
+      tableNames.CONTACTS,
+      "contact_id",
+      "CNT",
+      5
+    );
+
+    const Query = `
+    INSERT INTO ${tableNames?.CONTACTS} 
+    (contact_id, tenant_id, phone, name, profile_pic, wa_id, email, is_blocked, last_message_at) 
+    VALUES (?,?,?,?,?,?,?,?,NOW())`;
+
+    const Values = [contact_id, tenant_id, phone, name, profile_pic, wa_id, email, false];
 
     const [result] = await db.sequelize.query(Query, { replacements: Values });
     return result;
