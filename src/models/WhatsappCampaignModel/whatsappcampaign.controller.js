@@ -3,6 +3,8 @@ import {
     getCampaignListService,
     getCampaignByIdService,
     executeCampaignBatchService,
+    softDeleteCampaignService,
+    permanentDeleteCampaignService,
 } from "./whatsappcampaign.service.js";
 
 export const createCampaignController = async (req, res) => {
@@ -11,7 +13,8 @@ export const createCampaignController = async (req, res) => {
 
     try {
         const campaign = await createCampaignService(tenant_id, req.body, created_by);
-        return res.status(201).send({
+
+        return res.status(200).send({
             message: "Campaign created successfully",
             campaign,
         });
@@ -37,7 +40,7 @@ export const getCampaignByIdController = async (req, res) => {
     const { campaign_id } = req.params;
     const tenant_id = req.user.tenant_id;
     try {
-        const campaign = await getCampaignByIdService(campaign_id, tenant_id);
+        const campaign = await getCampaignByIdService(campaign_id, tenant_id, req.query);
         if (!campaign) {
             return res.status(404).send({ message: "Campaign not found" });
         }
@@ -60,6 +63,34 @@ export const triggerCampaignExecutionController = async (req, res) => {
             result,
         });
     } catch (err) {
+        return res.status(500).send({ message: err.message });
+    }
+};
+
+export const softDeleteCampaignController = async (req, res) => {
+    const { campaign_id } = req.params;
+    const tenant_id = req.user.tenant_id;
+    try {
+        const result = await softDeleteCampaignService(campaign_id, tenant_id);
+        return res.status(200).send(result);
+    } catch (err) {
+        if (err.message === "Campaign not found") {
+            return res.status(404).send({ message: err.message });
+        }
+        return res.status(500).send({ message: err.message });
+    }
+};
+
+export const permanentDeleteCampaignController = async (req, res) => {
+    const { campaign_id } = req.params;
+    const tenant_id = req.user.tenant_id;
+    try {
+        const result = await permanentDeleteCampaignService(campaign_id, tenant_id);
+        return res.status(200).send(result);
+    } catch (err) {
+        if (err.message === "Campaign not found") {
+            return res.status(404).send({ message: err.message });
+        }
         return res.status(500).send({ message: err.message });
     }
 };

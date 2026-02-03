@@ -157,6 +157,26 @@ export const sendTemplateMessageController = async (req, res) => {
       { replacements: [template_id, tenant_id] },
     );
 
+    const [[bodyComponent]] = await db.sequelize.query(
+      `SELECT text_content FROM ${tableNames.WHATSAPP_TEMPLATE_COMPONENTS} WHERE template_id = ? AND component_type = 'body' LIMIT 1`,
+      { replacements: [template_id] },
+    );
+
+    let messageContent = `Template: ${template?.template_name}`;
+    if (bodyComponent && bodyComponent.text_content) {
+      messageContent = bodyComponent.text_content;
+
+      // Simple variable replacement logic
+      if (components && components.length > 0) {
+        const bodyParams = components.find(c => c.type === 'body')?.parameters || [];
+        bodyParams.forEach((param, index) => {
+          if (param.type === 'text') {
+            messageContent = messageContent.replace(`{{${index + 1}}}`, param.text);
+          }
+        });
+      }
+    }
+
     if (!template) {
       return res.status(404).send({ message: "Template not found" });
     }
@@ -176,12 +196,15 @@ export const sendTemplateMessageController = async (req, res) => {
       contact_id,
       metaResponse.phone_number_id,
       phone,
-      null, // wamid - we don't get it immediately from sendWhatsAppTemplate unless we return it
+      metaResponse.meta_message_id,
       "System",
       "admin",
       null,
-      `Template: ${template.template_name}`,
+      messageContent,
       "template",
+      null,
+      null,
+      "sent"
     );
 
     await updateAdminLeadService(tenant_id, contact_id);

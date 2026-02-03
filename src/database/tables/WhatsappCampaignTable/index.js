@@ -27,7 +27,7 @@ export const WhatsappCampaignTable = (sequelize, Sequelize) => {
             },
 
             campaign_type: {
-                type: Sequelize.ENUM("broadcast", "api", "scheduled"),
+                type: Sequelize.ENUM("broadcast", "api", "scheduled", "immediate"),
                 allowNull: false,
             },
 
@@ -97,9 +97,7 @@ export const WhatsappCampaignTable = (sequelize, Sequelize) => {
             updatedAt: {
                 type: Sequelize.DATE,
                 allowNull: false,
-                defaultValue: sequelize.literal(
-                    "CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP",
-                ),
+                defaultValue: sequelize.literal("CURRENT_TIMESTAMP"),
                 field: "updated_at",
             },
         },
@@ -129,3 +127,5 @@ export const WhatsappCampaignTable = (sequelize, Sequelize) => {
         },
     );
 };
+
+

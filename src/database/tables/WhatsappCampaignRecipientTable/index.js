@@ -27,7 +27,7 @@ export const WhatsappCampaignRecipientTable = (sequelize, Sequelize) => {
             },
 
             status: {
-                type: Sequelize.ENUM("pending", "sent", "delivered", "read", "failed"),
+                type: Sequelize.ENUM("pending", "sent", "delivered", "read", "replied", "failed"),
                 defaultValue: "pending",
                 allowNull: false,
             },
@@ -68,9 +68,7 @@ export const WhatsappCampaignRecipientTable = (sequelize, Sequelize) => {
             updatedAt: {
                 type: Sequelize.DATE,
                 allowNull: false,
-                defaultValue: sequelize.literal(
-                    "CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP",
-                ),
+                defaultValue: sequelize.literal("CURRENT_TIMESTAMP"),
                 field: "updated_at",
             },
         },

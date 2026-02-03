@@ -4,7 +4,7 @@ import { tableNames } from "../../database/tableName.js";
 export const createTenantUserService = async (
   tenant_user_id,
   tenant_id,
-  name,
+  username,
   email,
   country_code,
   mobile,
@@ -16,7 +16,7 @@ export const createTenantUserService = async (
     (
   tenant_user_id,
   tenant_id,
-  name,
+  username,
   email,
   country_code,
   mobile,
@@ -28,7 +28,7 @@ export const createTenantUserService = async (
   const values = [
     tenant_user_id,
     tenant_id,
-    name,
+    username,
     email,
     country_code,
     mobile,
@@ -108,13 +108,13 @@ export const updateTenantUserPasswordService = async (
 
 // ----------------------
 
-export const updateTenantUserService = async (name, email, email_at) => {
+export const updateTenantUserService = async (username, email, email_at) => {
   const updateFields = [];
   const updateValues = [];
 
-  if (name) {
-    updateFields.push("name = ?");
-    updateValues.push(name);
+  if (username) {
+    updateFields.push("username = ?");
+    updateValues.push(username);
   }
 
   if (email) {
@@ -146,7 +146,7 @@ export const getAllTenantUsersService = async (tenant_id) => {
     const query = `
     SELECT 
       tu.tenant_user_id,
-      tu.name,
+      tu.username,
       tu.email,
       tu.role,
       COALESCE(ti.status, tu.status) as status,

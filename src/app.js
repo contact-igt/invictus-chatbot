@@ -65,18 +65,18 @@ app.use(
   ContactGroupRouter
 );
 
-startLeadHeatDecayCronService();
-startLiveChatCleanupService();
-startCampaignSchedulerService();
 
 app.get("/", (req, res) => {
   res.json({ status: "OK" });
 });
 
 
-
-await db.sequelize.sync(); // Removed { alter: true } to prevent duplicate indexes
+await db.sequelize.sync();
 console.log("DB connected");
+
+startLeadHeatDecayCronService();
+startLiveChatCleanupService();
+startCampaignSchedulerService();
 
 const PORT = process.env.PORT || 8000;
 const server = http.createServer(app);

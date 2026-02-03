@@ -8,6 +8,8 @@ import {
     getCampaignListController,
     getCampaignByIdController,
     triggerCampaignExecutionController,
+    softDeleteCampaignController,
+    permanentDeleteCampaignController,
 } from "./whatsappcampaign.controller.js";
 
 const router = express.Router();
@@ -37,7 +39,20 @@ router.post(
     "/whatsapp-campaign/:campaign_id/execute",
     authenticate,
     authorize({ user_type: "tenant", roles: ["tenant_admin", "staff"] }),
-    triggerCampaignExecutionController,
+);
+
+router.delete(
+    "/whatsapp-campaign/:campaign_id/soft",
+    authenticate,
+    authorize({ user_type: "tenant", roles: ["tenant_admin", "staff"] }),
+    softDeleteCampaignController
+);
+
+router.delete(
+    "/whatsapp-campaign/:campaign_id/permanent",
+    authenticate,
+    authorize({ user_type: "tenant", roles: ["tenant_admin"] }),
+    permanentDeleteCampaignController
 );
 
 export default router;

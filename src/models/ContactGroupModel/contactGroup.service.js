@@ -67,7 +67,14 @@ export const getContactGroupListService = async (tenant_id, query) => {
             {
                 model: db.ContactGroupMembers,
                 as: "members",
-                attributes: ["id", "contact_id"],
+                attributes: ["id"],
+                include: [
+                    {
+                        model: db.Contacts,
+                        as: "contact",
+                        attributes: ["contact_id", "name", "phone", "email", "profile_pic"],
+                    },
+                ],
             },
         ],
     });
@@ -198,4 +205,79 @@ export const deleteContactGroupService = async (group_id, tenant_id) => {
         await transaction.rollback();
         throw err;
     }
+};
+
+/**
+ * Update a contact group
+ */
+export const updateContactGroupService = async (group_id, tenant_id, data) => {
+    const { group_name, description } = data;
+
+    // Check if group exists
+    const group = await db.ContactGroups.findOne({
+        where: { group_id, tenant_id, is_deleted: false }
+    });
+
+    if (!group) {
+        throw new Error("Group not found");
+    }
+
+    // Check for duplicate name if name is being changed
+    if (group_name && group_name !== group.group_name) {
+        const duplicate = await db.ContactGroups.findOne({
+            where: { tenant_id, group_name, is_deleted: false }
+        });
+        if (duplicate) {
+            throw new Error("Group name already exists");
+        }
+    }
+
+    await group.update({
+        group_name: group_name || group.group_name,
+        description: description !== undefined ? description : group.description
+    });
+
+    return group;
+};
+
+/**
+ * Get contacts that are NOT in a specific group (available to add)
+ */
+export const getAvailableContactsForGroupService = async (group_id, tenant_id) => {
+    // First verify the group exists
+    const group = await db.ContactGroups.findOne({
+        where: { group_id, tenant_id, is_deleted: false }
+    });
+
+    if (!group) {
+        throw new Error("Group not found");
+    }
+
+    // Get all contact IDs already in this group
+    const groupMembers = await db.ContactGroupMembers.findAll({
+        where: { group_id, tenant_id },
+        attributes: ['contact_id']
+    });
+
+    const memberContactIds = groupMembers.map(m => m.contact_id);
+
+    // Get all contacts NOT in the group
+    const whereClause = {
+        tenant_id,
+        is_deleted: false
+    };
+
+    if (memberContactIds.length > 0) {
+        whereClause.contact_id = {
+            [db.Sequelize.Op.notIn]: memberContactIds
+        };
+    }
+
+    const availableContacts = await db.Contacts.findAll({
+        where: whereClause,
+        attributes: ['contact_id', 'name', 'phone', 'email', 'profile_pic'],
+        order: [['name', 'ASC']]
+    });
+
+    return availableContacts;
 };

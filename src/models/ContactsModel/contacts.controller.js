@@ -42,7 +42,7 @@ export const createContactController = async (req, res) => {
       profile_pic || null,
     );
 
-    return res.status(201).send({
+    return res.status(200).send({
       message: "Contact created successfully",
     });
   } catch (err) {
@@ -102,10 +102,17 @@ export const getContactByIdController = async (req, res) => {
 export const updateContactController = async (req, res) => {
   const tenant_id = req.user.tenant_id;
   const { id } = req.params;
-  const { name, email, profile_pic, is_blocked } = req.body;
+  const { name, email, profile_pic, is_blocked, phone } = req.body;
 
   if (!tenant_id) {
     return res.status(400).send({ message: "Tenant id missing" });
+  }
+
+  // Security: Prevent phone number editing
+  if (phone !== undefined) {
+    return res.status(403).send({
+      message: "Phone number cannot be edited. Please delete and recreate the contact if needed."
+    });
   }
 
   try {

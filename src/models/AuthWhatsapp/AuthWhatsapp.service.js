@@ -94,7 +94,7 @@ export const sendWhatsAppTemplate = async (
     },
   };
 
-  await axios.post(
+  const response = await axios.post(
     `https://graph.facebook.com/v19.0/${phone_number_id}/messages`,
     payload,
     {
@@ -106,7 +106,9 @@ export const sendWhatsAppTemplate = async (
     },
   );
 
-  return { phone_number_id };
+  const meta_message_id = response.data?.messages?.[0]?.id;
+
+  return { phone_number_id, meta_message_id };
 };
 
 export const sendTypingIndicator = async (tenant_id, phone_number_id, to) => {

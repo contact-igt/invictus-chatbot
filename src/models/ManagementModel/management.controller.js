@@ -86,7 +86,7 @@ export const registerManagementController = async (req, res) => {
       html: emailHtml,
     });
 
-    return res.status(201).send({
+    return res.status(200).send({
       message: "Management user created successfully",
     });
   } catch (err) {

@@ -10,6 +10,8 @@ import {
     addContactsToGroupController,
     removeContactFromGroupController,
     deleteContactGroupController,
+    updateContactGroupController,
+    getAvailableContactsController,
 } from "./contactGroup.controller.js";
 
 const router = express.Router();
@@ -36,6 +38,22 @@ router.get(
     authenticate,
     authorize({ user_type: "tenant", roles: ["tenant_admin", "staff"] }),
     getContactGroupByIdController
+);
+
+// Get available contacts (not in group)
+router.get(
+    "/contact-group/:group_id/available-contacts",
+    authenticate,
+    authorize({ user_type: "tenant", roles: ["tenant_admin", "staff"] }),
+    getAvailableContactsController
+);
+
+// Update group details
+router.put(
+    "/contact-group/:group_id",
+    authenticate,
+    authorize({ user_type: "tenant", roles: ["tenant_admin", "staff"] }),
+    updateContactGroupController
 );
 
 // Add contacts to a group

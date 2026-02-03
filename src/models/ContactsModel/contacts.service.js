@@ -75,7 +75,7 @@ export const getAllContactsService = async (tenant_id) => {
 };
 
 export const updateContactService = async (
-  id,
+  contact_id,
   tenant_id,
   name,
   email,
@@ -85,10 +85,10 @@ export const updateContactService = async (
   const Query = `
   UPDATE ${tableNames?.CONTACTS} 
   SET name = ?, email = ?, profile_pic = ?, is_blocked = ?
-  WHERE id = ? AND tenant_id = ?`;
+  WHERE contact_id = ? AND tenant_id = ?`;
 
   try {
-    const Values = [name, email, profile_pic, is_blocked, id, tenant_id];
+    const Values = [name, email, profile_pic, is_blocked, contact_id, tenant_id];
 
     const [result] = await db.sequelize.query(Query, { replacements: Values });
     return result;

@@ -29,7 +29,7 @@ import { fileURLToPath } from "url";
 import { sendEmail } from "../../utils/emailService.js";
 
 export const createTenantUsercontroller = async (req, res) => {
-  const { name, email, country_code, mobile, profile, role } = req.body;
+  const { username, email, country_code, mobile, profile, role } = req.body;
 
   const tenant_id = req.user.tenant_id;
   const loginuser = req.user;
@@ -42,7 +42,7 @@ export const createTenantUsercontroller = async (req, res) => {
 
   const requiredFields = {
     tenant_id,
-    name,
+    username,
     email,
     country_code,
     mobile,
@@ -74,7 +74,7 @@ export const createTenantUsercontroller = async (req, res) => {
     await createTenantUserService(
       tenant_user_id,
       tenant_id,
-      name,
+      username,
       email,
       country_code,
       mobile,
@@ -86,12 +86,12 @@ export const createTenantUsercontroller = async (req, res) => {
       tenant_id,
       tenant_user_id,
       email,
-      name,
+      username,
       getloginuserDetails?.company_name,
       loginuser?.unique_id,
     );
 
-    return res.status(201).send({
+    return res.status(200).send({
       message: "Tenant created successfully. Invitation email sent to owner.",
     });
   } catch (err) {

@@ -12,6 +12,7 @@ import {
 
 import { getTenantByPhoneNumberIdService } from "../WhatsappAccountModel/whatsappAccount.service.js";
 import { getIO } from "../../middlewares/socket/socket.js";
+import db from "../../database/index.js";
 import {
   createContactService,
   getContactByPhoneAndTenantIdService,
@@ -42,6 +43,47 @@ export const receiveMessage = async (req, res) => {
   try {
     const value = req.body?.entry?.[0]?.changes?.[0]?.value;
     const msg = value?.messages?.[0];
+    const statusUpdate = value?.statuses?.[0];
+
+    if (statusUpdate) {
+      const messageId = statusUpdate.id;
+      const status = statusUpdate.status;
+
+      await db.sequelize.transaction(async (t) => {
+        const recipient = await db.WhatsappCampaignRecipients.findOne({
+          where: { meta_message_id: messageId },
+          include: [{ model: db.WhatsappCampaigns, as: "campaign" }],
+          lock: t.LOCK.UPDATE,
+          transaction: t
+        });
+
+        if (recipient) {
+          const oldStatus = recipient.status;
+          const statusPriority = { sent: 1, delivered: 2, read: 3, replied: 4, failed: 5 };
+
+          if (statusPriority[status] > (statusPriority[oldStatus] || 0)) {
+            await recipient.update({
+              status: status,
+              error_message: status === "failed" ? statusUpdate.errors?.[0]?.title : null
+            }, { transaction: t });
+
+            if (recipient.campaign) {
+              if (status === "delivered" && oldStatus === "sent") {
+                await recipient.campaign.increment("delivered_count", { transaction: t });
+              } else if (status === "read") {
+                if (oldStatus === "sent") {
+                  await recipient.campaign.increment(["delivered_count", "read_count"], { transaction: t });
+                } else if (oldStatus === "delivered") {
+                  await recipient.campaign.increment("read_count", { transaction: t });
+                }
+              }
+            }
+          }
+        }
+      });
+
+      return res.sendStatus(200);
+    }
 
     if (!msg) return res.sendStatus(200);
 
@@ -87,7 +129,6 @@ export const receiveMessage = async (req, res) => {
       tenant_id,
       phone,
     );
-
     if (!contactsaved) {
       await createContactService(tenant_id, phone, name ? name : null, null);
       contactsaved = await getContactByPhoneAndTenantIdService(
@@ -99,10 +140,8 @@ export const receiveMessage = async (req, res) => {
     const livelist = await getLivechatByIdService(tenant_id, contactsaved?.contact_id);
 
     if (!livelist) {
-      // Create new live chat entry
       await createLiveChatService(tenant_id, contactsaved?.contact_id);
     } else {
-      // Update timestamp to reset 24-hour window
       await updateLiveChatTimestampService(tenant_id, contactsaved?.contact_id);
     }
 
@@ -117,6 +156,32 @@ export const receiveMessage = async (req, res) => {
       null,
       text,
     );
+
+
+    const cleanPhone = phone.replace(/\D/g, "");
+    const phoneSuffix = cleanPhone.slice(-10);
+
+    const lastCampaignRecipient = await db.WhatsappCampaignRecipients.findOne({
+      where: {
+        mobile_number: { [db.Sequelize.Op.like]: `%${phoneSuffix}` }
+      },
+      order: [["created_at", "DESC"]],
+      include: [{ model: db.WhatsappCampaigns, as: "campaign" }]
+    });
+
+    if (lastCampaignRecipient) {
+      const allowedStatuses = ["sent", "delivered", "read"];
+      if (allowedStatuses.includes(lastCampaignRecipient.status) && lastCampaignRecipient.campaign) {
+        const campaignSentAt = new Date(lastCampaignRecipient.updated_at).getTime();
+        const nowTime = new Date().getTime();
+        const hoursDiff = (nowTime - campaignSentAt) / (1000 * 60 * 60);
+
+        if (hoursDiff <= 24) {
+          await lastCampaignRecipient.update({ status: "replied" });
+          await lastCampaignRecipient.campaign.increment("replied_count");
+        }
+      }
+    }
 
     let leadSaved = await getLeadByPhoneService(tenant_id, contactsaved?.contact_id);
 

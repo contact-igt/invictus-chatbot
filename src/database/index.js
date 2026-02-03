@@ -409,13 +409,13 @@ db.ContactGroupMembers.belongsTo(db.ContactGroups, {
 // Contact -> ContactGroupMembers (One-to-Many)
 db.Contacts.hasMany(db.ContactGroupMembers, {
   foreignKey: "contact_id",
-  sourceKey: "id",
+  sourceKey: "contact_id",
   as: "groupMemberships",
   constraints: false
 });
 db.ContactGroupMembers.belongsTo(db.Contacts, {
   foreignKey: "contact_id",
-  targetKey: "id",
+  targetKey: "contact_id",
   as: "contact",
   constraints: false
 });

@@ -74,7 +74,7 @@ export const createWhatsappTemplateController = async (req, res) => {
       loginUser?.unique_id,
     );
 
-    return res.status(201).json({
+    return res.status(200).json({
       message: "WhatsApp template created successfully",
       data: {
         template_id,

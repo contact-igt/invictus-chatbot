@@ -21,7 +21,7 @@ export const TenantUsersTable = (sequelize, Sequelize) => {
         allowNull: false,
       },
 
-      name: {
+      username: {
         type: Sequelize.STRING,
         allowNull: false,
       },

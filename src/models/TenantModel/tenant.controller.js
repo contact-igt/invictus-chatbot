@@ -97,7 +97,7 @@ export const createTenantController = async (req, res) => {
       loginUSer?.unique_id,
     );
 
-    return res.status(201).json({
+    return res.status(200).json({
       message: "Tenant created successfully. Invitation email sent to owner.",
     });
   } catch (err) {

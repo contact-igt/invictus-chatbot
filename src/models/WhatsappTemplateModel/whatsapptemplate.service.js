@@ -585,13 +585,41 @@ export const getTemplateListService = async (tenant_id) => {
     { replacements: [tenant_id] },
   );
 
-  return templates.map((t) => ({
-    ...t,
-    is_submitted: !!t.meta_template_id,
-    can_edit: ["draft", "rejected"].includes(t.status),
-    can_submit: t.status === "draft",
-    display_status: t.status.charAt(0).toUpperCase() + t.status.slice(1),
-  }));
+  // Fetch components and variables for ALL templates efficiently
+  // Note: For large datasets, this might be slow. Consider pagination or separate lookups if needed.
+  // But for typical template list sizes (10-100), this is fine.
+
+  const templateIds = templates.map(t => t.template_id);
+
+  let allComponents = [];
+  let allVariables = [];
+
+  if (templateIds.length > 0) {
+    [allComponents] = await db.sequelize.query(
+      `SELECT * FROM ${tableNames.WHATSAPP_TEMPLATE_COMPONENTS} WHERE template_id IN (?)`,
+      { replacements: [templateIds] }
+    );
+
+    [allVariables] = await db.sequelize.query(
+      `SELECT * FROM ${tableNames.WHATSAPP_TEMPLATE_VARIABLES} WHERE template_id IN (?) ORDER BY variable_key ASC`,
+      { replacements: [templateIds] }
+    );
+  }
+
+  return templates.map((t) => {
+    const components = allComponents.filter(c => c.template_id === t.template_id);
+    const variables = allVariables.filter(v => v.template_id === t.template_id);
+
+    return {
+      ...t,
+      is_submitted: !!t.meta_template_id,
+      can_edit: ["draft", "rejected"].includes(t.status),
+      can_submit: t.status === "draft",
+      display_status: t.status.charAt(0).toUpperCase() + t.status.slice(1),
+      components, // Now including components (body text, etc.)
+      variables   // Now including variables
+    };
+  });
 };
 
 export const getTemplateByIdService = async (template_id, tenant_id) => {

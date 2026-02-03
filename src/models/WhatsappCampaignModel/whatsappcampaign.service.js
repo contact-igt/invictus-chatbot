@@ -2,6 +2,8 @@ import db from "../../database/index.js";
 import { tableNames } from "../../database/tableName.js";
 import { generateReadableIdFromLast } from "../../utils/generateReadableIdFromLast.js";
 import { sendWhatsAppTemplate } from "../AuthWhatsapp/AuthWhatsapp.service.js";
+import { createContactService, getContactByPhoneAndTenantIdService } from "../ContactsModel/contacts.service.js";
+import { createUserMessageService } from "../Messages/messages.service.js";
 import cron from "node-cron";
 
 /**
@@ -19,6 +21,15 @@ export const createCampaignService = async (tenant_id, data, created_by) => {
             audience_data, // Array of recipients OR group_id
             scheduled_at
         } = data;
+
+        // 0. Check for duplicate campaign name
+        const existingCampaign = await db.WhatsappCampaigns.findOne({
+            where: { tenant_id, campaign_name, is_deleted: false },
+        });
+
+        if (existingCampaign) {
+            throw new Error(`A campaign with the name "${campaign_name}" already exists.`);
+        }
 
         // 1. Generate Campaign ID
         const campaign_id = await generateReadableIdFromLast(
@@ -76,7 +87,7 @@ export const createCampaignService = async (tenant_id, data, created_by) => {
                 campaign_name,
                 campaign_type,
                 template_id,
-                status: campaign_type === "scheduled" ? "scheduled" : "draft",
+                status: campaign_type === "scheduled" ? "scheduled" : "active", // Changed from "draft" to "active" for Send Now
                 total_audience: recipients.length,
                 scheduled_at,
                 created_by,
@@ -142,7 +153,13 @@ export const getCampaignListService = async (tenant_id, query) => {
 /**
  * Retrieves detailed info for a single campaign.
  */
-export const getCampaignByIdService = async (campaign_id, tenant_id) => {
+export const getCampaignByIdService = async (campaign_id, tenant_id, query = {}) => {
+    const { recipient_status } = query;
+    let recipientWhere = { campaign_id };
+    if (recipient_status) {
+        recipientWhere.status = recipient_status;
+    }
+
     const campaign = await db.WhatsappCampaigns.findOne({
         where: { campaign_id, tenant_id, is_deleted: false },
         include: [
@@ -153,6 +170,8 @@ export const getCampaignByIdService = async (campaign_id, tenant_id) => {
             {
                 model: db.WhatsappCampaignRecipients,
                 as: "recipients",
+                where: recipientWhere,
+                required: false, // Ensure campaign is returned even if no recipients match filter
                 limit: 100, // Preview of first 100 recipients
             },
         ],
@@ -183,6 +202,13 @@ export const executeCampaignBatchService = async (campaign_id, tenant_id, batchS
         limit: batchSize,
     });
 
+    // Fetch Template Body Text
+    const [[bodyComponent]] = await db.sequelize.query(
+        `SELECT text_content FROM ${tableNames.WHATSAPP_TEMPLATE_COMPONENTS} WHERE template_id = ? AND component_type = 'body' LIMIT 1`,
+        { replacements: [campaign.template_id] },
+    );
+    const templateBodyText = bodyComponent?.text_content || `Template: ${campaign.template.template_name}`;
+
     if (recipients.length === 0) {
         // Mark campaign as completed if no more pending recipients
         await campaign.update({ status: "completed" });
@@ -196,21 +222,83 @@ export const executeCampaignBatchService = async (campaign_id, tenant_id, batchS
 
     for (const recipient of recipients) {
         try {
-            // Use dynamic_variables if available, otherwise send empty array
-            const variables = recipient.dynamic_variables || [];
+            // 1. Ensure Contact Exists
+            let contactId = recipient.contact_id;
+            if (!contactId) {
+                const existingContact = await getContactByPhoneAndTenantIdService(tenant_id, recipient.mobile_number);
+                if (existingContact) {
+                    contactId = existingContact.contact_id;
+                } else {
+                    const newContact = await createContactService(tenant_id, recipient.mobile_number, null, null);
+                    contactId = newContact.contact_id;
+                }
 
-            const response = await sendWhatsAppTemplate(
+                if (contactId) {
+                    await recipient.update({ contact_id: contactId });
+                }
+            }
+
+            let components = [];
+
+            let dynamicVariables = recipient.dynamic_variables || [];
+            if (typeof dynamicVariables === 'string') {
+                try {
+                    dynamicVariables = JSON.parse(dynamicVariables);
+                } catch (e) {
+                    dynamicVariables = [];
+                }
+            }
+
+            if (Array.isArray(dynamicVariables) && dynamicVariables.length > 0) {
+                components = [
+                    {
+                        type: "body",
+                        parameters: dynamicVariables.map((v) => ({
+                            type: "text",
+                            text: v,
+                        })),
+                    },
+                ];
+            }
+
+            const result = await sendWhatsAppTemplate(
                 tenant_id,
                 recipient.mobile_number,
                 campaign.template.template_name,
                 campaign.template.language,
-                variables // Now supports dynamic variables like ['John', '10:00 AM']
+                components,
             );
 
             await recipient.update({
                 status: "sent",
-                meta_message_id: response.meta_message_id || null,
+                meta_message_id: result.meta_message_id || null,
             });
+
+            // 3. Log to Message History
+            if (contactId && result.meta_message_id) {
+                let personalizedMessage = templateBodyText;
+                if (Array.isArray(dynamicVariables) && dynamicVariables.length > 0) {
+                    dynamicVariables.forEach((val, idx) => {
+                        personalizedMessage = personalizedMessage.replace(`{{${idx + 1}}}`, val);
+                    });
+                }
+
+                await createUserMessageService(
+                    tenant_id,
+                    contactId,
+                    result.phone_number_id,
+                    recipient.mobile_number,
+                    result.meta_message_id,
+                    "System",
+                    "admin",
+                    null,
+                    personalizedMessage,
+                    "template",
+                    null,
+                    null,
+                    "sent"
+                );
+            }
         } catch (err) {
             console.error(`Failed to send campaign message to ${recipient.mobile_number}:`, err.message);
             await recipient.update({
@@ -221,6 +309,57 @@ export const executeCampaignBatchService = async (campaign_id, tenant_id, batchS
     }
 
     return { finished: false, processedCount: recipients.length };
+};
+
+/**
+ * Soft delete a campaign
+ */
+export const softDeleteCampaignService = async (campaign_id, tenant_id) => {
+    const campaign = await db.WhatsappCampaigns.findOne({
+        where: { campaign_id, tenant_id, is_deleted: false }
+    });
+
+    if (!campaign) {
+        throw new Error("Campaign not found");
+    }
+
+    await campaign.update({
+        is_deleted: true,
+        deleted_at: new Date()
+    });
+
+    return { message: "Campaign soft deleted successfully" };
+};
+
+/**
+ * Permanently delete a campaign and its recipients
+ */
+export const permanentDeleteCampaignService = async (campaign_id, tenant_id) => {
+    const transaction = await db.sequelize.transaction();
+    try {
+        const campaign = await db.WhatsappCampaigns.findOne({
+            where: { campaign_id, tenant_id }
+        });
+
+        if (!campaign) {
+            throw new Error("Campaign not found");
+        }
+
+        // Delete all recipients first
+        await db.WhatsappCampaignRecipients.destroy({
+            where: { campaign_id },
+            transaction
+        });
+
+        // Delete the campaign
+        await campaign.destroy({ transaction });
+
+        await transaction.commit();
+        return { message: "Campaign and its data permanently deleted" };
+    } catch (err) {
+        await transaction.rollback();
+        throw err;
+    }
 };
 
 /**
@@ -241,7 +380,6 @@ export const startCampaignSchedulerService = () => {
           AND is_deleted = false
       `);
 
-            // 2. Fetch all active campaigns
             const activeCampaigns = await db.WhatsappCampaigns.findAll({
                 where: { status: "active", is_deleted: false },
             });
@@ -255,3 +393,4 @@ export const startCampaignSchedulerService = () => {
         }
     });
 };
+
