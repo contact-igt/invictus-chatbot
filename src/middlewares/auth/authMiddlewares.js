@@ -1,7 +1,7 @@
 import jwt from "jsonwebtoken";
 import ServerEnvironmentConfig from "../../config/server.config.js";
 import { getManagementByIdService } from "../../models/ManagementModel/management.service.js";
-import { findTenantUserByIdService } from "../../models/TenantUserModel/tenantUser.service.js";
+import { findTenantUserByIdService } from "../../models/TenantUserModel/tenantuser.service.js";
 
 /* =========================
    TOKEN GENERATORS

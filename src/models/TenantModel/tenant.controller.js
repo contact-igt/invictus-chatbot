@@ -19,7 +19,7 @@ import {
   createTenantUserService,
   findTenantUserByIdService,
   updateTenantUserService,
-} from "../TenantUserModel/tenantUser.service.js";
+} from "../TenantUserModel/tenantuser.service.js";
 
 export const createTenantController = async (req, res) => {
   const loginUSer = req.user;
