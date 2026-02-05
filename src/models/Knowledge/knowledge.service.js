@@ -22,11 +22,10 @@ export const processKnowledgeUpload = async (
   VALUES (?, ?, ?, ?)`;
 
   try {
-    const [result] = await db.sequelize.query(Query, {
+    const [sourceId] = await db.sequelize.query(Query, {
       replacements: [tenant_id, title, type, source_url, text, file_name],
+      type: db.Sequelize.QueryTypes.INSERT,
     });
-
-    const sourceId = result;
 
     const chunks = chunkText(text);
 
@@ -116,6 +115,29 @@ export const deleteKnowledgeService = async (id, tenant_id) => {
     `,
     { replacements: [id, tenant_id] },
   );
+};
+
+export const permanentDeleteKnowledgeService = async (id, tenant_id) => {
+  const transaction = await db.sequelize.transaction();
+  try {
+    // 1. Delete Chunks
+    await db.sequelize.query(`DELETE FROM ${tableNames.KNOWLEDGECHUNKS} WHERE source_id = ? AND tenant_id = ?`, {
+      replacements: [id, tenant_id],
+      transaction,
+    });
+
+    // 2. Delete Source
+    await db.sequelize.query(`DELETE FROM ${tableNames.KNOWLEDGESOURCE} WHERE id = ? AND tenant_id = ?`, {
+      replacements: [id, tenant_id],
+      transaction,
+    });
+
+    await transaction.commit();
+    return true;
+  } catch (err) {
+    await transaction.rollback();
+    throw err;
+  }
 };
 
 export const updateKnowledgeStatusService = async (status, id, tenant_id) => {

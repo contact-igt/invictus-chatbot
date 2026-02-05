@@ -164,3 +164,34 @@ export const sendTenantInvitationService = async (
 
   return { invitation_id, inviteToken };
 };
+export const sendTenantPasswordSetSuccessEmailService = async (
+  email,
+  name,
+  company_name,
+) => {
+  const loginUrl = `${process.env.FRONTEND_URL}/login`;
+  const metaVerifyToken = process.env.META_VERIFY_TOKEN;
+
+  const templatePath = path.join(
+    __dirname,
+    "../../../public/html/passwordSetSuccess/index.html",
+  );
+
+  const source = fs.readFileSync(templatePath, "utf8");
+  const template = handlebars.compile(source);
+
+  const emailHtml = template({
+    name,
+    company_name,
+    login_url: loginUrl,
+    meta_verify_token: metaVerifyToken,
+  });
+
+  await sendEmail({
+    to: email,
+    subject: `Welcome to WhatsNexus - ${company_name} Setup Complete`,
+    html: emailHtml,
+  });
+
+  return true;
+};

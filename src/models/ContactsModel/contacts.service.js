@@ -27,7 +27,7 @@ export const createContactService = async (
     const Values = [contact_id, tenant_id, phone, name, profile_pic, wa_id, email, false];
 
     const [result] = await db.sequelize.query(Query, { replacements: Values });
-    return result;
+    return { contact_id, id: result };
   } catch (err) {
     throw err;
   }
@@ -52,6 +52,20 @@ export const getContactByIdAndTenantIdService = async (id, tenant_id) => {
     const Values = [id, tenant_id];
 
     const Query = `SELECT * FROM ${tableNames?.CONTACTS} WHERE id = ? AND tenant_id = ? AND is_deleted = false LIMIT 1 `;
+
+    const [result] = await db.sequelize.query(Query, { replacements: Values });
+
+    return result[0];
+  } catch (err) {
+    throw err;
+  }
+};
+
+export const getContactByContactIdAndTenantIdService = async (contact_id, tenant_id) => {
+  try {
+    const Values = [contact_id, tenant_id];
+
+    const Query = `SELECT * FROM ${tableNames?.CONTACTS} WHERE contact_id = ? AND tenant_id = ? AND is_deleted = false LIMIT 1 `;
 
     const [result] = await db.sequelize.query(Query, { replacements: Values });
 
@@ -108,6 +122,41 @@ export const deleteContactService = async (id, tenant_id) => {
       transaction,
     });
     await db.sequelize.query(Query2, {
+      replacements: [id, tenant_id],
+      transaction,
+    });
+
+    await transaction.commit();
+    return true;
+  } catch (err) {
+    await transaction.rollback();
+    throw err;
+  }
+};
+
+export const permanentDeleteContactService = async (id, tenant_id) => {
+  const transaction = await db.sequelize.transaction();
+  try {
+    // 1. Delete Messages
+    await db.sequelize.query(`DELETE FROM ${tableNames.MESSAGES} WHERE contact_id = ? AND tenant_id = ?`, {
+      replacements: [id, tenant_id],
+      transaction,
+    });
+
+    // 2. Delete Live Chat
+    await db.sequelize.query(`DELETE FROM ${tableNames.LIVECHAT} WHERE contact_id = ? AND tenant_id = ?`, {
+      replacements: [id, tenant_id],
+      transaction,
+    });
+
+    // 3. Delete Leads
+    await db.sequelize.query(`DELETE FROM ${tableNames.LEADS} WHERE contact_id = ? AND tenant_id = ?`, {
+      replacements: [id, tenant_id],
+      transaction,
+    });
+
+    // 4. Delete Contact
+    await db.sequelize.query(`DELETE FROM ${tableNames.CONTACTS} WHERE id = ? AND tenant_id = ?`, {
       replacements: [id, tenant_id],
       transaction,
     });

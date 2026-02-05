@@ -1,6 +1,7 @@
 import express from "express";
 import {
   deleteAiPrompt,
+  permanentDeleteAiPrompt,
   getActivePromptController,
   getAiPromptById,
   listAiPrompt,
@@ -8,7 +9,7 @@ import {
   updatePromptActive,
   uploadAiPrompt,
 } from "./aiprompt.controller.js";
-import { authenticate } from "../../middlewares/auth/authMiddlewares.js";
+import { authenticate, authorize } from "../../middlewares/auth/authMiddlewares.js";
 
 const router = express.Router();
 
@@ -29,5 +30,11 @@ router.put(
   updatePromptActive,
 );
 router.delete("/prompt/:id", authenticate, deleteAiPrompt);
+router.delete(
+  "/prompt/:id/permanent",
+  authenticate,
+  authorize({ user_type: "tenant", roles: ["tenant_admin"] }),
+  permanentDeleteAiPrompt,
+);
 
 export default router;

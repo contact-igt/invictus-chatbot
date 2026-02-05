@@ -53,6 +53,38 @@ export const LeadsTable = (sequelize, Sequelize) => {
         defaultValue: "active",
       },
 
+      lead_stage: {
+        type: Sequelize.ENUM("New", "Contacted", "Qualified", "Negotiation", "Lost", "Won"),
+        allowNull: false,
+        defaultValue: "New",
+        field: "lead_stage",
+      },
+
+      assigned_to: {
+        type: Sequelize.STRING,
+        allowNull: true,
+        field: "assigned_to",
+      },
+
+      source: {
+        type: Sequelize.STRING,
+        allowNull: true,
+        field: "source",
+      },
+
+      priority: {
+        type: Sequelize.ENUM("Low", "Medium", "High"),
+        allowNull: false,
+        defaultValue: "Medium",
+        field: "priority",
+      },
+
+      internal_notes: {
+        type: Sequelize.TEXT,
+        allowNull: true,
+        field: "internal_notes",
+      },
+
       is_deleted: {
         type: Sequelize.BOOLEAN,
         allowNull: false,

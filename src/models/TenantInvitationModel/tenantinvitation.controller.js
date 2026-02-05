@@ -3,6 +3,7 @@ import bcrypt from "bcrypt";
 
 import {
   getInvitationByTokenHashService,
+  sendTenantPasswordSetSuccessEmailService,
   updateInvitationStatusService,
 } from "../TenantInvitationModel/tenantinvitation.service.js";
 import {
@@ -253,6 +254,13 @@ export const setTenantPasswordController = async (req, res) => {
       tenant_id: invitation.tenant_id,
       role: user.role,
     };
+
+    // Send success email with META_VERIFY_TOKEN
+    await sendTenantPasswordSetSuccessEmailService(
+      user.email,
+      user.username,
+      tenant?.company_name || "Your Company",
+    );
 
     return res.status(200).send({
       valid: true,

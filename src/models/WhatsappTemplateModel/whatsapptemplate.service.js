@@ -1,6 +1,7 @@
 import db from "../../database/index.js";
 import { tableNames } from "../../database/tableName.js";
 import axios from "axios";
+import { AiService } from "../../utils/coreAi.js";
 import { getWhatsappAccountByTenantService } from "../WhatsappAccountModel/whatsappAccount.service.js";
 import { generateReadableIdFromLast } from "../../utils/generateReadableIdFromLast.js";
 
@@ -1120,5 +1121,45 @@ export const updateWhatsappTemplateService = async (
   } catch (err) {
     await transaction.rollback();
     throw err;
+  }
+};
+
+export const generateAiTemplateService = async ({
+  prompt,
+  focus,
+  style,
+  optimization,
+  previous_content = null,
+  rejection_reason = null,
+}) => {
+  const systemPrompt = `You are an expert WhatsApp Marketing Copywriter. 
+  Your goal is to generate or FIX high-converting WhatsApp message body content based on user instructions.
+  
+  RULES:
+  1. Use {{1}}, {{2}}, etc. for dynamic variables (e.g., Name, Order ID, Date).
+  2. The message must be professional yet engaging.
+  3. Category: ${focus} (Marketing, Utility, or Authentication).
+  4. Style: ${style} (Normal, Poetic, Exciting, or Funny).
+  5. Optimize for: ${optimization} (Click Rate or Reply Rate).
+  6. Output ONLY the message body text. No headers, no footers, no explanations.
+  7. IMPORTANT (for Marketing/Utility): Meta requires at least 15 words total, OR 5 words per variable. Ensure the text is descriptive.
+  8. IMPORTANT (for Authentication): These usually contain a verification code and should be concise. e.g. "Your verification code is {{1}}."
+  
+  ${previous_content
+      ? `FIX MODE: 
+  The previous version was: "${previous_content}"
+  Reason for failure/rejection: "${rejection_reason || "Unknown"}"
+  Please analyze the previous version, avoid the mistakes mentioned in the rejection reason, and ensure the new content strictly follows Meta category guidelines (e.g., Utility must NOT contain marketing language).`
+      : ""
+    }
+  `;
+
+  const userPrompt = `User Request: ${prompt}`;
+
+  try {
+    const aiResponse = await AiService("system", `${systemPrompt}\n\n${userPrompt}`);
+    return aiResponse;
+  } catch (err) {
+    throw new Error(`AI Generation failed: ${err.message}`);
   }
 };

@@ -1,6 +1,7 @@
 import express from "express";
 import {
   deleteKnowledge,
+  permanentDeleteKnowledge,
   getKnowledgeById,
   listKnowledge,
   searchKnowledgeChunksController,
@@ -10,25 +11,60 @@ import {
 } from "./knowledge.controller.js";
 import {
   authenticate,
+  authorize,
 } from "../../middlewares/auth/authMiddlewares.js";
 
 const router = express.Router();
 
-router.post("/knowledge", authenticate, uploadKnowledge);
-router.get("/knowledges", authenticate, listKnowledge);
-router.get("/knowledge/:id", authenticate, getKnowledgeById);
-router.put("/knowledge/:id", authenticate, updateKnowledge);
-router.delete("/knowledge/:id", authenticate, deleteKnowledge);
+const tenantRoles = ["tenant_admin", "doctor", "staff", "agent"];
+const managerRoles = ["tenant_admin", "staff"];
+
+router.post(
+  "/knowledge",
+  authenticate,
+  authorize({ user_type: "tenant", roles: managerRoles }),
+  uploadKnowledge,
+);
+router.get(
+  "/knowledges",
+  authenticate,
+  authorize({ user_type: "tenant", roles: tenantRoles }),
+  listKnowledge,
+);
+router.get(
+  "/knowledge/:id",
+  authenticate,
+  authorize({ user_type: "tenant", roles: tenantRoles }),
+  getKnowledgeById,
+);
+router.put(
+  "/knowledge/:id",
+  authenticate,
+  authorize({ user_type: "tenant", roles: managerRoles }),
+  updateKnowledge,
+);
+router.delete(
+  "/knowledge/:id",
+  authenticate,
+  authorize({ user_type: "tenant", roles: managerRoles }),
+  deleteKnowledge,
+);
+router.delete(
+  "/knowledge/:id/permanent",
+  authenticate,
+  authorize({ user_type: "tenant", roles: ["tenant_admin"] }),
+  permanentDeleteKnowledge,
+);
 router.put(
   "/knowledge-status/:id",
   authenticate,
-
+  authorize({ user_type: "tenant", roles: managerRoles }),
   updateKnowledgeStatusController,
 );
 router.post(
   "/knowledge-search",
   authenticate,
-
+  authorize({ user_type: "tenant", roles: tenantRoles }),
   searchKnowledgeChunksController,
 );
 

@@ -6,12 +6,36 @@ import {
     softDeleteCampaignService,
     permanentDeleteCampaignService,
 } from "./whatsappcampaign.service.js";
+import { missingFieldsChecker } from "../../utils/missingFields.js";
 
 export const createCampaignController = async (req, res) => {
     const tenant_id = req.user.tenant_id;
     const created_by = req.user.unique_id || "system";
 
     try {
+        const { campaign_name, campaign_type, template_id, audience_type, audience_data } = req.body;
+
+        const requiredFields = {
+            campaign_name,
+            campaign_type,
+            template_id,
+            audience_type,
+            audience_data,
+        };
+
+        const missingFields = await missingFieldsChecker(requiredFields);
+        if (missingFields.length > 0) {
+            return res.status(400).send({
+                message: `Missing required field(s): ${missingFields.join(", ")}`,
+            });
+        }
+
+        if (campaign_type === "scheduled" && !req.body.scheduled_at) {
+            return res.status(400).send({
+                message: "scheduled_at is required for scheduled campaigns",
+            });
+        }
+
         const campaign = await createCampaignService(tenant_id, req.body, created_by);
 
         return res.status(200).send({

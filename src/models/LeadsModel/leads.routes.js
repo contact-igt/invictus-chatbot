@@ -1,17 +1,50 @@
 import express from "express";
 import {
   deleteLeadController,
+  permanentDeleteLeadController,
   getLeadListController,
   getLeadSummaryController,
   updateLeadController,
 } from "./leads.controller.js";
-import { authenticate } from "../../middlewares/auth/authMiddlewares.js";
+import {
+  authenticate,
+  authorize,
+} from "../../middlewares/auth/authMiddlewares.js";
 
 const Router = express.Router();
 
-Router.get("/leads", authenticate, getLeadListController);
-Router.get("/leads-summary/:id", authenticate, getLeadSummaryController);
-Router.put("/lead/:id", authenticate, updateLeadController);
-Router.delete("/lead/:id", authenticate, deleteLeadController);
+const tenantRoles = ["tenant_admin", "doctor", "staff", "agent"];
+
+
+Router.get(
+  "/leads",
+  authenticate,
+  authorize({ user_type: "tenant", roles: tenantRoles }),
+  getLeadListController,
+);
+Router.get(
+  "/leads-summary/:id",
+  authenticate,
+  authorize({ user_type: "tenant", roles: tenantRoles }),
+  getLeadSummaryController,
+);
+Router.put(
+  "/lead/:id",
+  authenticate,
+  authorize({ user_type: "tenant", roles: tenantRoles }),
+  updateLeadController,
+);
+Router.delete(
+  "/lead/:id",
+  authenticate,
+  authorize({ user_type: "tenant", roles: ["tenant_admin"] }),
+  deleteLeadController,
+);
+Router.delete(
+  "/lead/:id/permanent",
+  authenticate,
+  authorize({ user_type: "tenant", roles: ["tenant_admin"] }),
+  permanentDeleteLeadController,
+);
 
 export default Router;

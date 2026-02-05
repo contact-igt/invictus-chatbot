@@ -3,6 +3,8 @@ import {
   createOrUpdateWhatsappAccountService,
   getWhatsappAccountByTenantService,
   updateWhatsappAccountStatusService,
+  softDeleteWhatsappAccountService,
+  permanentDeleteWhatsappAccountService,
 } from "./whatsappAccount.service.js";
 import { missingFieldsChecker } from "../../utils/missingFields.js";
 
@@ -157,7 +159,8 @@ export const testWhatsappAccountController = async (req, res) => {
     await updateWhatsappAccountStatusService(account.id, "verified", null);
 
     return res.status(200).send({
-      message: "WhatsApp connection verified successfully",
+      message: "WhatsApp connection verified successfully! You can now activate your account.",
+      status: "verified"
     });
   } catch (err) {
     const isNetworkError = err.code === "ENOTFOUND";
@@ -238,16 +241,38 @@ export const activateWhatsappAccountController = async (req, res) => {
 
     const account = await getWhatsappAccountByTenantService(tenant_id);
 
-    if (!account || account.status !== "verified") {
-      return res.status(400).send({
-        message: "WhatsApp account must be verified before activation",
+    if (!account) {
+      return res.status(404).send({
+        message: "WhatsApp account not found",
       });
     }
 
-    await updateWhatsappAccountStatusService(account.id, "active", null);
+    let newStatus;
+    let message;
+
+    if (account.status === "active") {
+      newStatus = "inactive";
+      message = "WhatsApp account deactivated successfully";
+    } else if (["verified", "inactive"].includes(account.status)) {
+      newStatus = "active";
+      message = "WhatsApp account activated successfully";
+    } else if (account.status === "pending" || account.status === "failed") {
+      return res.status(400).send({
+        message: "Your WhatsApp account is not yet verified. Please perform the 'Test Connection' process before activating.",
+        status: account.status
+      });
+    } else {
+      return res.status(400).send({
+        message: `Unable to activate account. Current status: ${account.status}. Please check your connection.`,
+        status: account.status
+      });
+    }
+
+    await updateWhatsappAccountStatusService(account.id, newStatus, null);
 
     return res.status(200).send({
-      message: "WhatsApp account activated successfully",
+      message: message,
+      status: newStatus,
     });
   } catch (err) {
     return res.status(500).send({
@@ -268,6 +293,36 @@ export const getWhatsappAccountController = async (req, res) => {
   } catch (err) {
     return res.status(500).send({
       error: err.message,
+    });
+  }
+};
+
+export const softDeleteWhatsappAccountController = async (req, res) => {
+  const tenant_id = req.user.tenant_id;
+
+  try {
+    await softDeleteWhatsappAccountService(tenant_id);
+    return res.status(200).send({
+      message: "WhatsApp account disconnected successfully",
+    });
+  } catch (err) {
+    return res.status(500).send({
+      message: err?.message,
+    });
+  }
+};
+
+export const permanentDeleteWhatsappAccountController = async (req, res) => {
+  const tenant_id = req.user.tenant_id;
+
+  try {
+    await permanentDeleteWhatsappAccountService(tenant_id);
+    return res.status(200).send({
+      message: "WhatsApp account database records permanently removed",
+    });
+  } catch (err) {
+    return res.status(500).send({
+      message: err?.message,
     });
   }
 };

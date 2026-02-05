@@ -5,6 +5,7 @@ import {
     addContactsToGroupService,
     removeContactFromGroupService,
     deleteContactGroupService,
+    permanentDeleteContactGroupService,
     updateContactGroupService,
     getAvailableContactsForGroupService,
 } from "./contactGroup.service.js";
@@ -86,6 +87,21 @@ export const deleteContactGroupController = async (req, res) => {
         const result = await deleteContactGroupService(group_id, tenant_id);
         return res.status(200).send(result);
     } catch (err) {
+        return res.status(500).send({ message: err.message });
+    }
+};
+
+export const permanentDeleteContactGroupController = async (req, res) => {
+    const { group_id } = req.params;
+    const tenant_id = req.user.tenant_id;
+
+    try {
+        const result = await permanentDeleteContactGroupService(group_id, tenant_id);
+        return res.status(200).send(result);
+    } catch (err) {
+        if (err.message === "Group not found") {
+            return res.status(404).send({ message: err.message });
+        }
         return res.status(500).send({ message: err.message });
     }
 };

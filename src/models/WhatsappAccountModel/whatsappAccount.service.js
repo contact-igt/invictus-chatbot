@@ -111,7 +111,7 @@ export const createOrUpdateWhatsappAccountService = async (
 export const getWhatsappAccountByTenantService = async (tenant_id) => {
   try {
     const [rows] = await db.sequelize.query(
-      `SELECT * FROM ${tableNames.WHATSAPP_ACCOUNT} WHERE tenant_id = ? LIMIT 1`,
+      `SELECT * FROM ${tableNames.WHATSAPP_ACCOUNT} WHERE tenant_id = ? AND is_deleted = false LIMIT 1`,
       { replacements: [tenant_id] },
     );
     return rows[0];
@@ -143,8 +143,30 @@ export const updateWhatsappAccountStatusService = async (id, status, error) => {
   }
 };
 
+export const softDeleteWhatsappAccountService = async (tenant_id) => {
+  const Query = `UPDATE ${tableNames.WHATSAPP_ACCOUNT} SET is_deleted = true, deleted_at = NOW(), status = 'inactive' WHERE tenant_id = ? AND is_deleted = false`;
+
+  try {
+    const [result] = await db.sequelize.query(Query, { replacements: [tenant_id] });
+    return result;
+  } catch (err) {
+    throw err;
+  }
+};
+
+export const permanentDeleteWhatsappAccountService = async (tenant_id) => {
+  const Query = `DELETE FROM ${tableNames.WHATSAPP_ACCOUNT} WHERE tenant_id = ?`;
+
+  try {
+    const [result] = await db.sequelize.query(Query, { replacements: [tenant_id] });
+    return result;
+  } catch (err) {
+    throw err;
+  }
+};
+
 export const getTenantByPhoneNumberIdService = async (phone_number_id) => {
-  const Query = `SELECT * FROM ${tableNames?.WHATSAPP_ACCOUNT} WHERE phone_number_id = ? AND status = 'active' LIMIT 1 `;
+  const Query = `SELECT * FROM ${tableNames?.WHATSAPP_ACCOUNT} WHERE phone_number_id = ? AND status = 'active' AND is_deleted = false LIMIT 1 `;
 
   try {
     const [result] = await db.sequelize.query(Query, {

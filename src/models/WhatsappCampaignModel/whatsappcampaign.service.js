@@ -4,6 +4,13 @@ import { generateReadableIdFromLast } from "../../utils/generateReadableIdFromLa
 import { sendWhatsAppTemplate } from "../AuthWhatsapp/AuthWhatsapp.service.js";
 import { createContactService, getContactByPhoneAndTenantIdService } from "../ContactsModel/contacts.service.js";
 import { createUserMessageService } from "../Messages/messages.service.js";
+import { createLeadService, getLeadByContactIdService } from "../LeadsModel/leads.service.js";
+import { formatPhoneNumber } from "../../utils/formatPhoneNumber.js";
+import {
+    createLiveChatService,
+    getLivechatByIdService,
+    updateLiveChatTimestampService,
+} from "../LiveChatModel/livechat.service.js";
 import cron from "node-cron";
 
 /**
@@ -45,11 +52,19 @@ export const createCampaignService = async (tenant_id, data, created_by) => {
         if (audience_type === "manual" || audience_type === "csv") {
             // Manual: Frontend sends array of { mobile_number, name?, dynamic_variables?: [...] }
             // CSV: Frontend parses CSV and sends same format
-            recipients = audience_data.map((item) => ({
-                mobile_number: item.mobile_number,
-                contact_id: item.contact_id || null,
-                dynamic_variables: item.dynamic_variables || null, // e.g., ['John', '10:00 AM']
-            }));
+            if (!Array.isArray(audience_data) || audience_data.length === 0) {
+                throw new Error("audience_data must be a non-empty array for manual/csv audience type");
+            }
+            recipients = audience_data.map((item, index) => {
+                if (!item.mobile_number) {
+                    throw new Error(`Mobile number missing for recipient at index ${index}`);
+                }
+                return {
+                    mobile_number: formatPhoneNumber(item.mobile_number),
+                    contact_id: item.contact_id || null,
+                    dynamic_variables: item.dynamic_variables || null,
+                };
+            });
         } else if (audience_type === "group") {
             // Group: Fetch all members from the group
             const group_id = audience_data; // audience_data is just the group_id string
@@ -238,6 +253,14 @@ export const executeCampaignBatchService = async (campaign_id, tenant_id, batchS
                 }
             }
 
+            // 2. Ensure Lead Exists for this Contact
+            if (contactId) {
+                const existingLead = await getLeadByContactIdService(tenant_id, contactId);
+                if (!existingLead) {
+                    await createLeadService(tenant_id, contactId, "campaign");
+                }
+            }
+
             let components = [];
 
             let dynamicVariables = recipient.dynamic_variables || [];
@@ -274,7 +297,7 @@ export const executeCampaignBatchService = async (campaign_id, tenant_id, batchS
                 meta_message_id: result.meta_message_id || null,
             });
 
-            // 3. Log to Message History
+            // 3. Log to Message History and Activate Live Chat
             if (contactId && result.meta_message_id) {
                 let personalizedMessage = templateBodyText;
                 if (Array.isArray(dynamicVariables) && dynamicVariables.length > 0) {
@@ -283,6 +306,7 @@ export const executeCampaignBatchService = async (campaign_id, tenant_id, batchS
                     });
                 }
 
+                // 6. Log to Messages Table
                 await createUserMessageService(
                     tenant_id,
                     contactId,
@@ -298,6 +322,14 @@ export const executeCampaignBatchService = async (campaign_id, tenant_id, batchS
                     null,
                     "sent"
                 );
+
+                // 7. Activate Live Chat
+                const livelist = await getLivechatByIdService(tenant_id, contactId);
+                if (!livelist) {
+                    await createLiveChatService(tenant_id, contactId);
+                } else {
+                    await updateLiveChatTimestampService(tenant_id, contactId);
+                }
             }
         } catch (err) {
             console.error(`Failed to send campaign message to ${recipient.mobile_number}:`, err.message);

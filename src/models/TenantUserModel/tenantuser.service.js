@@ -108,7 +108,7 @@ export const updateTenantUserPasswordService = async (
 
 // ----------------------
 
-export const updateTenantUserService = async (username, email, email_at) => {
+export const updateTenantUserService = async (username, email, mobile, country_code, old_email) => {
   const updateFields = [];
   const updateValues = [];
 
@@ -122,7 +122,19 @@ export const updateTenantUserService = async (username, email, email_at) => {
     updateValues.push(email);
   }
 
-  updateValues.push(email_at);
+  if (mobile) {
+    updateFields.push("mobile = ?");
+    updateValues.push(mobile);
+  }
+
+  if (country_code) {
+    updateFields.push("country_code = ?");
+    updateValues.push(country_code);
+  }
+
+  if (updateFields.length === 0) return null;
+
+  updateValues.push(old_email);
   updateValues.push(0);
 
   const Query = `

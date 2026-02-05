@@ -85,6 +85,17 @@ export const WhatsappAccountTable = (sequelize, Sequelize) => {
         ),
         field: "updated_at",
       },
+      is_deleted: {
+        type: Sequelize.BOOLEAN,
+        allowNull: false,
+        defaultValue: false,
+        field: "is_deleted",
+      },
+      deletedAt: {
+        type: Sequelize.DATE,
+        allowNull: true,
+        field: "deleted_at",
+      },
     },
     {
       tableName: tableNames.WHATSAPP_ACCOUNT,

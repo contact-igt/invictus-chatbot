@@ -102,35 +102,37 @@ export const updateTenantService = async (
   const updateFields = [];
   const updateValues = [];
 
-  if (company_name) {
+  if (company_name !== undefined && company_name !== null) {
     updateFields.push("company_name = ?");
     updateValues.push(company_name);
   }
 
-  if (owner_name) {
+  if (owner_name !== undefined && owner_name !== null) {
     updateFields.push("owner_name = ?");
     updateValues.push(owner_name);
   }
 
-  if (owner_email) {
+  if (owner_email !== undefined && owner_email !== null) {
     updateFields.push("owner_email = ?");
     updateValues.push(owner_email);
   }
 
-  if (owner_country_code) {
+  if (owner_country_code !== undefined && owner_country_code !== null) {
     updateFields.push("owner_country_code = ?");
     updateValues.push(owner_country_code);
   }
 
-  if (owner_mobile) {
+  if (owner_mobile !== undefined && owner_mobile !== null) {
     updateFields.push("owner_mobile = ?");
     updateValues.push(owner_mobile);
   }
 
-  if (type) {
+  if (type !== undefined && type !== null) {
     updateFields.push("type = ?");
     updateValues.push(type);
   }
+
+  if (updateFields.length === 0) return null;
 
   updateValues.push(tenant_id);
   updateValues.push(0);

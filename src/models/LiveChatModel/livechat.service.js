@@ -45,7 +45,6 @@ export const updateLiveChatTimestampService = async (tenant_id, contact_id) => {
 };
 
 
-
 export const startLiveChatCleanupService = () => {
   cron.schedule("*/1 * * * *", async () => {
     console.log("livechat cleaup started");

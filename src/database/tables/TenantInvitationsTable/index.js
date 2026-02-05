@@ -33,7 +33,7 @@ export const TenantInvitationsTable = (sequelize, Sequelize) => {
       },
 
       token_hash: {
-        type: Sequelize.TEXT,
+        type: Sequelize.STRING(255),
         allowNull: false,
       },
 

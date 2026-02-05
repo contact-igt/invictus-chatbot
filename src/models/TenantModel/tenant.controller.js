@@ -1,6 +1,7 @@
 import { tableNames } from "../../database/tableName.js";
 import { generateReadableIdFromLast } from "../../utils/generateReadableIdFromLast.js";
 import { missingFieldsChecker } from "../../utils/missingFields.js";
+import { formatPhoneNumber } from "../../utils/formatPhoneNumber.js";
 import crypto from "crypto";
 import {
   createTenantService,
@@ -58,13 +59,15 @@ export const createTenantController = async (req, res) => {
       "TT",
     );
 
+    const sanitizedMobile = formatPhoneNumber(owner_mobile);
+
     await createTenantService(
       tenant_id,
       company_name,
       owner_name,
       owner_email,
       owner_country_code,
-      owner_mobile,
+      sanitizedMobile,
       type,
       subscription_start_date || null,
       subscription_end_date || null,
@@ -83,7 +86,7 @@ export const createTenantController = async (req, res) => {
       owner_name,
       owner_email,
       owner_country_code,
-      owner_mobile,
+      sanitizedMobile,
       profile || null,
       "tenant_admin",
     );
@@ -155,51 +158,39 @@ export const updateTenantController = async (req, res) => {
       type,
     } = req.body;
 
-    const response = await findTenantByIdService(id);
+    const tenant = await findTenantByIdService(id);
 
-    if (!response) {
-      return res.status(400).json({ message: "Tenant details not found" });
+    if (!tenant) {
+      return res.status(404).json({ message: "Tenant details not found" });
     }
 
-    const requiredFields = {
-      company_name,
-      owner_name,
-      owner_email,
-      owner_country_code,
-      owner_mobile,
-      type,
-    };
-
-    const missingFields = await missingFieldsChecker(requiredFields);
-
-    if (missingFields.length > 0) {
-      return res.status(400).json({
-        message: `Missing required field(s) ${missingFields.join(", ")} `,
-      });
-    }
+    const sanitizedMobile = owner_mobile ? formatPhoneNumber(owner_mobile) : null;
 
     await updateTenantService(
       company_name,
       owner_name,
       owner_email,
       owner_country_code,
-      owner_mobile,
+      sanitizedMobile,
       type,
       id,
     );
 
+    // Sync changes to the primary tenant admin user
     await updateTenantUserService(
       owner_name,
       owner_email,
-      response?.owner_email,
+      sanitizedMobile,
+      owner_country_code,
+      tenant?.owner_email, // old email used as identifier
     );
 
     return res.status(200).send({
-      message: "Tentnat updated successfully",
+      message: "Tenant updated successfully",
     });
   } catch (err) {
     if (err.original?.code === "ER_DUP_ENTRY") {
-      return res.status(400).json({ message: "Try another email or mobile" });
+      return res.status(400).json({ message: "Email or mobile already exists" });
     }
 
     return res.status(500).json({

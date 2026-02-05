@@ -5,6 +5,8 @@ import {
   testWhatsappAccountController,
   activateWhatsappAccountController,
   getWhatsappAccountController,
+  softDeleteWhatsappAccountController,
+  permanentDeleteWhatsappAccountController,
 } from "./whatsappAccount.controller.js";
 
 import {
@@ -23,7 +25,15 @@ router.post(
   manualConnectWhatsappController,
 );
 
-router.get("/whatsapp-account", authenticate, getWhatsappAccountController);
+router.get(
+  "/whatsapp-account",
+  authenticate,
+  authorize({
+    user_type: "tenant",
+    roles: ["tenant_admin", "doctor", "staff", "agent"],
+  }),
+  getWhatsappAccountController,
+);
 
 router.post(
   "/whatsapp-account/test",
@@ -37,6 +47,20 @@ router.post(
   authenticate,
   authorize({ user_type: "tenant", roles: ["tenant_admin"] }),
   activateWhatsappAccountController,
+);
+
+router.delete(
+  "/whatsapp-account",
+  authenticate,
+  authorize({ user_type: "tenant", roles: ["tenant_admin"] }),
+  softDeleteWhatsappAccountController,
+);
+
+router.delete(
+  "/whatsapp-account/permanent",
+  authenticate,
+  authorize({ user_type: "tenant", roles: ["tenant_admin"] }),
+  permanentDeleteWhatsappAccountController,
 );
 
 export default router;

@@ -1,6 +1,7 @@
 import { scrapeWebsiteText } from "../../utils/scrapeWebsiteText.js";
 import {
   deleteKnowledgeService,
+  permanentDeleteKnowledgeService,
   getKnowledgeByIdService,
   listKnowledgeService,
   processKnowledgeUpload,
@@ -38,8 +39,8 @@ export const uploadKnowledge = async (req, res) => {
       if (!source_url) {
         return res.status(400).json({ message: "URL required" });
       }
-      finalText = await scrapeWebsiteText(source_url);
-      console.log("jjjj", finalText);
+      const scraped = await scrapeWebsiteText(source_url);
+      finalText = scraped.content;
       sourceUrl = source_url;
     }
 
@@ -137,6 +138,22 @@ export const deleteKnowledge = async (req, res) => {
   }
 };
 
+export const permanentDeleteKnowledge = async (req, res) => {
+  const tenant_id = req.user.tenant_id;
+
+  if (!tenant_id) {
+    return res.status(400).send({ message: "Invalid tenant context" });
+  }
+
+  try {
+    const { id } = req.params;
+    await permanentDeleteKnowledgeService(id, tenant_id);
+    res.json({ message: "Knowledge and its chunks permanently deleted" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
 export const updateKnowledgeStatusController = async (req, res) => {
   const { id } = req.params;
   const { status } = req.query;
@@ -182,7 +199,7 @@ export const searchKnowledgeChunksController = async (req, res) => {
   }
 
   try {
-    const data = await searchKnowledgeChunks(question);
+    const data = await searchKnowledgeChunks(tenant_id, question);
 
     return res.status(200).send({
       message: "Knowledge status updated successfully",

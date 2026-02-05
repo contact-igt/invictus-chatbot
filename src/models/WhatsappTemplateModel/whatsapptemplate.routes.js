@@ -14,14 +14,17 @@ import {
   syncWhatsappTemplateStatusController,
   updateWhatsappTemplateController,
   resubmitWhatsappTemplateController,
+  generateAiTemplateController,
 } from "./whatsapptemplate.controller.js";
 
 const router = express.Router();
 
+const tenantRoles = ["tenant_admin", "doctor", "staff", "agent"];
+
 router.post(
   "/whatsapp-template",
   authenticate,
-  authorize({ user_type: "tenant", roles: ["tenant_admin", "staff"] }),
+  authorize({ user_type: "tenant", roles: tenantRoles }),
   createWhatsappTemplateController,
 );
 
@@ -30,7 +33,7 @@ router.post(
   authenticate,
   authorize({
     user_type: "tenant",
-    roles: ["tenant_admin", "staff"],
+    roles: tenantRoles,
   }),
   submitWhatsappTemplateController,
 );
@@ -40,7 +43,7 @@ router.get(
   authenticate,
   authorize({
     user_type: "tenant",
-    roles: ["tenant_admin", "staff"],
+    roles: tenantRoles,
   }),
   syncWhatsappTemplateStatusController,
 );
@@ -48,21 +51,21 @@ router.get(
 router.post(
   "/whatsapp-templates/sync",
   authenticate,
-  authorize({ user_type: "tenant", roles: ["tenant_admin", "staff"] }),
+  authorize({ user_type: "tenant", roles: tenantRoles }),
   syncAllWhatsappTemplatesController,
 );
 
 router.get(
   "/whatsapp-templates",
   authenticate,
-  authorize({ user_type: "tenant", roles: ["tenant_admin", "staff"] }),
+  authorize({ user_type: "tenant", roles: tenantRoles }),
   getTemplateListController,
 );
 
 router.get(
   "/whatsapp-template/:template_id",
   authenticate,
-  authorize({ user_type: "tenant", roles: ["tenant_admin", "staff"] }),
+  authorize({ user_type: "tenant", roles: tenantRoles }),
   getTemplateByIdController,
 );
 
@@ -70,7 +73,7 @@ router.get(
 router.put(
   "/whatsapp-template/:template_id",
   authenticate,
-  authorize({ user_type: "tenant", roles: ["tenant_admin", "staff"] }),
+  authorize({ user_type: "tenant", roles: tenantRoles }),
   updateWhatsappTemplateController,
 );
 
@@ -79,15 +82,22 @@ router.post(
   authenticate,
   authorize({
     user_type: "tenant",
-    roles: ["tenant_admin", "staff"],
+    roles: tenantRoles,
   }),
   resubmitWhatsappTemplateController,
+);
+
+router.post(
+  "/whatsapp-template/generate-ai",
+  authenticate,
+  authorize({ user_type: "tenant", roles: tenantRoles }),
+  generateAiTemplateController,
 );
 
 router.delete(
   "/whatsapp-template/:template_id/soft",
   authenticate,
-  authorize({ user_type: "tenant", roles: ["tenant_admin", "staff"] }),
+  authorize({ user_type: "tenant", roles: tenantRoles }),
   softDeleteTemplateController,
 );
 

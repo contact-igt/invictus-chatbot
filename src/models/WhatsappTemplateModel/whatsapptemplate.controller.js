@@ -12,6 +12,7 @@ import {
   syncAllPendingTemplatesService,
   syncWhatsappTemplateStatusService,
   updateWhatsappTemplateService,
+  generateAiTemplateService,
 } from "./whatsapptemplate.service.js";
 import { missingFieldsChecker } from "../../utils/missingFields.js";
 
@@ -424,6 +425,47 @@ export const resubmitWhatsappTemplateController = async (req, res) => {
       });
     }
 
+    return res.status(500).json({
+      message: err.message,
+    });
+  }
+};
+
+export const generateAiTemplateController = async (req, res) => {
+  try {
+    const { prompt, focus, style, optimization, previous_content, rejection_reason } = req.body;
+
+    const requiredFields = {
+      prompt,
+      focus,
+      style,
+      optimization,
+    };
+
+    const missingFields = await missingFieldsChecker(requiredFields);
+    if (missingFields.length > 0) {
+      return res.status(400).send({
+        message: `Missing required field(s): ${missingFields.join(", ")}`,
+      });
+    }
+
+    const aiContent = await generateAiTemplateService({
+      prompt,
+      focus,
+      style,
+      optimization,
+      previous_content,
+      rejection_reason
+    });
+
+    return res.status(200).json({
+      message: "AI template content generated successfully",
+      data: {
+        content: aiContent,
+      },
+    });
+  } catch (err) {
+    console.error("AI Generation error:", err);
     return res.status(500).json({
       message: err.message,
     });

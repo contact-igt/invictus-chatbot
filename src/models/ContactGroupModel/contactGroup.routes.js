@@ -10,6 +10,7 @@ import {
     addContactsToGroupController,
     removeContactFromGroupController,
     deleteContactGroupController,
+    permanentDeleteContactGroupController,
     updateContactGroupController,
     getAvailableContactsController,
 } from "./contactGroup.controller.js";
@@ -72,12 +73,20 @@ router.delete(
     removeContactFromGroupController
 );
 
-// Delete a group
+// Delete a group (soft)
 router.delete(
     "/contact-group/:group_id",
     authenticate,
     authorize({ user_type: "tenant", roles: ["tenant_admin", "staff"] }),
     deleteContactGroupController
+);
+
+// Delete a group (permanent)
+router.delete(
+    "/contact-group/:group_id/permanent",
+    authenticate,
+    authorize({ user_type: "tenant", roles: ["tenant_admin"] }),
+    permanentDeleteContactGroupController
 );
 
 export default router;

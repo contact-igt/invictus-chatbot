@@ -38,6 +38,17 @@ export const AiPromptTable = (sequelize, Sequelize) => {
         defaultValue: sequelize.literal("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"),
         field: "updated_at",
       },
+      is_deleted: {
+        type: Sequelize.BOOLEAN,
+        allowNull: false,
+        defaultValue: false,
+        field: "is_deleted",
+      },
+      deletedAt: {
+        type: Sequelize.DATE,
+        allowNull: true,
+        field: "deleted_at",
+      },
     },
     {
       tableName: tableNames.AIPROMPT,

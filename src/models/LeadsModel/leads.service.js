@@ -6,14 +6,17 @@ import cron from "node-cron";
 import { getConversationMemory } from "../Messages/messages.memory.js";
 import { AiService } from "../../utils/coreAi.js";
 
-export const createLeadService = async (tenant_id, contact_id) => {
-  const Query = `INSERT INTO ${tableNames?.LEADS} (tenant_id, contact_id, last_user_message_at) VALUES (?,?, NOW())`;
-
-  console.log("ddd333", tenant_id, contact_id);
+export const createLeadService = async (tenant_id, contact_id, source = null) => {
+  const Query = `
+    INSERT INTO ${tableNames?.LEADS} 
+    (tenant_id, contact_id, source, last_user_message_at) 
+    VALUES (?,?,?, NOW())
+    ON DUPLICATE KEY UPDATE updated_at = NOW()
+  `;
 
   try {
     const [result] = await db.sequelize.query(Query, {
-      replacements: [tenant_id, contact_id],
+      replacements: [tenant_id, contact_id, source],
     });
 
     return result;
@@ -22,9 +25,8 @@ export const createLeadService = async (tenant_id, contact_id) => {
   }
 };
 
-export const getLeadByPhoneService = async (tenant_id, contact_id) => {
+export const getLeadByContactIdService = async (tenant_id, contact_id) => {
   const Query = `
-  
   SELECT * FROM ${tableNames?.LEADS} WHERE tenant_id = ? AND contact_id = ? AND is_deleted = false LIMIT 1`;
 
   try {
@@ -39,8 +41,29 @@ export const getLeadByPhoneService = async (tenant_id, contact_id) => {
 
 export const getLeadListService = async (tenant_id) => {
   const Query = `
-  SELECT led.* , cta.* FROM ${tableNames?.LEADS} as led
-  LEFT JOIN ${tableNames?.CONTACTS} as cta on (cta.id = led.contact_id)
+  SELECT 
+    led.id as lead_id,
+    led.contact_id,
+    led.tenant_id,
+    led.status,
+    led.heat_state,
+    led.score,
+    led.ai_summary,
+    led.summary_status,
+    led.last_user_message_at,
+    led.last_admin_reply_at,
+    led.created_at as lead_created_at,
+    cta.name,
+    cta.phone,
+    cta.email,
+    cta.profile_pic,
+    led.lead_stage,
+    led.assigned_to,
+    led.source,
+    led.priority,
+    led.internal_notes
+  FROM ${tableNames?.LEADS} as led
+  LEFT JOIN ${tableNames?.CONTACTS} as cta on (cta.contact_id = led.contact_id)
   WHERE led.tenant_id IN (?) AND led.is_deleted = false
   ORDER BY led.last_user_message_at DESC`;
 
@@ -130,7 +153,7 @@ export const getLeadSummaryService = async (tenant_id, phone, contact_id) => {
     }
 
     const chatHistory = buildChatHistory(memory);
-    const lead = await getLeadByPhoneService(tenant_id, contact_id);
+    const lead = await getLeadByContactIdService(tenant_id, contact_id);
 
     if (lead?.summary_status === "old" && lead?.ai_summary) {
       return {
@@ -148,13 +171,14 @@ export const getLeadSummaryService = async (tenant_id, phone, contact_id) => {
     - Clearly explain:
       • What the user talked about earlier
       • How the bot responded at that time
-      • Whether and when the admin intervened
+      • Whether and when the admin intervened (including sending Template messages for outreach)
       • What the user is talking about now based on the most recent messages
-    - Describe the conversation flow as past → recent → current.
+    - Describe the conversation flow as: outreach/past → recent interaction → current state.
 
     Rules:
     - Write only ONE short paragraph.
     - Clearly mention user, bot, and admin roles.
+    - IMPORTANT: Include details about Template/Campaign messages sent by Admin/System if they exist in the memory.
     - Use simple, professional language.
     - Do not assume information that is not mentioned.
 
@@ -186,12 +210,29 @@ export const updateLeadStatusService = async (
   contact_id,
   status,
   heat_state,
+  lead_stage = null,
+  assigned_to = null,
+  priority = null,
+  internal_notes = null
 ) => {
-  const Query = `UPDATE ${tableNames?.LEADS} SET status = ?, heat_state = ? WHERE tenant_id = ? AND contact_id = ? AND is_deleted = false`;
+  const updates = [];
+  const replacements = [];
+
+  if (status) { updates.push("status = ?"); replacements.push(status); }
+  if (heat_state) { updates.push("heat_state = ?"); replacements.push(heat_state); }
+  if (lead_stage) { updates.push("lead_stage = ?"); replacements.push(lead_stage); }
+  if (assigned_to !== null) { updates.push("assigned_to = ?"); replacements.push(assigned_to); }
+  if (priority) { updates.push("priority = ?"); replacements.push(priority); }
+  if (internal_notes !== null) { updates.push("internal_notes = ?"); replacements.push(internal_notes); }
+
+  if (updates.length === 0) return null;
+
+  const Query = `UPDATE ${tableNames?.LEADS} SET ${updates.join(", ")} WHERE tenant_id = ? AND contact_id = ? AND is_deleted = false`;
+  replacements.push(tenant_id, contact_id);
 
   try {
     const [result] = await db.sequelize.query(Query, {
-      replacements: [status, heat_state, tenant_id, contact_id],
+      replacements,
     });
     return result;
   } catch (err) {
@@ -201,6 +242,19 @@ export const updateLeadStatusService = async (
 
 export const deleteLeadService = async (tenant_id, contact_id) => {
   const Query = `UPDATE ${tableNames?.LEADS} SET is_deleted = true, deleted_at = NOW() WHERE tenant_id = ? AND contact_id = ? AND is_deleted = false`;
+
+  try {
+    const [result] = await db.sequelize.query(Query, {
+      replacements: [tenant_id, contact_id],
+    });
+    return result;
+  } catch (err) {
+    throw err;
+  }
+};
+
+export const permanentDeleteLeadService = async (tenant_id, contact_id) => {
+  const Query = `DELETE FROM ${tableNames?.LEADS} WHERE tenant_id = ? AND contact_id = ?`;
 
   try {
     const [result] = await db.sequelize.query(Query, {

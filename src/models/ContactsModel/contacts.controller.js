@@ -1,7 +1,9 @@
 import { missingFieldsChecker } from "../../utils/missingFields.js";
+import { formatPhoneNumber } from "../../utils/formatPhoneNumber.js";
 import {
   createContactService,
   deleteContactService,
+  permanentDeleteContactService,
   getAllContactsService,
   getContactByIdAndTenantIdService,
   getContactByPhoneAndTenantIdService,
@@ -10,7 +12,9 @@ import {
 
 export const createContactController = async (req, res) => {
   const tenant_id = req.user.tenant_id; // Get from authenticated user
-  const { phone, name, profile_pic } = req.body;
+  let { phone, name, profile_pic } = req.body;
+
+  phone = formatPhoneNumber(phone);
 
   const requiredFields = {
     phone,
@@ -146,6 +150,26 @@ export const deleteContactController = async (req, res) => {
     await deleteContactService(id, tenant_id);
     return res.status(200).send({
       message: "Contact deleted successfully",
+    });
+  } catch (err) {
+    return res.status(500).send({
+      message: err?.message,
+    });
+  }
+};
+
+export const permanentDeleteContactController = async (req, res) => {
+  const tenant_id = req.user.tenant_id;
+  const { id } = req.params;
+
+  if (!tenant_id) {
+    return res.status(400).send({ message: "Tenant id missing" });
+  }
+
+  try {
+    await permanentDeleteContactService(id, tenant_id);
+    return res.status(200).send({
+      message: "Contact and related data permanently deleted",
     });
   } catch (err) {
     return res.status(500).send({

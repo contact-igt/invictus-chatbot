@@ -1,5 +1,7 @@
 import { sendTypingIndicator } from "../../utils/sendTypingIndicator.js";
 import { createUserMessageService } from "../Messages/messages.service.js";
+import { formatPhoneNumber } from "../../utils/formatPhoneNumber.js";
+import fs from "fs";
 import {
   getOpenAIReply,
   isChatLocked,
@@ -19,7 +21,7 @@ import {
 } from "../ContactsModel/contacts.service.js";
 import {
   createLeadService,
-  getLeadByPhoneService,
+  getLeadByContactIdService,
   updateLeadService,
 } from "../LeadsModel/leads.service.js";
 import {
@@ -95,7 +97,9 @@ export const receiveMessage = async (req, res) => {
 
     const tenant_id = account.tenant_id;
 
-    const phone = msg.from;
+    let phone = msg.from;
+    phone = formatPhoneNumber(phone);
+
     const text = msg.text?.body || "";
     const messageId = msg.id;
 
@@ -183,11 +187,15 @@ export const receiveMessage = async (req, res) => {
       }
     }
 
-    let leadSaved = await getLeadByPhoneService(tenant_id, contactsaved?.contact_id);
+    fs.appendFileSync("webhook_debug.log", `Contact found/created: ${JSON.stringify(contactsaved)}\n`);
+    let leadSaved = await getLeadByContactIdService(tenant_id, contactsaved?.contact_id);
+    fs.appendFileSync("webhook_debug.log", `Existing Lead: ${JSON.stringify(leadSaved)}\n`);
 
     if (!leadSaved) {
-      await createLeadService(tenant_id, contactsaved?.contact_id);
-      leadSaved = await getLeadByPhoneService(tenant_id, contactsaved?.contact_id);
+      fs.appendFileSync("webhook_debug.log", `Creating lead for contact: ${contactsaved?.contact_id}\n`);
+      await createLeadService(tenant_id, contactsaved?.contact_id, "whatsapp");
+      leadSaved = await getLeadByContactIdService(tenant_id, contactsaved?.contact_id);
+      fs.appendFileSync("webhook_debug.log", `New Lead: ${JSON.stringify(leadSaved)}\n`);
     }
 
     await updateLeadService(tenant_id, leadSaved?.contact_id);
@@ -273,6 +281,7 @@ export const receiveMessage = async (req, res) => {
     });
   } catch (err) {
     console.error("Webhook error:", err);
+    fs.appendFileSync("webhook_debug.log", `CRITICAL ERROR: ${err.message}\n${err.stack}\n`);
     return res.sendStatus(200);
   }
 };

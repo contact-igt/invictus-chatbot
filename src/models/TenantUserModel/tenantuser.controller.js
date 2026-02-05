@@ -6,6 +6,7 @@ import {
 } from "../../middlewares/auth/authMiddlewares.js";
 import { generateReadableIdFromLast } from "../../utils/generateReadableIdFromLast.js";
 import { missingFieldsChecker } from "../../utils/missingFields.js";
+import { formatPhoneNumber } from "../../utils/formatPhoneNumber.js";
 import {
   sendTenantInvitationService,
 } from "../TenantInvitationModel/tenantinvitation.service.js";
@@ -70,6 +71,8 @@ export const createTenantUsercontroller = async (req, res) => {
     "TTU",
   );
 
+  const sanitizedMobile = formatPhoneNumber(mobile);
+
   try {
     await createTenantUserService(
       tenant_user_id,
@@ -77,7 +80,7 @@ export const createTenantUsercontroller = async (req, res) => {
       username,
       email,
       country_code,
-      mobile,
+      sanitizedMobile,
       profile || null,
       role,
     );
@@ -219,6 +222,10 @@ export const updateTenantUserByIdController = async (req, res) => {
       return res.status(403).send({
         message: "You cannot change role",
       });
+    }
+
+    if (req.body.mobile) {
+      req.body.mobile = formatPhoneNumber(req.body.mobile);
     }
 
     await updateTenantUserByIdService(id, req.body);

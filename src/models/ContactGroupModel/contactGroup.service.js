@@ -208,6 +208,36 @@ export const deleteContactGroupService = async (group_id, tenant_id) => {
 };
 
 /**
+ * Permanently delete a group and its members
+ */
+export const permanentDeleteContactGroupService = async (group_id, tenant_id) => {
+    const transaction = await db.sequelize.transaction();
+    try {
+        // 1. Delete Group Members
+        await db.ContactGroupMembers.destroy({
+            where: { group_id, tenant_id },
+            transaction
+        });
+
+        // 2. Delete Group
+        const result = await db.ContactGroups.destroy({
+            where: { group_id, tenant_id },
+            transaction
+        });
+
+        if (result === 0) {
+            throw new Error("Group not found");
+        }
+
+        await transaction.commit();
+        return { message: "Group and its members permanently deleted" };
+    } catch (err) {
+        await transaction.rollback();
+        throw err;
+    }
+};
+
+/**
  * Update a contact group
  */
 export const updateContactGroupService = async (group_id, tenant_id, data) => {
