@@ -2,6 +2,7 @@ import {
   createLiveChatService,
   getLivechatByIdService,
   getLiveChatListService,
+  getHistoryChatListService,
 } from "../LiveChatModel/livechat.service.js";
 
 export const createLiveChatController = async (req, res) => {
@@ -43,6 +44,29 @@ export const getLiveChatListController = async (req, res) => {
 
   try {
     const response = await getLiveChatListService(tenant_id);
+
+    return res.status(200).send({
+      message: "success",
+      data: response,
+    });
+  } catch (err) {
+    return res.status(500).send({
+      message: err?.message,
+    });
+  }
+};
+
+export const getHistoryChatListController = async (req, res) => {
+  const tenant_id = req.user.tenant_id;
+
+  if (!tenant_id) {
+    return res.status(400).send({
+      message: "Tenant id missing",
+    });
+  }
+
+  try {
+    const response = await getHistoryChatListService(tenant_id);
 
     return res.status(200).send({
       message: "success",

@@ -36,6 +36,7 @@ export const searchKnowledgeChunks = async (tenant_id, question) => {
     INNER JOIN ${tableNames.KNOWLEDGESOURCE} ks
       ON ks.id = kc.source_id
     WHERE ks.status = 'active'
+      AND ks.is_deleted = false
       AND ks.tenant_id IN (?)
       AND (${conditions})
     ORDER BY LENGTH(kc.chunk_text) ASC

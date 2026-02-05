@@ -5,21 +5,18 @@ export const ChatLocksTable = (sequelize, Sequelize) => {
     tableNames.CHATLOCKS,
     {
       tenant_id: {
-        type: Sequelize.INTEGER,
+        type: Sequelize.STRING,
         allowNull: false,
-        unique: true,
       },
 
       phone_number_id: {
         type: Sequelize.STRING,
         allowNull: false,
-        unique: true,
       },
 
       phone: {
         type: Sequelize.STRING,
         allowNull: false,
-        unique: true,
       },
 
       locked_at: {
@@ -27,12 +24,36 @@ export const ChatLocksTable = (sequelize, Sequelize) => {
         allowNull: false,
         defaultValue: Sequelize.literal("CURRENT_TIMESTAMP"),
       },
+
+      createdAt: {
+        type: Sequelize.DATE,
+        allowNull: false,
+        defaultValue: Sequelize.literal("CURRENT_TIMESTAMP"),
+        field: "created_at",
+      },
+
+      updatedAt: {
+        type: Sequelize.DATE,
+        allowNull: false,
+        defaultValue: Sequelize.literal("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"),
+        field: "updated_at",
+      },
     },
     {
       tableName: tableNames.CHATLOCKS,
       timestamps: true,
-      createdAt: "created_at",
-      updatedAt: "updated_at",
-    },
+      underscored: true,
+      indexes: [
+        {
+          name: "unique_chatlock_tenant_phone",
+          unique: true,
+          fields: ["tenant_id", "phone_number_id", "phone"],
+        },
+        {
+          name: "idx_chatlock_locked_at",
+          fields: ["locked_at"],
+        },
+      ],
+    }
   );
 };

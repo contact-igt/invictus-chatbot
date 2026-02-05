@@ -1,10 +1,10 @@
 import { cleanText } from "../../utils/cleanText.js";
 import {
-  checkIsAnyActivePromptService,
   deleteAiPromptService,
   getActivePromptService,
   getAiPromptByIdService,
   listAiPromptService,
+  permanentDeleteAiPromptService,
   processAiPromptUpload,
   updateAiPromptService,
   updatePromptActiveService,
@@ -116,17 +116,12 @@ export const updatePromptActive = async (req, res) => {
       return res.status(400).json({ message: "prompt id required" });
     }
 
-    if (is_active === "true") {
-      const activelist = await checkIsAnyActivePromptService(tenant_id);
-      if (activelist?.active_count > 0) {
-        return res.status(400).send({
-          message: "Only one prompt can be active",
-        });
-      }
+    if (String(is_active) === "true") {
+      // Logic inside service will deactivate others
     }
 
     await updatePromptActiveService(id, tenant_id, is_active);
-    res.json({ message: "Prompt activated successfully" });
+    res.json({ message: "Prompt updated successfully" });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -142,7 +137,23 @@ export const deleteAiPrompt = async (req, res) => {
   try {
     const { id } = req.params;
     await deleteAiPromptService(id, tenant_id);
-    res.json({ message: "Propmt deleted successfully" });
+    res.json({ message: "Prompt deleted successfully" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+export const permanentDeleteAiPrompt = async (req, res) => {
+  const tenant_id = req.user.tenant_id;
+
+  if (!tenant_id) {
+    return res.status(400).send({ message: "Invalid tenant context" });
+  }
+
+  try {
+    const { id } = req.params;
+    await permanentDeleteAiPromptService(id, tenant_id);
+    res.json({ message: "Prompt permanently deleted" });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

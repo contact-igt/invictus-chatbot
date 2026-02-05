@@ -1,15 +1,22 @@
 import { missingFieldsChecker } from "../../utils/missingFields.js";
+import { formatPhoneNumber } from "../../utils/formatPhoneNumber.js";
 import {
   createContactService,
+  deleteContactService,
+  permanentDeleteContactService,
   getAllContactsService,
+  getContactByIdAndTenantIdService,
   getContactByPhoneAndTenantIdService,
+  updateContactService,
 } from "./contacts.service.js";
 
 export const createContactController = async (req, res) => {
-  const { tenant_id, phone, name, profile_pic } = req.body;
+  const tenant_id = req.user.tenant_id; // Get from authenticated user
+  let { phone, name, profile_pic } = req.body;
+
+  phone = formatPhoneNumber(phone);
 
   const requiredFields = {
-    tenant_id,
     phone,
   };
 
@@ -21,26 +28,26 @@ export const createContactController = async (req, res) => {
   }
 
   try {
-    const checkDoubeUser = await getContactByPhoneAndTenantIdService(
+    const existingContact = await getContactByPhoneAndTenantIdService(
       tenant_id,
       phone,
     );
 
-    if (checkDoubeUser?.length > 0) {
-      return res.status(404).send({
-        message: "This contact already created",
+    if (existingContact) {
+      return res.status(409).send({
+        message: "This contact already exists",
       });
     }
 
     await createContactService(
       tenant_id,
       phone,
-      name ? name : null,
-      profile_pic ? profile_pic : null,
+      name || null,
+      profile_pic || null,
     );
 
     return res.status(200).send({
-      message: "success",
+      message: "Contact created successfully",
     });
   } catch (err) {
     return res.status(500).send({
@@ -72,4 +79,101 @@ export const getAllContactsController = async (req, res) => {
   }
 };
 
+export const getContactByIdController = async (req, res) => {
+  const tenant_id = req.user.tenant_id;
+  const { id } = req.params;
 
+  if (!tenant_id) {
+    return res.status(400).send({ message: "Tenant id missing" });
+  }
+
+  try {
+    const response = await getContactByIdAndTenantIdService(id, tenant_id);
+    if (!response) {
+      return res.status(404).send({ message: "Contact not found" });
+    }
+    return res.status(200).send({
+      message: "success",
+      data: response,
+    });
+  } catch (err) {
+    return res.status(500).send({
+      message: err?.message,
+    });
+  }
+};
+
+export const updateContactController = async (req, res) => {
+  const tenant_id = req.user.tenant_id;
+  const { id } = req.params;
+  const { name, email, profile_pic, is_blocked, phone } = req.body;
+
+  if (!tenant_id) {
+    return res.status(400).send({ message: "Tenant id missing" });
+  }
+
+  // Security: Prevent phone number editing
+  if (phone !== undefined) {
+    return res.status(403).send({
+      message: "Phone number cannot be edited. Please delete and recreate the contact if needed."
+    });
+  }
+
+  try {
+    await updateContactService(
+      id,
+      tenant_id,
+      name,
+      email,
+      profile_pic,
+      is_blocked
+    );
+    return res.status(200).send({
+      message: "Contact updated successfully",
+    });
+  } catch (err) {
+    return res.status(500).send({
+      message: err?.message,
+    });
+  }
+};
+
+export const deleteContactController = async (req, res) => {
+  const tenant_id = req.user.tenant_id;
+  const { id } = req.params;
+
+  if (!tenant_id) {
+    return res.status(400).send({ message: "Tenant id missing" });
+  }
+
+  try {
+    await deleteContactService(id, tenant_id);
+    return res.status(200).send({
+      message: "Contact deleted successfully",
+    });
+  } catch (err) {
+    return res.status(500).send({
+      message: err?.message,
+    });
+  }
+};
+
+export const permanentDeleteContactController = async (req, res) => {
+  const tenant_id = req.user.tenant_id;
+  const { id } = req.params;
+
+  if (!tenant_id) {
+    return res.status(400).send({ message: "Tenant id missing" });
+  }
+
+  try {
+    await permanentDeleteContactService(id, tenant_id);
+    return res.status(200).send({
+      message: "Contact and related data permanently deleted",
+    });
+  } catch (err) {
+    return res.status(500).send({
+      message: err?.message,
+    });
+  }
+};

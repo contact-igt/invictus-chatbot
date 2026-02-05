@@ -1,182 +1,23 @@
-// import jwt from "jsonwebtoken";
-// import ServerEnvironmentConfig from "../../config/server.config.js";
-
-// const generateAccessToken = (user) => {
-//   return jwt.sign(
-//     {
-//       id: user.id,
-//       email: user.email,
-//       username: user.username,
-//       role: user.role ? user.role : "user",
-//     },
-//     ServerEnvironmentConfig?.jwt_key,
-//     { expiresIn: "15m" }
-//   );
-// };
-
-// const generateRememberMeoken = (user) => {
-//   return jwt.sign(
-//     {
-//       id: user.id,
-//       email: user.email,
-//       username: user.username,
-//       role: user.role ? user.role : "user",
-//     },
-//     ServerEnvironmentConfig?.jwt_key,
-//     {
-//       expiresIn: "30d",
-//     }
-//   );
-// };
-
-// const generateRefreshToken = (user) => {
-//   return jwt.sign(
-//     {
-//       id: user.id,
-//       email: user.email,
-//       username: user.username,
-//       role: user.role ? user.role : "user",
-//     },
-//     ServerEnvironmentConfig?.jwt_key,
-//     {
-//       expiresIn: "7d",
-//     }
-//   );
-// };
-
-// const decodeAuthToken = (token) => {
-//   const currenttoken = token && token.split(" ")[1];
-//   if (!token) {
-//     return res.status(401).json({ message: "Unauthorized" });
-//   }
-
-//   const decoded = jwt.verify(currenttoken, ServerEnvironmentConfig?.jwt_key);
-//   return decoded;
-// };
-
-// // user token auth
-// const authenticateToken = (req, res, next) => {
-//   const authHeader = req.headers["authorization"];
-//   const token = authHeader && authHeader.split(" ")[1];
-//   if (!token) {
-//     return res.status(401).json({ message: "Unauthorized" });
-//   }
-//   jwt.verify(token, ServerEnvironmentConfig.jwt_key, (err, user) => {
-//     if (err) {
-//       return res.status(403).json({ message: "Unauthorized" });
-//     }
-//     req.user = user;
-//     next();
-//   });
-// };
-
-// // super admin token auth
-// const authenticateSuperAdminToken = (req, res, next) => {
-//   const authHeader = req.headers["authorization"];
-//   const token = authHeader && authHeader.split(" ")[1];
-
-//   if (!token) {
-//     return res.status(401).json({ message: "Unauthorized" });
-//   }
-
-//   try {
-//     const decoded = jwt.verify(token, ServerEnvironmentConfig.jwt_key);
-
-//     if (decoded.role !== "super-admin") {
-//       return res.status(403).json({
-//         message: "You don't have permission to manage",
-//       });
-//     }
-
-//     req.user = decoded;
-//     next();
-//   } catch (err) {
-//     return res.status(403).json({ message: "Unauthorized" });
-//   }
-// };
-
-// // management token auth
-// const authenticateManagementToken = async (req, res, next) => {
-//   const authHeader = req.headers["authorization"];
-//   const token = authHeader && authHeader.split(" ")[1];
-
-//   if (!token) {
-//     return res.status(401).json({ message: "Unauthorized" });
-//   }
-
-//   try {
-//     const decoded = jwt.verify(token, ServerEnvironmentConfig.jwt_key);
-
-//     if (decoded.role !== "super-admin" && decoded.role !== "admin") {
-//       return res.status(403).json({
-//         message: "You don't have permission to manage",
-//       });
-//     }
-
-//     req.user = decoded;
-//     next();
-//   } catch (err) {
-//     return res.status(403).json({ message: "Unauthorized" });
-//   }
-// };
-
-// export const checkToken = (req, res, next) => {
-//   const token = req.header("Authorization")?.split(" ")[1];
-
-//   if (!token) {
-//     return res.status(401).json({ message: "No token provided" });
-//   }
-//   try {
-//     jwt.verify(token, ServerEnvironmentConfig.jwt_key);
-//     return res.status(200).json({ message: "Valid token" });
-//   } catch (err) {
-//     if (err.name === "TokenExpiredError") {
-//       return res.status(200).json({ message: "Token expired" });
-//     }
-//     return res.status(200).json({ message: "Invalid token" });
-//   }
-// };
-
-// export const refreshToken = (req, res) => {
-//   const { refreshToken } = req.body;
-
-//   if (!refreshToken)
-//     return res.status(401).json({ message: "Refresh token required" });
-
-//   jwt.verify(refreshToken, ServerEnvironmentConfig?.jwt_key, (err, user) => {
-//     if (err) return res.status(403).json({ message: "Invalid refresh token" });
-
-//     const newAccessToken = generateAccessToken(user);
-//     const newRefreshToken = generateRefreshToken(user);
-//     return res
-//       .status(200)
-//       .json({ accessToken: newAccessToken, refreshToken: newRefreshToken });
-//   });
-// };
-
-// export {
-//   generateAccessToken,
-//   generateRefreshToken,
-//   generateRememberMeoken,
-//   authenticateToken,
-//   decodeAuthToken,
-//   authenticateManagementToken,
-//   authenticateSuperAdminToken,
-// };
-
 import jwt from "jsonwebtoken";
 import ServerEnvironmentConfig from "../../config/server.config.js";
-import { findTenantByIdService } from "../../models/TenantModel/tenant.service.js";
+import { getManagementByIdService } from "../../models/ManagementModel/management.service.js";
+import { findTenantUserByIdService } from "../../models/TenantUserModel/tenantUser.service.js";
+
+/* =========================
+   TOKEN GENERATORS
+========================= */
 
 export const generateAccessToken = (user) => {
   return jwt.sign(
     {
       id: user.id,
-      tenant_id: user.tenant_id || null,
+      unique_id: user.unique_id || null,
+      user_type: user.user_type, // management | tenant
+      tenant_id: user.tenant_id || null, // null for management
       role: user.role,
     },
     ServerEnvironmentConfig.jwt_key,
-    { expiresIn: "15m" },
+    { expiresIn: "24h" },
   );
 };
 
@@ -184,6 +25,8 @@ export const generateRefreshToken = (user) => {
   return jwt.sign(
     {
       id: user.id,
+      unique_id: user.unique_id || null,
+      user_type: user.user_type,
       tenant_id: user.tenant_id || null,
       role: user.role,
     },
@@ -192,10 +35,22 @@ export const generateRefreshToken = (user) => {
   );
 };
 
+/* =========================
+   GENERATE INVITE TOKEN
+========================= */
+
+export const generateInviteToken = (payload) => {
+  return jwt.sign(payload, ServerEnvironmentConfig.jwt_key, {
+    expiresIn: "48h",
+  });
+};
+
 export const generateRememberMeToken = (user) => {
   return jwt.sign(
     {
       id: user.id,
+      unique_id: user.unique_id || null,
+      user_type: user.user_type,
       tenant_id: user.tenant_id || null,
       role: user.role,
     },
@@ -204,89 +59,93 @@ export const generateRememberMeToken = (user) => {
   );
 };
 
-// export const decodeAuthToken = (authHeader) => {
-//   if (!authHeader) return null;
-//   const token = authHeader.split(" ")[1];
-//   if (!token) return null;
-
-//   return jwt.verify(token, ServerEnvironmentConfig.jwt_key);
-// };
+/* =========================
+   AUTHENTICATE
+========================= */
 
 export const authenticate = async (req, res, next) => {
-  const authHeader = req.headers["authorization"];
-  const token = authHeader && authHeader.split(" ")[1];
-
-  if (!token) {
-    return res.status(401).json({ message: "Unauthorized" });
-  }
+  const token = req.headers.authorization?.split(" ")[1];
+  if (!token) return res.status(401).json({ message: "Unauthorized" });
 
   try {
     const decoded = jwt.verify(token, ServerEnvironmentConfig.jwt_key);
     req.user = decoded;
 
-    if (decoded.tenant_id) {
-      const tenant = await findTenantByIdService(decoded.tenant_id);
+    console.log("authdecode", decoded);
 
-      if (!tenant || tenant.status !== "active") {
-        return res.status(403).json({
-          code: "TENANT_INACTIVE",
-          message: "Your hospital account is inactive. Please contact support.",
+    // 🔵 MANAGEMENT USER CHECK
+    if (decoded.user_type === "management") {
+      const user = await getManagementByIdService(decoded.unique_id);
+      console.log("ddd", user);
+      if (!user) {
+        return res.status(401).json({
+          message: "Account no longer exists. Please login again.",
+        });
+      }
+    }
+
+    // 🟢 TENANT USER CHECK
+    if (decoded.user_type === "tenant") {
+      const user = await findTenantUserByIdService(decoded.unique_id);
+
+      console.log("tenatdecose", user)
+
+
+      if (!user) {
+        return res.status(401).json({
+          message: "Account no longer exists. Please login again.",
         });
       }
     }
 
     next();
-  } catch (err) {
-    return res.status(403).json({
-      message: "Invalid or expired token",
-    });
+  } catch {
+    return res.status(401).json({ message: "Invalid or expired token" });
   }
 };
 
-export const requireSuperAdmin = (req, res, next) => {
-  if (req.user.role !== "super_admin") {
-    return res.status(403).json({
-      message: "Super admin access only",
-    });
-  }
-  next();
+/* =========================
+   AUTHORIZE (DYNAMIC)
+========================= */
+
+export const authorize = ({ user_type, roles = [] }) => {
+  return (req, res, next) => {
+    const user = req.user;
+
+    if (!user || user.user_type !== user_type) {
+      return res.status(403).json({ message: "Access denied" });
+    }
+
+    if (roles.length && !roles.includes(user.role)) {
+      return res.status(403).json({ message: "Permission denied" });
+    }
+
+    next();
+  };
 };
 
-export const requireAdmin = (req, res, next) => {
-  if (req.user.role !== "admin") {
-    return res.status(403).json({
-      message: "Hospital admin access only",
-    });
-  }
-  next();
-};
-
-export const requireManagement = (req, res, next) => {
-  if (!["admin", "staff"].includes(req.user.role)) {
-    return res.status(403).json({
-      message: "Management access only",
-    });
-  }
-  next();
-};
+/* =========================
+   CHECK TOKEN
+========================= */
 
 export const checkToken = (req, res) => {
-  const token = req.header("Authorization")?.split(" ")[1];
-
-  if (!token) {
-    return res.status(401).json({ message: "No token provided" });
-  }
+  const token = req.headers.authorization?.split(" ")[1];
+  if (!token) return res.status(401).json({ message: "No token provided" });
 
   try {
     jwt.verify(token, ServerEnvironmentConfig.jwt_key);
-    return res.status(200).json({ valid: true });
+    res.status(200).json({ valid: true });
   } catch (err) {
-    if (err.name === "TokenExpiredError") {
-      return res.status(401).json({ message: "Token expired" });
-    }
-    return res.status(401).json({ message: "Invalid token" });
+    res.status(401).json({
+      message:
+        err.name === "TokenExpiredError" ? "Token expired" : "Invalid token",
+    });
   }
 };
+
+/* =========================
+   REFRESH TOKEN
+========================= */
 
 export const refreshToken = (req, res) => {
   const { refreshToken } = req.body;
@@ -300,12 +159,9 @@ export const refreshToken = (req, res) => {
       return res.status(403).json({ message: "Invalid refresh token" });
     }
 
-    const newAccessToken = generateAccessToken(user);
-    const newRefreshToken = generateRefreshToken(user);
-
     return res.status(200).json({
-      accessToken: newAccessToken,
-      refreshToken: newRefreshToken,
+      accessToken: generateAccessToken(user),
+      refreshToken: generateRefreshToken(user),
     });
   });
 };

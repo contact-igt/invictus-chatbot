@@ -13,6 +13,3 @@ export const generatePassword = async () => {
     hashedPassword: password_hash,
   };
 };
-
-
-

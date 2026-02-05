@@ -1,25 +1,33 @@
 import axios from "axios";
 import {
-  createWhatsappAccountService,
-  getWhatsappAccountByIdService,
+  createOrUpdateWhatsappAccountService,
+  getWhatsappAccountByTenantService,
   updateWhatsappAccountStatusService,
+  softDeleteWhatsappAccountService,
+  permanentDeleteWhatsappAccountService,
 } from "./whatsappAccount.service.js";
 import { missingFieldsChecker } from "../../utils/missingFields.js";
 
-export const whatsappCallbackController = async (req, res) => {
+export const whatsappOAuthCallbackController = async (req, res) => {
   try {
-    const { code } = req.query;
+    const { code, state } = req.query;
 
-    const tenant_id = 1;
-
-    if (!code) {
-      return res.status(400).send({ message: "Authorization code missing" });
+    if (!code || !state) {
+      return res.status(400).send({ message: "Invalid OAuth callback" });
     }
+
+    // decode tenant_id from state
+    const decodedState = JSON.parse(
+      Buffer.from(state, "base64").toString("utf8"),
+    );
+
+    const tenant_id = decodedState.tenant_id;
 
     if (!tenant_id) {
-      return res.status(400).send({ message: "Invalid tenant context" });
+      return res.status(400).send({ message: "Tenant context missing" });
     }
 
+    // 1️⃣ Exchange code → access token
     const tokenRes = await axios.get(
       "https://graph.facebook.com/v19.0/oauth/access_token",
       {
@@ -27,215 +35,275 @@ export const whatsappCallbackController = async (req, res) => {
           client_id: process.env.META_APP_ID,
           client_secret: process.env.META_APP_SECRET,
           redirect_uri: process.env.META_REDIRECT_URI,
-          code: code,
+          code,
         },
       },
     );
 
     const access_token = tokenRes.data.access_token;
 
-    if (!access_token) {
-      return res.status(400).send({
-        message: "Access token not received from Meta",
-      });
-    }
-
+    // 2️⃣ Get business
     const businessRes = await axios.get(
       "https://graph.facebook.com/v19.0/me/businesses",
       {
-        headers: {
-          Authorization: `Bearer ${access_token}`,
-        },
+        headers: { Authorization: `Bearer ${access_token}` },
       },
     );
 
     const business = businessRes.data?.data?.[0];
+    if (!business) throw new Error("No Facebook Business found");
 
-    if (!business) {
-      return res.status(400).send({
-        message: "No Facebook Business found for this user",
-      });
-    }
-
-    const business_id = business.id;
-
+    // 3️⃣ Get WABA
     const wabaRes = await axios.get(
-      `https://graph.facebook.com/v19.0/${business_id}/owned_whatsapp_business_accounts`,
+      `https://graph.facebook.com/v19.0/${business.id}/owned_whatsapp_business_accounts`,
       {
-        headers: {
-          Authorization: `Bearer ${access_token}`,
-        },
+        headers: { Authorization: `Bearer ${access_token}` },
       },
     );
 
     const waba = wabaRes.data?.data?.[0];
+    if (!waba) throw new Error("No WhatsApp Business Account found");
 
-    if (!waba) {
-      return res.status(400).send({
-        message: "No WhatsApp Business Account found",
-      });
-    }
-
-    const waba_id = waba.id;
-
+    // 4️⃣ Get phone number
     const phoneRes = await axios.get(
-      `https://graph.facebook.com/v19.0/${waba_id}/phone_numbers`,
+      `https://graph.facebook.com/v19.0/${waba.id}/phone_numbers`,
       {
-        headers: {
-          Authorization: `Bearer ${access_token}`,
-        },
+        headers: { Authorization: `Bearer ${access_token}` },
       },
     );
 
     const phone = phoneRes.data?.data?.[0];
+    if (!phone) throw new Error("No WhatsApp phone number found");
 
-    if (!phone) {
-      return res.status(400).send({
-        message: "No WhatsApp phone number found",
-      });
-    }
-
-    const phone_number_id = phone.id;
-    const whatsapp_number = phone.display_phone_number;
-
-    await createWhatsappAccountService(
+    await createOrUpdateWhatsappAccountService(
       tenant_id,
-      whatsapp_number,
-      phone_number_id,
-      waba_id,
+      phone.display_phone_number,
+      phone.id,
+      waba.id,
       access_token,
     );
 
     return res.redirect(
-      "http://localhost:3000/settings/whatsapp-settings?status=connected",
+      `${process.env.FRONTEND_URL}/settings/whatsapp?status=connected`,
     );
   } catch (err) {
-    console.error("META ERROR:", err.response?.data || err.message);
-
     return res.status(500).send({
-      message: "WhatsApp connection failed",
-      meta_error: err.response?.data || err.message,
+      message: "WhatsApp OAuth connection failed",
+      error: err.response?.data || err.message,
     });
   }
 };
 
-export const createWhatsappAccountController = async (req, res) => {
-  const { whatsapp_number, phone_number_id, waba_id, access_token } = req.body;
-
-  const tenant_id = req.user.tenant_id;
-
-  if (!tenant_id) {
-    return res.status(400).send({ message: "Invalid tenant context" });
-  }
-
-  const requiredFields = {
-    whatsapp_number,
-    phone_number_id,
-    waba_id,
-    access_token,
-  };
-
-  const missingFields = await missingFieldsChecker(requiredFields);
-
-  if (missingFields.length > 0) {
-    return res.status(400).send({
-      message: `Missing required field(s): ${missingFields.join(", ")}`,
-    });
-  }
-
+export const manualConnectWhatsappController = async (req, res) => {
   try {
-    await createWhatsappAccountService(
+    const tenant_id = req.user.tenant_id;
+
+    const { whatsapp_number, phone_number_id, waba_id, access_token } =
+      req.body;
+
+    if (!tenant_id) {
+      return res.status(400).send({ message: "Invalid tenant context" });
+    }
+
+    const requiredFields = {
+      whatsapp_number,
+      phone_number_id,
+      waba_id,
+      access_token,
+    };
+
+    const missingFields = await missingFieldsChecker(requiredFields);
+    if (missingFields.length > 0) {
+      return res.status(400).send({
+        message: `Missing required field(s): ${missingFields.join(", ")}`,
+      });
+    }
+
+    await createOrUpdateWhatsappAccountService(
       tenant_id,
       whatsapp_number,
       phone_number_id,
       waba_id,
       access_token,
-      "pending",
     );
 
     return res.status(200).send({
       message: "WhatsApp details saved. Please test connection.",
     });
   } catch (err) {
-    if (err.original?.code === "ER_DUP_ENTRY") {
-      return res.status(400).send({
-        message: "Tenant or whatsapp number or phone number id already exists",
-      });
-    }
-
     return res.status(500).send({
-      message: err?.message,
+      message: err.message,
     });
   }
 };
 
-export const testWhatsappAccountConnectionController = async (req, res) => {
+export const testWhatsappAccountController = async (req, res) => {
   const tenant_id = req.user.tenant_id;
 
-  if (!tenant_id) {
-    return res.status(400).send({ message: "Invalid tenant context" });
-  }
-
-  const account = await getWhatsappAccountByIdService(tenant_id);
+  const account = await getWhatsappAccountByTenantService(tenant_id);
 
   if (!account) {
-    return res.status(404).send({
-      message: "WhatsApp account not found",
-    });
+    return res.status(404).send({ message: "WhatsApp account not found" });
   }
 
   try {
-    const response = await axios.get(
-      `https://graph.facebook.com/v19.0/${account?.phone_number_id}`,
+    await axios.get(
+      `https://graph.facebook.com/v19.0/${account.phone_number_id}`,
       {
         headers: {
-          Authorization: `Bearer ${account?.access_token}`,
+          Authorization: `Bearer ${account.access_token}`,
         },
       },
     );
 
-    const metaWabaId = response.data?.whatsapp_business_account?.id;
-
-    if (account.waba_id && metaWabaId && metaWabaId !== account.waba_id) {
-      throw new Error("WABA ID does not match this phone number");
-    }
-
     await updateWhatsappAccountStatusService(account.id, "verified", null);
 
     return res.status(200).send({
-      message: "WhatsApp connection successful",
-      data: {
-        phone: response.data.display_phone_number,
-        business_name: response.data.verified_name,
-      },
+      message: "WhatsApp connection verified successfully! You can now activate your account.",
+      status: "verified"
     });
   } catch (err) {
+    const isNetworkError = err.code === "ENOTFOUND";
+
     await updateWhatsappAccountStatusService(
       account.id,
       "failed",
-      err.response?.data || err.message,
+      isNetworkError
+        ? "Server cannot reach Meta (DNS/network issue)"
+        : err.response?.data || err.message,
     );
 
-    return res.status(400).send({
-      message: "WhatsApp connection failed",
-      error: err.response?.data || err.message,
+    return res.status(500).send({
+      message: isNetworkError
+        ? "Server network issue. Please contact support."
+        : "WhatsApp verification failed",
     });
   }
 };
 
-export const getWhatsappAccountByIdController = async (req, res) => {
-  const tenant_id = req.user.tenant_id;
+// export const testWhatsappAccountConnectionController = async (req, res) => {
+//   const tenant_id = req.user.tenant_id;
 
-  if (!tenant_id) {
-    return res.status(400).send({ message: "Invalid tenant context" });
-  }
+//   if (!tenant_id) {
+//     return res.status(400).send({ message: "Invalid tenant context" });
+//   }
 
+//   const account = await getWhatsappAccountByIdService(tenant_id);
+
+//   if (!account) {
+//     return res.status(404).send({
+//       message: "WhatsApp account not found",
+//     });
+//   }
+
+//   try {
+//     const response = await axios.get(
+//       `https://graph.facebook.com/v19.0/${account?.phone_number_id}`,
+//       {
+//         headers: {
+//           Authorization: `Bearer ${account?.access_token}`,
+//         },
+//       },
+//     );
+
+//     const metaWabaId = response.data?.whatsapp_business_account?.id;
+
+//     if (account.waba_id && metaWabaId && metaWabaId !== account.waba_id) {
+//       throw new Error("WABA ID does not match this phone number");
+//     }
+
+//     await updateWhatsappAccountStatusService(account.id, "verified", null);
+
+//     return res.status(200).send({
+//       message: "WhatsApp connection successful",
+//       data: {
+//         phone: response.data.display_phone_number,
+//         business_name: response.data.verified_name,
+//       },
+//     });
+//   } catch (err) {
+//     await updateWhatsappAccountStatusService(
+//       account.id,
+//       "failed",
+//       err.response?.data || err.message,
+//     );
+
+//     return res.status(400).send({
+//       message: "WhatsApp connection failed",
+//       error: err.response?.data || err.message,
+//     });
+//   }
+// };
+
+export const activateWhatsappAccountController = async (req, res) => {
   try {
-    const response = await getWhatsappAccountByIdService(tenant_id);
+    const tenant_id = req.user.tenant_id;
+
+    const account = await getWhatsappAccountByTenantService(tenant_id);
+
+    if (!account) {
+      return res.status(404).send({
+        message: "WhatsApp account not found",
+      });
+    }
+
+    let newStatus;
+    let message;
+
+    if (account.status === "active") {
+      newStatus = "inactive";
+      message = "WhatsApp account deactivated successfully";
+    } else if (["verified", "inactive"].includes(account.status)) {
+      newStatus = "active";
+      message = "WhatsApp account activated successfully";
+    } else if (account.status === "pending" || account.status === "failed") {
+      return res.status(400).send({
+        message: "Your WhatsApp account is not yet verified. Please perform the 'Test Connection' process before activating.",
+        status: account.status
+      });
+    } else {
+      return res.status(400).send({
+        message: `Unable to activate account. Current status: ${account.status}. Please check your connection.`,
+        status: account.status
+      });
+    }
+
+    await updateWhatsappAccountStatusService(account.id, newStatus, null);
 
     return res.status(200).send({
-      message: "success",
-      data: response,
+      message: message,
+      status: newStatus,
+    });
+  } catch (err) {
+    return res.status(500).send({
+      error: err.message,
+    });
+  }
+};
+
+export const getWhatsappAccountController = async (req, res) => {
+  try {
+    const tenant_id = req.user.tenant_id;
+
+    const account = await getWhatsappAccountByTenantService(tenant_id);
+
+    return res.status(200).send({
+      data: account,
+    });
+  } catch (err) {
+    return res.status(500).send({
+      error: err.message,
+    });
+  }
+};
+
+export const softDeleteWhatsappAccountController = async (req, res) => {
+  const tenant_id = req.user.tenant_id;
+
+  try {
+    await softDeleteWhatsappAccountService(tenant_id);
+    return res.status(200).send({
+      message: "WhatsApp account disconnected successfully",
     });
   } catch (err) {
     return res.status(500).send({
@@ -244,34 +312,13 @@ export const getWhatsappAccountByIdController = async (req, res) => {
   }
 };
 
-export const activateWhatsappAccountController = async (req, res) => {
+export const permanentDeleteWhatsappAccountController = async (req, res) => {
   const tenant_id = req.user.tenant_id;
 
-  if (!tenant_id) {
-    return res.status(400).send({ message: "Invalid tenant context" });
-  }
-
-  const { status } = req.query;
-
-  if (!status) {
-    return res.status(400).send({
-      message: "Status required",
-    });
-  }
-
   try {
-    const account = await getWhatsappAccountByIdService(tenant_id);
-
-    if (!account || (account.status !== "verified" && status === "active")) {
-      return res.status(201).send({
-        message: "Please test connection before activation",
-      });
-    }
-
-    await updateWhatsappAccountStatusService(account.id, status, null);
-
+    await permanentDeleteWhatsappAccountService(tenant_id);
     return res.status(200).send({
-      message: "WhatsApp account status updated successfully",
+      message: "WhatsApp account database records permanently removed",
     });
   } catch (err) {
     return res.status(500).send({

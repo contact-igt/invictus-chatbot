@@ -22,11 +22,10 @@ export const processKnowledgeUpload = async (
   VALUES (?, ?, ?, ?)`;
 
   try {
-    const [result] = await db.sequelize.query(Query, {
+    const [sourceId] = await db.sequelize.query(Query, {
       replacements: [tenant_id, title, type, source_url, text, file_name],
+      type: db.Sequelize.QueryTypes.INSERT,
     });
-
-    const sourceId = result;
 
     const chunks = chunkText(text);
 
@@ -43,7 +42,7 @@ export const processKnowledgeUpload = async (
 export const listKnowledgeService = async (tenant_id) => {
   const Query = `
     SELECT id, title, type, source_url, file_name , status , created_at
-    FROM ${tableNames.KNOWLEDGESOURCE} WHERE tenant_id IN (?)
+    FROM ${tableNames.KNOWLEDGESOURCE} WHERE tenant_id IN (?) AND is_deleted = false
     ORDER BY created_at DESC
     `;
 
@@ -63,7 +62,7 @@ export const getKnowledgeByIdService = async (id, tenant_id) => {
     `
     SELECT *
     FROM ${tableNames.KNOWLEDGESOURCE}
-    WHERE id = ? AND tenant_id = ?
+    WHERE id = ? AND tenant_id = ? AND is_deleted = false
     `,
     { replacements: [id, tenant_id] },
   );
@@ -78,7 +77,7 @@ export const updateKnowledgeService = async (id, tenant_id, title, text) => {
     `
     UPDATE ${tableNames.KNOWLEDGESOURCE}
     SET title = ?, raw_text = ?
-    WHERE id = ? AND tenant_id = ?
+    WHERE id = ? AND tenant_id = ? AND is_deleted = false
     `,
     { replacements: [title, cleaned, id, tenant_id] },
   );
@@ -108,30 +107,44 @@ export const updateKnowledgeService = async (id, tenant_id, title, text) => {
 };
 
 export const deleteKnowledgeService = async (id, tenant_id) => {
-  // 1️⃣ Delete chunks
   await db.sequelize.query(
     `
-    DELETE FROM ${tableNames.KNOWLEDGECHUNKS}
-    WHERE source_id = ? AND tenant_id = ?
-    `,
-    { replacements: [id, tenant_id] },
-  );
-
-  // 2️⃣ Delete source
-  await db.sequelize.query(
-    `
-    DELETE FROM ${tableNames.KNOWLEDGESOURCE}
-    WHERE id = ? AND tenant_id = ?
+    UPDATE ${tableNames.KNOWLEDGESOURCE}
+    SET is_deleted = true, deleted_at = NOW()
+    WHERE id = ? AND tenant_id = ? AND is_deleted = false
     `,
     { replacements: [id, tenant_id] },
   );
 };
 
-export const updateKnowledgeStatusService = async (status, id , tenant_id) => {
-  const Query = ` UPDATE ${tableNames?.KNOWLEDGESOURCE} SET status = ? WHERE id = ? AND tenant_id = ?`;
+export const permanentDeleteKnowledgeService = async (id, tenant_id) => {
+  const transaction = await db.sequelize.transaction();
+  try {
+    // 1. Delete Chunks
+    await db.sequelize.query(`DELETE FROM ${tableNames.KNOWLEDGECHUNKS} WHERE source_id = ? AND tenant_id = ?`, {
+      replacements: [id, tenant_id],
+      transaction,
+    });
+
+    // 2. Delete Source
+    await db.sequelize.query(`DELETE FROM ${tableNames.KNOWLEDGESOURCE} WHERE id = ? AND tenant_id = ?`, {
+      replacements: [id, tenant_id],
+      transaction,
+    });
+
+    await transaction.commit();
+    return true;
+  } catch (err) {
+    await transaction.rollback();
+    throw err;
+  }
+};
+
+export const updateKnowledgeStatusService = async (status, id, tenant_id) => {
+  const Query = ` UPDATE ${tableNames?.KNOWLEDGESOURCE} SET status = ? WHERE id = ? AND tenant_id = ? AND is_deleted = false`;
 
   try {
-    const values = [status, id , tenant_id];
+    const values = [status, id, tenant_id];
 
     const [result] = await db.sequelize.query(Query, { replacements: values });
 

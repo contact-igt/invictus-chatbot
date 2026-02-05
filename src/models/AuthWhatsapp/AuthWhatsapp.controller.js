@@ -1,5 +1,7 @@
 import { sendTypingIndicator } from "../../utils/sendTypingIndicator.js";
 import { createUserMessageService } from "../Messages/messages.service.js";
+import { formatPhoneNumber } from "../../utils/formatPhoneNumber.js";
+import fs from "fs";
 import {
   getOpenAIReply,
   isChatLocked,
@@ -12,16 +14,21 @@ import {
 
 import { getTenantByPhoneNumberIdService } from "../WhatsappAccountModel/whatsappAccount.service.js";
 import { getIO } from "../../middlewares/socket/socket.js";
+import db from "../../database/index.js";
 import {
   createContactService,
   getContactByPhoneAndTenantIdService,
 } from "../ContactsModel/contacts.service.js";
 import {
   createLeadService,
-  getLeadByPhoneService,
+  getLeadByContactIdService,
   updateLeadService,
 } from "../LeadsModel/leads.service.js";
-import { createLiveChatService, getLivechatByIdService } from "../LiveChatModel/livechat.service.js";
+import {
+  createLiveChatService,
+  getLivechatByIdService,
+  updateLiveChatTimestampService
+} from "../LiveChatModel/livechat.service.js";
 
 export const verifyWebhook = (req, res) => {
   const mode = req.query["hub.mode"];
@@ -38,6 +45,47 @@ export const receiveMessage = async (req, res) => {
   try {
     const value = req.body?.entry?.[0]?.changes?.[0]?.value;
     const msg = value?.messages?.[0];
+    const statusUpdate = value?.statuses?.[0];
+
+    if (statusUpdate) {
+      const messageId = statusUpdate.id;
+      const status = statusUpdate.status;
+
+      await db.sequelize.transaction(async (t) => {
+        const recipient = await db.WhatsappCampaignRecipients.findOne({
+          where: { meta_message_id: messageId },
+          include: [{ model: db.WhatsappCampaigns, as: "campaign" }],
+          lock: t.LOCK.UPDATE,
+          transaction: t
+        });
+
+        if (recipient) {
+          const oldStatus = recipient.status;
+          const statusPriority = { sent: 1, delivered: 2, read: 3, replied: 4, failed: 5 };
+
+          if (statusPriority[status] > (statusPriority[oldStatus] || 0)) {
+            await recipient.update({
+              status: status,
+              error_message: status === "failed" ? statusUpdate.errors?.[0]?.title : null
+            }, { transaction: t });
+
+            if (recipient.campaign) {
+              if (status === "delivered" && oldStatus === "sent") {
+                await recipient.campaign.increment("delivered_count", { transaction: t });
+              } else if (status === "read") {
+                if (oldStatus === "sent") {
+                  await recipient.campaign.increment(["delivered_count", "read_count"], { transaction: t });
+                } else if (oldStatus === "delivered") {
+                  await recipient.campaign.increment("read_count", { transaction: t });
+                }
+              }
+            }
+          }
+        }
+      });
+
+      return res.sendStatus(200);
+    }
 
     if (!msg) return res.sendStatus(200);
 
@@ -49,7 +97,9 @@ export const receiveMessage = async (req, res) => {
 
     const tenant_id = account.tenant_id;
 
-    const phone = msg.from;
+    let phone = msg.from;
+    phone = formatPhoneNumber(phone);
+
     const text = msg.text?.body || "";
     const messageId = msg.id;
 
@@ -83,7 +133,6 @@ export const receiveMessage = async (req, res) => {
       tenant_id,
       phone,
     );
-
     if (!contactsaved) {
       await createContactService(tenant_id, phone, name ? name : null, null);
       contactsaved = await getContactByPhoneAndTenantIdService(
@@ -92,15 +141,17 @@ export const receiveMessage = async (req, res) => {
       );
     }
 
-    const livelist = await getLivechatByIdService(tenant_id, contactsaved?.id);
+    const livelist = await getLivechatByIdService(tenant_id, contactsaved?.contact_id);
 
     if (!livelist) {
-      await createLiveChatService(tenant_id, contactsaved?.id);
+      await createLiveChatService(tenant_id, contactsaved?.contact_id);
+    } else {
+      await updateLiveChatTimestampService(tenant_id, contactsaved?.contact_id);
     }
 
     await createUserMessageService(
       tenant_id,
-      contactsaved?.id,
+      contactsaved?.contact_id,
       phone_number_id,
       phone,
       messageId,
@@ -110,11 +161,41 @@ export const receiveMessage = async (req, res) => {
       text,
     );
 
-    let leadSaved = await getLeadByPhoneService(tenant_id, contactsaved?.id);
+
+    const cleanPhone = phone.replace(/\D/g, "");
+    const phoneSuffix = cleanPhone.slice(-10);
+
+    const lastCampaignRecipient = await db.WhatsappCampaignRecipients.findOne({
+      where: {
+        mobile_number: { [db.Sequelize.Op.like]: `%${phoneSuffix}` }
+      },
+      order: [["created_at", "DESC"]],
+      include: [{ model: db.WhatsappCampaigns, as: "campaign" }]
+    });
+
+    if (lastCampaignRecipient) {
+      const allowedStatuses = ["sent", "delivered", "read"];
+      if (allowedStatuses.includes(lastCampaignRecipient.status) && lastCampaignRecipient.campaign) {
+        const campaignSentAt = new Date(lastCampaignRecipient.updated_at).getTime();
+        const nowTime = new Date().getTime();
+        const hoursDiff = (nowTime - campaignSentAt) / (1000 * 60 * 60);
+
+        if (hoursDiff <= 24) {
+          await lastCampaignRecipient.update({ status: "replied" });
+          await lastCampaignRecipient.campaign.increment("replied_count");
+        }
+      }
+    }
+
+    fs.appendFileSync("webhook_debug.log", `Contact found/created: ${JSON.stringify(contactsaved)}\n`);
+    let leadSaved = await getLeadByContactIdService(tenant_id, contactsaved?.contact_id);
+    fs.appendFileSync("webhook_debug.log", `Existing Lead: ${JSON.stringify(leadSaved)}\n`);
 
     if (!leadSaved) {
-      await createLeadService(tenant_id, contactsaved?.id);
-      leadSaved = await getLeadByPhoneService(tenant_id, contactsaved?.id);
+      fs.appendFileSync("webhook_debug.log", `Creating lead for contact: ${contactsaved?.contact_id}\n`);
+      await createLeadService(tenant_id, contactsaved?.contact_id, "whatsapp");
+      leadSaved = await getLeadByContactIdService(tenant_id, contactsaved?.contact_id);
+      fs.appendFileSync("webhook_debug.log", `New Lead: ${JSON.stringify(leadSaved)}\n`);
     }
 
     await updateLeadService(tenant_id, leadSaved?.contact_id);
@@ -153,10 +234,10 @@ export const receiveMessage = async (req, res) => {
 
           await createUserMessageService(
             tenant_id,
-            contactsaved?.id,
+            contactsaved?.contact_id,
             phone_number_id,
             phone,
-            messageId,
+            null, // Bot messages should not use user messageId as wamid
             name,
             "bot",
             null,
@@ -181,10 +262,10 @@ export const receiveMessage = async (req, res) => {
 
         await createUserMessageService(
           tenant_id,
-          contactsaved?.id,
+          contactsaved?.contact_id,
           phone_number_id,
           phone,
-          messageId,
+          null, // Bot messages should not use user messageId as wamid
           name,
           "bot",
           null,
@@ -200,6 +281,7 @@ export const receiveMessage = async (req, res) => {
     });
   } catch (err) {
     console.error("Webhook error:", err);
+    fs.appendFileSync("webhook_debug.log", `CRITICAL ERROR: ${err.message}\n${err.stack}\n`);
     return res.sendStatus(200);
   }
 };

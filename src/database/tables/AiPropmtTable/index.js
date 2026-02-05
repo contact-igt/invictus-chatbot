@@ -1,40 +1,67 @@
 import { tableNames } from "../../tableName.js";
 
 export const AiPromptTable = (sequelize, Sequelize) => {
-  return sequelize.define(tableNames.AIPROMPT, {
-    tenant_id: {
-      type: Sequelize.INTEGER,
-      allowNull: false,
-    },
+  return sequelize.define(
+    tableNames.AIPROMPT,
+    {
+      tenant_id: {
+        type: Sequelize.STRING,
+        allowNull: false,
+      },
 
-    name: {
-      type: Sequelize.STRING,
-      allowNull: true,
-    },
+      name: {
+        type: Sequelize.STRING,
+        allowNull: true,
+      },
 
-    prompt: {
-      type: Sequelize.TEXT,
-      allowNull: false,
-    },
+      prompt: {
+        type: Sequelize.TEXT,
+        allowNull: false,
+      },
 
-    is_active: {
-      type: Sequelize.STRING,
-      allowNull: false,
-      defaultValue: "false",
-    },
+      is_active: {
+        type: Sequelize.BOOLEAN,
+        allowNull: false,
+        defaultValue: false,
+      },
 
-    createdAt: {
-      type: "TIMESTAMP",
-      allowNull: true,
-      defaultValue: sequelize.literal("CURRENT_TIMESTAMP"),
-      field: "created_at",
-    },
+      createdAt: {
+        type: Sequelize.DATE,
+        allowNull: false,
+        defaultValue: sequelize.literal("CURRENT_TIMESTAMP"),
+        field: "created_at",
+      },
 
-    updatedAt: {
-      type: "TIMESTAMP",
-      allowNull: true,
-      defaultValue: sequelize.literal("CURRENT_TIMESTAMP"),
-      field: "updated_at",
+      updatedAt: {
+        type: Sequelize.DATE,
+        allowNull: false,
+        defaultValue: sequelize.literal("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"),
+        field: "updated_at",
+      },
+      is_deleted: {
+        type: Sequelize.BOOLEAN,
+        allowNull: false,
+        defaultValue: false,
+        field: "is_deleted",
+      },
+      deletedAt: {
+        type: Sequelize.DATE,
+        allowNull: true,
+        field: "deleted_at",
+      },
     },
-  });
+    {
+      tableName: tableNames.AIPROMPT,
+      timestamps: true,
+      underscored: true,
+      indexes: [
+        {
+          fields: ["tenant_id"],
+        },
+        {
+          fields: ["tenant_id", "is_active"],
+        },
+      ],
+    }
+  );
 };

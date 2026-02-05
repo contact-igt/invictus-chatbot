@@ -7,23 +7,31 @@ export const createUserMessageService = async (
   contact_id,
   phone_number_id,
   phone,
-  wa_id,
+  wamid,
   name,
   sender,
   sender_id,
   message,
+  message_type = "text",
+  media_url = null,
+  media_mime_type = null,
+  status = null,
 ) => {
   const Query = `INSERT INTO ${tableNames?.MESSAGES} (  
   tenant_id,
   contact_id,
   phone_number_id,
   phone,
-  wa_id,	
-  name,	
-  sender,	
-  sender_id,	
-  message )
-   VALUES (?,?,?,?,?,?,?,?,?) `;
+  wamid,
+  name,
+  sender,
+  sender_id,
+  message,
+  message_type,
+  media_url,
+  media_mime_type,
+  status )
+   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) `;
 
   try {
     const values = [
@@ -31,11 +39,15 @@ export const createUserMessageService = async (
       contact_id,
       phone_number_id,
       phone,
-      wa_id,
+      wamid,
       name,
       sender,
       sender_id,
       message,
+      message_type,
+      media_url,
+      media_mime_type,
+      status,
     ];
 
     const [result] = await db.sequelize.query(Query, { replacements: values });
@@ -67,7 +79,7 @@ export const getChatListService = async (tenant_id) => {
     ON m.contact_id = lm.contact_id
    AND m.created_at = lm.last_message_time
   JOIN contacts c
-    ON c.id = m.contact_id
+    ON c.contact_id = m.contact_id
   LEFT JOIN ${tableNames.LIVECHAT} lc
     ON lc.contact_id = m.contact_id
    AND lc.tenant_id = ?
@@ -104,10 +116,10 @@ export const getChatByPhoneService = async (phone, tenant_id) => {
 };
 
 export const markSeenMessageService = async (tenant_id, phone) => {
-  const Query = `UPDATE ${tableNames?.MESSAGES} SET seen = "true" WHERE phone = ? AND seen = "false" AND tenant_id = ?`;
+  const Query = `UPDATE ${tableNames?.MESSAGES} SET seen = ? WHERE phone = ? AND seen = ? AND tenant_id = ?`;
   try {
     const [result] = await db.sequelize.query(Query, {
-      replacements: [phone, tenant_id],
+      replacements: [true, phone, false, tenant_id],
     });
     return result;
   } catch (err) {

@@ -1,47 +1,66 @@
 import express from "express";
 import {
+  manualConnectWhatsappController,
+  whatsappOAuthCallbackController,
+  testWhatsappAccountController,
   activateWhatsappAccountController,
-  createWhatsappAccountController,
-  getWhatsappAccountByIdController,
-  testWhatsappAccountConnectionController,
-  whatsappCallbackController,
+  getWhatsappAccountController,
+  softDeleteWhatsappAccountController,
+  permanentDeleteWhatsappAccountController,
 } from "./whatsappAccount.controller.js";
+
 import {
   authenticate,
-  requireAdmin,
-  requireManagement,
+  authorize,
 } from "../../middlewares/auth/authMiddlewares.js";
 
-const Router = express.Router();
+const router = express.Router();
 
-Router.get("/callback", whatsappCallbackController);
+router.get("/whatsapp/oauth/callback", whatsappOAuthCallbackController);
 
-Router.post(
+router.post(
+  "/whatsapp-account/manual",
+  authenticate,
+  authorize({ user_type: "tenant", roles: ["tenant_admin"] }),
+  manualConnectWhatsappController,
+);
+
+router.get(
   "/whatsapp-account",
   authenticate,
-  requireAdmin,
-  createWhatsappAccountController,
+  authorize({
+    user_type: "tenant",
+    roles: ["tenant_admin", "doctor", "staff", "agent"],
+  }),
+  getWhatsappAccountController,
 );
 
-Router.get(
-  "/whatsapp-accounts",
+router.post(
+  "/whatsapp-account/test",
   authenticate,
-  requireManagement,
-  getWhatsappAccountByIdController,
+  authorize({ user_type: "tenant", roles: ["tenant_admin"] }),
+  testWhatsappAccountController,
 );
 
-Router.get(
-  "/whatsapp-account/test-connect",
+router.post(
+  "/whatsapp-account/activate",
   authenticate,
-  requireManagement,
-  testWhatsappAccountConnectionController,
-);
-
-Router.put(
-  "/whatsapp-account/status",
-  authenticate,
-  requireManagement,
+  authorize({ user_type: "tenant", roles: ["tenant_admin"] }),
   activateWhatsappAccountController,
 );
 
-export default Router;
+router.delete(
+  "/whatsapp-account",
+  authenticate,
+  authorize({ user_type: "tenant", roles: ["tenant_admin"] }),
+  softDeleteWhatsappAccountController,
+);
+
+router.delete(
+  "/whatsapp-account/permanent",
+  authenticate,
+  authorize({ user_type: "tenant", roles: ["tenant_admin"] }),
+  permanentDeleteWhatsappAccountController,
+);
+
+export default router;

@@ -1,70 +1,124 @@
 import { tableNames } from "../../tableName.js";
 
 export const ManagementTable = (sequelize, Sequelize) => {
-  return sequelize.define(tableNames.MANAGEMENT, {
-    tenant_id: {
-      type: Sequelize.INTEGER,
-      allowNull: true,
-    },
+  return sequelize.define(
+    tableNames.MANAGEMENT,
+    {
+      id: {
+        type: Sequelize.INTEGER,
+        allowNull: false,
+        autoIncrement: true,
+        primaryKey: true,
+      },
 
-    title: {
-      type: Sequelize.ENUM("Dr", "Mr", "Ms", "Mrs"),
-      allowNull: true,
-    },
+      management_id: {
+        type: Sequelize.STRING,
+        allowNull: false,
+      },
 
-    username: {
-      type: Sequelize.STRING,
-      allowNull: false,
-    },
+      title: {
+        type: Sequelize.ENUM("Dr", "Mr", "Ms", "Mrs"),
+        allowNull: true,
+      },
 
-    email: {
-      type: Sequelize.STRING,
-      allowNull: false,
-      unique: true,
-      validate: { isEmail: true },
-    },
+      username: {
+        type: Sequelize.STRING,
+        allowNull: false,
+      },
 
-    country_code: {
-      type: Sequelize.STRING,
-      allowNull: true,
-    },
+      email: {
+        type: Sequelize.STRING,
+        allowNull: false,
+        validate: { isEmail: true },
+      },
 
-    mobile: {
-      type: Sequelize.STRING,
-      unique: true,
-    },
+      country_code: {
+        type: Sequelize.STRING,
+        allowNull: true,
+      },
 
-    password: {
-      type: Sequelize.STRING,
-      allowNull: false,
-    },
+      mobile: {
+        type: Sequelize.STRING,
+        allowNull: true,
+      },
 
-    profile: {
-      type: Sequelize.STRING,
-      allowNull: true,
-    },
+      password: {
+        type: Sequelize.STRING,
+        allowNull: false,
+      },
 
-    role: {
-      type: Sequelize.ENUM("super_admin", "admin", "staff"),
-      allowNull: false,
-    },
+      profile: {
+        type: Sequelize.STRING,
+        allowNull: true,
+      },
 
-    status: {
-      type: Sequelize.ENUM("active", "inactive"),
-      defaultValue: "active",
-    },
-    createdAt: {
-      type: "TIMESTAMP",
-      allowNull: true,
-      defaultValue: sequelize.literal("CURRENT_TIMESTAMP"),
-      field: "created_at",
-    },
+      role: {
+        type: Sequelize.ENUM("super_admin", "platform_admin"),
+        allowNull: false,
+      },
 
-    updatedAt: {
-      type: "TIMESTAMP",
-      allowNull: true,
-      defaultValue: sequelize.literal("CURRENT_TIMESTAMP"),
-      field: "updated_at",
+      status: {
+        type: Sequelize.ENUM("active", "inactive"),
+        defaultValue: "active",
+        allowNull: false,
+      },
+
+      is_deleted: {
+        type: Sequelize.BOOLEAN,
+        defaultValue: false,
+        allowNull: false,
+      },
+
+      deleted_at: {
+        type: Sequelize.DATE,
+        allowNull: true,
+      },
+
+      createdAt: {
+        type: Sequelize.DATE,
+        allowNull: false,
+        defaultValue: sequelize.literal("CURRENT_TIMESTAMP"),
+        field: "created_at",
+      },
+
+      updatedAt: {
+        type: Sequelize.DATE,
+        allowNull: false,
+        defaultValue: sequelize.literal(
+          "CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"
+        ),
+        field: "updated_at",
+      },
     },
-  });
+    {
+      tableName: tableNames.MANAGEMENT,
+      timestamps: true,
+      underscored: true,
+      indexes: [
+        {
+          name: "unique_mgmt_id",
+          unique: true,
+          fields: ["management_id"],
+        },
+        {
+          name: "unique_mgmt_email",
+          unique: true,
+          fields: ["email"],
+        },
+        {
+          name: "unique_mgmt_mobile",
+          unique: true,
+          fields: ["mobile"],
+        },
+        {
+          name: "idx_mgmt_role",
+          fields: ["role"],
+        },
+        {
+          name: "idx_mgmt_deleted",
+          fields: ["is_deleted"],
+        },
+      ],
+    }
+  );
 };
