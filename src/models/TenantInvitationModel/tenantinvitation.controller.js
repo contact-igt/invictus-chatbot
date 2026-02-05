@@ -10,7 +10,7 @@ import {
   activateTenantUserService,
   findTenantUserByIdService,
   updateTenantUserPasswordService,
-} from "../TenantUserModel/tenantUser.service.js";
+} from "../TenantUserModel/tenantuser.service.js";
 import {
   activateTenantService,
   findTenantByIdService,

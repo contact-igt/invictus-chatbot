@@ -19,7 +19,7 @@ import {
   permanentDeleteTenantUserService,
   softDeleteTenantUserService,
   updateTenantUserByIdService,
-} from "./tenantUser.service.js";
+} from "./tenantuser.service.js";
 import bcrypt from "bcrypt";
 import crypto from "crypto";
 
