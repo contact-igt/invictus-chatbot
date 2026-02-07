@@ -278,10 +278,20 @@ export const executeCampaignBatchService = async (campaign_id, tenant_id, batchS
                         type: "body",
                         parameters: dynamicVariables.map((v) => ({
                             type: "text",
-                            text: v,
+                            text: String(v), // Ensure it's a string
                         })),
                     },
                 ];
+            } else {
+                // Check if template actually needs variables
+                const [templateVars] = await db.sequelize.query(
+                    `SELECT COUNT(*) as count FROM ${tableNames.WHATSAPP_TEMPLATE_VARIABLES} WHERE template_id = ?`,
+                    { replacements: [campaign.template_id] }
+                );
+
+                if (templateVars[0].count > 0) {
+                    console.warn(`Campaign ${campaign_id}: Recipient ${recipient.mobile_number} has no dynamic variables, but template requires ${templateVars[0].count}`);
+                }
             }
 
             const result = await sendWhatsAppTemplate(
@@ -426,3 +436,58 @@ export const startCampaignSchedulerService = () => {
     });
 };
 
+/**
+ * Retrieves a list of deleted campaigns for a tenant with filtering.
+ */
+export const getDeletedCampaignListService = async (tenant_id, query) => {
+    const { status, type, search, page = 1, limit = 10 } = query;
+    const offset = (page - 1) * limit;
+
+    let where = { tenant_id, is_deleted: true };
+    if (status) where.status = status;
+    if (type) where.campaign_type = type;
+    if (search) {
+        where.campaign_name = { [db.Sequelize.Op.like]: `%${search}%` };
+    }
+
+    const { count, rows } = await db.WhatsappCampaigns.findAndCountAll({
+        where,
+        order: [["deleted_at", "DESC"]],
+        limit: parseInt(limit),
+        offset: parseInt(offset),
+        include: [
+            {
+                model: db.WhatsappTemplates,
+                as: "template",
+                attributes: ["template_name", "category", "language"],
+            },
+        ],
+    });
+
+    return {
+        totalItems: count,
+        campaigns: rows,
+        totalPages: Math.ceil(count / limit),
+        currentPage: parseInt(page),
+    };
+};
+
+/**
+ * Restore a soft-deleted campaign
+ */
+export const restoreCampaignService = async (campaign_id, tenant_id) => {
+    const campaign = await db.WhatsappCampaigns.findOne({
+        where: { campaign_id, tenant_id, is_deleted: true }
+    });
+
+    if (!campaign) {
+        throw new Error("Campaign not found or not deleted");
+    }
+
+    await campaign.update({
+        is_deleted: false,
+        deleted_at: null
+    });
+
+    return { message: "Campaign restored successfully" };
+};

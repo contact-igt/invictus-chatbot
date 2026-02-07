@@ -199,32 +199,45 @@ export const updateTenantController = async (req, res) => {
   }
 };
 
-// export const updateTenantStatusController = async (req, res) => {
-//   try {
-//     const { id } = req.params;
-//     const { status } = req.query;
+export const updateTenantStatusController = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.query;
 
-//     if (!status) {
-//       return res.status(400).send({
-//         message: "Status is required",
-//       });
-//     }
+    if (!status) {
+      return res.status(400).send({
+        message: "Status is required",
+      });
+    }
 
-//     if (!["active", "inactive", "rejected", "suspended"].includes(status)) {
-//       return res.status(400).send({
-//         message: "Invalid status",
-//       });
-//     }
+    if (
+      ![
+        "invited",
+        "active",
+        "inactive",
+        "rejected",
+        "suspended",
+        "trial",
+        "expired",
+        "pending_setup",
+        "grace_period",
+        "maintenance",
+      ].includes(status)
+    ) {
+      return res.status(400).send({
+        message: "Invalid status",
+      });
+    }
 
-//     await updateTenantStatusService(status, id);
+    await updateTenantStatusService(status, id);
 
-//     return res.status(200).send({
-//       message: "Tentnat status updated successfully",
-//     });
-//   } catch (err) {
-//     res.status(500).send({ error: err.message });
-//   }
-// };
+    return res.status(200).send({
+      message: "Tenant status updated successfully",
+    });
+  } catch (err) {
+    res.status(500).send({ error: err.message });
+  }
+};
 
 export const deleteTenantStatusController = async (req, res) => {
   try {

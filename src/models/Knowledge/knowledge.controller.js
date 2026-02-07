@@ -7,7 +7,36 @@ import {
   processKnowledgeUpload,
   updateKnowledgeService,
   updateKnowledgeStatusService,
+  getDeletedKnowledgeListService,
+  restoreKnowledgeService,
 } from "./knowledge.service.js";
+
+export const getDeletedKnowledgeController = async (req, res) => {
+  const tenant_id = req.user.tenant_id;
+  try {
+    const data = await getDeletedKnowledgeListService(tenant_id, req.query);
+    return res.status(200).send({
+      message: "Success",
+      data,
+    });
+  } catch (err) {
+    return res.status(500).send({ message: err.message });
+  }
+};
+
+export const restoreKnowledgeController = async (req, res) => {
+  const { id } = req.params;
+  const tenant_id = req.user.tenant_id;
+  try {
+    const result = await restoreKnowledgeService(id, tenant_id);
+    return res.status(200).send(result);
+  } catch (err) {
+    if (err.message === "Knowledge source not found or not deleted") {
+      return res.status(404).send({ message: err.message });
+    }
+    return res.status(500).send({ message: err.message });
+  }
+};
 import { cleanText } from "../../utils/cleanText.js";
 import { searchKnowledgeChunks } from "./knowledge.search.js";
 

@@ -265,3 +265,62 @@ export const permanentDeleteLeadService = async (tenant_id, contact_id) => {
     throw err;
   }
 };
+
+/**
+ * Retrieves a list of soft-deleted leads for a tenant.
+ */
+export const getDeletedLeadListService = async (tenant_id, query) => {
+  const { state, stage, priority, search, page = 1, limit = 10 } = query;
+  const offset = (page - 1) * limit;
+
+  let where = { tenant_id, is_deleted: true };
+  if (state) where.heat_state = state;
+  if (stage) where.lead_stage = stage;
+  if (priority) where.priority = priority;
+  if (search) {
+    where[db.Sequelize.Op.or] = [
+      { ai_summary: { [db.Sequelize.Op.like]: `%${search}%` } },
+    ];
+  }
+
+  const { count, rows } = await db.Leads.findAndCountAll({
+    where,
+    order: [["deleted_at", "DESC"]],
+    limit: parseInt(limit),
+    offset: parseInt(offset),
+    include: [
+      {
+        model: db.Contacts,
+        as: "contact",
+        attributes: ["name", "phone", "email"],
+      },
+    ],
+  });
+
+  return {
+    totalItems: count,
+    leads: rows,
+    totalPages: Math.ceil(count / limit),
+    currentPage: parseInt(page),
+  };
+};
+
+/**
+ * Restore a soft-deleted lead
+ */
+export const restoreLeadService = async (id, tenant_id) => {
+  const lead = await db.Leads.findOne({
+    where: { id, tenant_id, is_deleted: true }
+  });
+
+  if (!lead) {
+    throw new Error("Lead not found or not deleted");
+  }
+
+  await lead.update({
+    is_deleted: false,
+    deleted_at: null
+  });
+
+  return { message: "Lead restored successfully" };
+};

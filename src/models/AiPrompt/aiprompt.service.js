@@ -159,3 +159,50 @@ export const getActivePromptService = async (tenant_id) => {
     throw err;
   }
 };
+
+/**
+ * Retrieves a list of soft-deleted AI prompts for a tenant.
+ */
+export const getDeletedAiPromptListService = async (tenant_id, query) => {
+  const { search, page = 1, limit = 10 } = query;
+  const offset = (page - 1) * limit;
+
+  let where = { tenant_id, is_deleted: true };
+  if (search) {
+    where.name = { [db.Sequelize.Op.like]: `%${search}%` };
+  }
+
+  const { count, rows } = await db.AiPrompts.findAndCountAll({
+    where,
+    order: [["deleted_at", "DESC"]],
+    limit: parseInt(limit),
+    offset: parseInt(offset),
+  });
+
+  return {
+    totalItems: count,
+    prompts: rows,
+    totalPages: Math.ceil(count / limit),
+    currentPage: parseInt(page),
+  };
+};
+
+/**
+ * Restore a soft-deleted AI prompt
+ */
+export const restoreAiPromptService = async (id, tenant_id) => {
+  const prompt = await db.AiPrompts.findOne({
+    where: { id, tenant_id, is_deleted: true }
+  });
+
+  if (!prompt) {
+    throw new Error("Prompt not found or not deleted");
+  }
+
+  await prompt.update({
+    is_deleted: false,
+    deleted_at: null
+  });
+
+  return { message: "Prompt restored successfully" };
+};

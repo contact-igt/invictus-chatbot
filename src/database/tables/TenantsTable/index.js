@@ -48,7 +48,18 @@ export const TenantsTable = (sequelize, Sequelize) => {
       },
 
       status: {
-        type: Sequelize.ENUM("invited", "active", "rejected", "suspended"),
+        type: Sequelize.ENUM(
+          "invited",
+          "active",
+          "inactive",
+          "rejected",
+          "suspended",
+          "trial",
+          "expired",
+          "pending_setup",
+          "grace_period",
+          "maintenance"
+        ),
         defaultValue: "invited",
         allowNull: false,
       },

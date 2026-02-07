@@ -5,6 +5,8 @@ import {
   getLeadListController,
   getLeadSummaryController,
   updateLeadController,
+  getDeletedLeadListController,
+  restoreLeadController,
 } from "./leads.controller.js";
 import {
   authenticate,
@@ -23,6 +25,12 @@ Router.get(
   getLeadListController,
 );
 Router.get(
+  "/leads/deleted/list",
+  authenticate,
+  authorize({ user_type: "tenant", roles: tenantRoles }),
+  getDeletedLeadListController,
+);
+Router.get(
   "/leads-summary/:id",
   authenticate,
   authorize({ user_type: "tenant", roles: tenantRoles }),
@@ -33,6 +41,12 @@ Router.put(
   authenticate,
   authorize({ user_type: "tenant", roles: tenantRoles }),
   updateLeadController,
+);
+Router.post(
+  "/lead/:id/restore",
+  authenticate,
+  authorize({ user_type: "tenant", roles: ["tenant_admin"] }),
+  restoreLeadController,
 );
 Router.delete(
   "/lead/:id",

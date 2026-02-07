@@ -10,6 +10,8 @@ import {
     triggerCampaignExecutionController,
     softDeleteCampaignController,
     permanentDeleteCampaignController,
+    getDeletedCampaignListController,
+    restoreCampaignController,
 } from "./whatsappcampaign.controller.js";
 
 const router = express.Router();
@@ -31,6 +33,13 @@ router.get(
 );
 
 router.get(
+    "/whatsapp-campaign/deleted/list",
+    authenticate,
+    authorize({ user_type: "tenant", roles: tenantRoles }),
+    getDeletedCampaignListController,
+);
+
+router.get(
     "/whatsapp-campaign/:campaign_id",
     authenticate,
     authorize({ user_type: "tenant", roles: tenantRoles }),
@@ -42,6 +51,13 @@ router.post(
     authenticate,
     authorize({ user_type: "tenant", roles: tenantRoles }),
     triggerCampaignExecutionController,
+);
+
+router.post(
+    "/whatsapp-campaign/:campaign_id/restore",
+    authenticate,
+    authorize({ user_type: "tenant", roles: ["tenant_admin"] }),
+    restoreCampaignController,
 );
 
 router.delete(

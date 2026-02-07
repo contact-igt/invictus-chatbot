@@ -170,7 +170,12 @@ export const receiveMessage = async (req, res) => {
         mobile_number: { [db.Sequelize.Op.like]: `%${phoneSuffix}` }
       },
       order: [["created_at", "DESC"]],
-      include: [{ model: db.WhatsappCampaigns, as: "campaign" }]
+      include: [{
+        model: db.WhatsappCampaigns,
+        as: "campaign",
+        where: { tenant_id, is_deleted: false }, // Critical: Filter by current tenant
+        required: true
+      }]
     });
 
     if (lastCampaignRecipient) {

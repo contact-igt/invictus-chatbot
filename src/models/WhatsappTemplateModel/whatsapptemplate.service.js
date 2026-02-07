@@ -1163,3 +1163,58 @@ export const generateAiTemplateService = async ({
     throw new Error(`AI Generation failed: ${err.message}`);
   }
 };
+
+/**
+ * Retrieves a list of soft-deleted templates for a tenant.
+ */
+export const getDeletedTemplateListService = async (tenant_id, query) => {
+  const { category, language, search, page = 1, limit = 10 } = query;
+  const offset = (page - 1) * limit;
+
+  let where = { tenant_id, is_deleted: true };
+  if (category) where.category = category;
+  if (language) where.language = language;
+  if (search) {
+    where.template_name = { [db.Sequelize.Op.like]: `%${search}%` };
+  }
+
+  const { count, rows } = await db.WhatsappTemplates.findAndCountAll({
+    where,
+    order: [["deleted_at", "DESC"]],
+    limit: parseInt(limit),
+    offset: parseInt(offset),
+    include: [
+      {
+        model: db.WhatsappTemplatesComponents,
+        as: "components",
+      },
+    ],
+  });
+
+  return {
+    totalItems: count,
+    templates: rows,
+    totalPages: Math.ceil(count / limit),
+    currentPage: parseInt(page),
+  };
+};
+
+/**
+ * Restore a soft-deleted template
+ */
+export const restoreTemplateService = async (template_id, tenant_id) => {
+  const template = await db.WhatsappTemplates.findOne({
+    where: { template_id, tenant_id, is_deleted: true }
+  });
+
+  if (!template) {
+    throw new Error("Template not found or not deleted");
+  }
+
+  await template.update({
+    is_deleted: false,
+    deleted_at: null
+  });
+
+  return { message: "Template restored successfully" };
+};

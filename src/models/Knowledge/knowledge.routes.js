@@ -8,6 +8,8 @@ import {
   updateKnowledge,
   updateKnowledgeStatusController,
   uploadKnowledge,
+  getDeletedKnowledgeController,
+  restoreKnowledgeController,
 } from "./knowledge.controller.js";
 import {
   authenticate,
@@ -18,6 +20,13 @@ const router = express.Router();
 
 const tenantRoles = ["tenant_admin", "doctor", "staff", "agent"];
 const managerRoles = ["tenant_admin", "staff"];
+
+router.get(
+  "/knowledges/deleted/list",
+  authenticate,
+  authorize({ user_type: "tenant", roles: managerRoles }),
+  getDeletedKnowledgeController,
+);
 
 router.post(
   "/knowledge",
@@ -54,6 +63,12 @@ router.delete(
   authenticate,
   authorize({ user_type: "tenant", roles: ["tenant_admin"] }),
   permanentDeleteKnowledge,
+);
+router.post(
+  "/knowledge/:id/restore",
+  authenticate,
+  authorize({ user_type: "tenant", roles: ["tenant_admin"] }),
+  restoreKnowledgeController,
 );
 router.put(
   "/knowledge-status/:id",
