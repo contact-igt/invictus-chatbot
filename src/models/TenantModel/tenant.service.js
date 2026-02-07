@@ -153,19 +153,19 @@ export const updateTenantService = async (
   }
 };
 
-// export const updateTenantStatusService = async (status, tenant_id) => {
-//   const Query = `UPDATE ${tableNames?.TENANTS} SET status = ? WHERE tenant_id = ? AND is_deleted = ? `;
+export const updateTenantStatusService = async (status, tenant_id) => {
+  const Query = `UPDATE ${tableNames?.TENANTS} SET status = ? WHERE tenant_id = ? AND is_deleted = ? `;
 
-//   try {
-//     const [result] = await db.sequelize.query(Query, {
-//       replacements: [status, tenant_id, 0],
-//     });
+  try {
+    const [result] = await db.sequelize.query(Query, {
+      replacements: [status, tenant_id, 0],
+    });
 
-//     return result;
-//   } catch (err) {
-//     throw err;
-//   }
-// };
+    return result;
+  } catch (err) {
+    throw err;
+  }
+};
 
 export const deleteTenantStatusService = async (tenant_id) => {
   const Query = `UPDATE ${tableNames?.TENANTS} SET is_deleted = ? , deleted_at = NOW() WHERE tenant_id = ? AND is_deleted = false`;

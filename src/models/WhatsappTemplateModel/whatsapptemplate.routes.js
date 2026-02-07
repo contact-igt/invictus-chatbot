@@ -15,6 +15,8 @@ import {
   updateWhatsappTemplateController,
   resubmitWhatsappTemplateController,
   generateAiTemplateController,
+  getDeletedTemplateListController,
+  restoreTemplateController,
 } from "./whatsapptemplate.controller.js";
 
 const router = express.Router();
@@ -26,6 +28,13 @@ router.post(
   authenticate,
   authorize({ user_type: "tenant", roles: tenantRoles }),
   createWhatsappTemplateController,
+);
+
+router.get(
+  "/whatsapp-templates/deleted/list",
+  authenticate,
+  authorize({ user_type: "tenant", roles: tenantRoles }),
+  getDeletedTemplateListController,
 );
 
 router.post(
@@ -106,6 +115,13 @@ router.delete(
   authenticate,
   authorize({ user_type: "tenant", roles: ["tenant_admin"] }),
   permanentDeleteTemplateController,
+);
+
+router.post(
+  "/whatsapp-template/:template_id/restore",
+  authenticate,
+  authorize({ user_type: "tenant", roles: ["tenant_admin"] }),
+  restoreTemplateController,
 );
 
 export default router;

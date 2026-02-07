@@ -8,7 +8,36 @@ import {
   processAiPromptUpload,
   updateAiPromptService,
   updatePromptActiveService,
+  getDeletedAiPromptListService,
+  restoreAiPromptService,
 } from "./aiprompt.service.js";
+
+export const getDeletedAiPromptListController = async (req, res) => {
+  const tenant_id = req.user.tenant_id;
+  try {
+    const data = await getDeletedAiPromptListService(tenant_id, req.query);
+    return res.status(200).send({
+      message: "Success",
+      data,
+    });
+  } catch (err) {
+    return res.status(500).send({ message: err.message });
+  }
+};
+
+export const restoreAiPromptController = async (req, res) => {
+  const { id } = req.params;
+  const tenant_id = req.user.tenant_id;
+  try {
+    const result = await restoreAiPromptService(id, tenant_id);
+    return res.status(200).send(result);
+  } catch (err) {
+    if (err.message === "Prompt not found or not deleted") {
+      return res.status(404).send({ message: err.message });
+    }
+    return res.status(500).send({ message: err.message });
+  }
+};
 
 export const uploadAiPrompt = async (req, res) => {
   try {

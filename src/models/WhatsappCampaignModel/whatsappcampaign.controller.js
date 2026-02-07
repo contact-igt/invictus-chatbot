@@ -5,8 +5,39 @@ import {
     executeCampaignBatchService,
     softDeleteCampaignService,
     permanentDeleteCampaignService,
+    getDeletedCampaignListService,
+    restoreCampaignService,
 } from "./whatsappcampaign.service.js";
 import { missingFieldsChecker } from "../../utils/missingFields.js";
+
+// ... existing code ...
+
+export const getDeletedCampaignListController = async (req, res) => {
+    const tenant_id = req.user.tenant_id;
+    try {
+        const data = await getDeletedCampaignListService(tenant_id, req.query);
+        return res.status(200).send({
+            message: "Success",
+            data,
+        });
+    } catch (err) {
+        return res.status(500).send({ message: err.message });
+    }
+};
+
+export const restoreCampaignController = async (req, res) => {
+    const { campaign_id } = req.params;
+    const tenant_id = req.user.tenant_id;
+    try {
+        const result = await restoreCampaignService(campaign_id, tenant_id);
+        return res.status(200).send(result);
+    } catch (err) {
+        if (err.message === "Campaign not found or not deleted") {
+            return res.status(404).send({ message: err.message });
+        }
+        return res.status(500).send({ message: err.message });
+    }
+};
 
 export const createCampaignController = async (req, res) => {
     const tenant_id = req.user.tenant_id;

@@ -13,7 +13,36 @@ import {
   syncWhatsappTemplateStatusService,
   updateWhatsappTemplateService,
   generateAiTemplateService,
+  getDeletedTemplateListService,
+  restoreTemplateService,
 } from "./whatsapptemplate.service.js";
+
+export const getDeletedTemplateListController = async (req, res) => {
+  const tenant_id = req.user.tenant_id;
+  try {
+    const data = await getDeletedTemplateListService(tenant_id, req.query);
+    return res.status(200).send({
+      message: "Success",
+      data,
+    });
+  } catch (err) {
+    return res.status(500).send({ message: err.message });
+  }
+};
+
+export const restoreTemplateController = async (req, res) => {
+  const { template_id } = req.params;
+  const tenant_id = req.user.tenant_id;
+  try {
+    const result = await restoreTemplateService(template_id, tenant_id);
+    return res.status(200).send(result);
+  } catch (err) {
+    if (err.message === "Template not found or not deleted") {
+      return res.status(404).send({ message: err.message });
+    }
+    return res.status(500).send({ message: err.message });
+  }
+};
 import { missingFieldsChecker } from "../../utils/missingFields.js";
 
 import db from "../../database/index.js";

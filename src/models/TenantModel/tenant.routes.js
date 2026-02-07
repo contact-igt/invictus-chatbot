@@ -7,7 +7,7 @@ import {
   getTenantByIdController,
   updateTenantController,
   resendTenantInvitationController,
-  // updateTenantStatusController,
+  updateTenantStatusController,
 } from "./tenant.controller.js";
 import {
   authenticate,
@@ -54,6 +54,16 @@ Router.put(
     roles: ["platform_admin", "super_admin"],
   }),
   updateTenantController,
+);
+
+Router.put(
+  "/tenant-status/:id",
+  authenticate,
+  authorize({
+    user_type: "management",
+    roles: ["platform_admin", "super_admin"],
+  }),
+  updateTenantStatusController,
 );
 
 Router.put(

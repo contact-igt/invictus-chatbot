@@ -197,6 +197,23 @@ export const sendTemplateMessageController = async (req, res) => {
       { replacements: [contact_id] },
     );
 
+    const [variables] = await db.sequelize.query(
+      `SELECT * FROM ${tableNames.WHATSAPP_TEMPLATE_VARIABLES} WHERE template_id = ?`,
+      { replacements: [template_id] },
+    );
+
+    if (variables.length > 0) {
+      const bodyParams = components?.find((c) => c.type === "body")?.parameters || [];
+      const headerParams = components?.find((c) => c.type === "header")?.parameters || [];
+      const totalParamsSent = bodyParams.length + headerParams.length;
+
+      if (totalParamsSent < variables.length) {
+        return res.status(400).send({
+          message: `This template requires ${variables.length} parameters, but only ${totalParamsSent} were provided.`,
+        });
+      }
+    }
+
     let messageContent = "";
 
     // 1. Handle Header

@@ -311,3 +311,50 @@ export const getAvailableContactsForGroupService = async (group_id, tenant_id) =
 
     return availableContacts;
 };
+
+/**
+ * Retrieves a list of soft-deleted contact groups for a tenant.
+ */
+export const getDeletedContactGroupListService = async (tenant_id, query) => {
+    const { search, page = 1, limit = 10 } = query;
+    const offset = (page - 1) * limit;
+
+    let where = { tenant_id, is_deleted: true };
+    if (search) {
+        where.group_name = { [db.Sequelize.Op.like]: `%${search}%` };
+    }
+
+    const { count, rows } = await db.ContactGroups.findAndCountAll({
+        where,
+        order: [["deleted_at", "DESC"]],
+        limit: parseInt(limit),
+        offset: parseInt(offset),
+    });
+
+    return {
+        totalItems: count,
+        groups: rows,
+        totalPages: Math.ceil(count / limit),
+        currentPage: parseInt(page),
+    };
+};
+
+/**
+ * Restore a soft-deleted contact group
+ */
+export const restoreContactGroupService = async (group_id, tenant_id) => {
+    const group = await db.ContactGroups.findOne({
+        where: { group_id, tenant_id, is_deleted: true }
+    });
+
+    if (!group) {
+        throw new Error("Group not found or not deleted");
+    }
+
+    await group.update({
+        is_deleted: false,
+        deleted_at: null
+    });
+
+    return { message: "Group restored successfully" };
+};

@@ -94,21 +94,30 @@ export const sendWhatsAppTemplate = async (
     },
   };
 
-  const response = await axios.post(
-    `https://graph.facebook.com/v19.0/${phone_number_id}/messages`,
-    payload,
-    {
-      headers: {
-        Authorization: `Bearer ${access_token}`,
-        "Content-Type": "application/json",
+  try {
+    const response = await axios.post(
+      `https://graph.facebook.com/v19.0/${phone_number_id}/messages`,
+      payload,
+      {
+        headers: {
+          Authorization: `Bearer ${access_token}`,
+          "Content-Type": "application/json",
+        },
+        httpsAgent,
       },
-      httpsAgent,
-    },
-  );
+    );
 
-  const meta_message_id = response.data?.messages?.[0]?.id;
+    const meta_message_id = response.data?.messages?.[0]?.id;
 
-  return { phone_number_id, meta_message_id };
+    return { phone_number_id, meta_message_id };
+  } catch (error) {
+    if (error.response) {
+      console.error("Meta API Error Details:", JSON.stringify(error.response.data, null, 2));
+      const message = error.response.data?.error?.message || error.message;
+      throw new Error(`Meta API Error: ${message}`);
+    }
+    throw error;
+  }
 };
 
 export const sendTypingIndicator = async (tenant_id, phone_number_id, to) => {

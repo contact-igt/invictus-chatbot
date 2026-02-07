@@ -153,3 +153,51 @@ export const updateKnowledgeStatusService = async (status, id, tenant_id) => {
     throw err;
   }
 };
+
+/**
+ * Retrieves a list of soft-deleted knowledge sources for a tenant.
+ */
+export const getDeletedKnowledgeListService = async (tenant_id, query) => {
+  const { type, search, page = 1, limit = 10 } = query;
+  const offset = (page - 1) * limit;
+
+  let where = { tenant_id, is_deleted: true };
+  if (type) where.source_type = type;
+  if (search) {
+    where.name = { [db.Sequelize.Op.like]: `%${search}%` };
+  }
+
+  const { count, rows } = await db.KnowledgeSources.findAndCountAll({
+    where,
+    order: [["deleted_at", "DESC"]],
+    limit: parseInt(limit),
+    offset: parseInt(offset),
+  });
+
+  return {
+    totalItems: count,
+    sources: rows,
+    totalPages: Math.ceil(count / limit),
+    currentPage: parseInt(page),
+  };
+};
+
+/**
+ * Restore a soft-deleted knowledge source
+ */
+export const restoreKnowledgeService = async (id, tenant_id) => {
+  const source = await db.KnowledgeSources.findOne({
+    where: { id, tenant_id, is_deleted: true }
+  });
+
+  if (!source) {
+    throw new Error("Knowledge source not found or not deleted");
+  }
+
+  await source.update({
+    is_deleted: false,
+    deleted_at: null
+  });
+
+  return { message: "Knowledge source restored successfully" };
+};

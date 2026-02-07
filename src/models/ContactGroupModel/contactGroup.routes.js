@@ -13,23 +13,36 @@ import {
     permanentDeleteContactGroupController,
     updateContactGroupController,
     getAvailableContactsController,
+    getDeletedContactGroupListController,
+    restoreContactGroupController,
 } from "./contactGroup.controller.js";
 
 const router = express.Router();
+
+const tenantRoles = ["tenant_admin", "doctor", "staff", "agent"];
+const managerRoles = ["tenant_admin", "staff"];
 
 // Create a new group
 router.post(
     "/contact-group",
     authenticate,
-    authorize({ user_type: "tenant", roles: ["tenant_admin", "staff"] }),
+    authorize({ user_type: "tenant", roles: managerRoles }),
     createContactGroupController
+);
+
+// Get deleted groups
+router.get(
+    "/contact-group/deleted/list",
+    authenticate,
+    authorize({ user_type: "tenant", roles: managerRoles }),
+    getDeletedContactGroupListController
 );
 
 // Get all groups
 router.get(
     "/contact-group/list",
     authenticate,
-    authorize({ user_type: "tenant", roles: ["tenant_admin", "staff"] }),
+    authorize({ user_type: "tenant", roles: managerRoles }),
     getContactGroupListController
 );
 
@@ -37,15 +50,23 @@ router.get(
 router.get(
     "/contact-group/:group_id",
     authenticate,
-    authorize({ user_type: "tenant", roles: ["tenant_admin", "staff"] }),
+    authorize({ user_type: "tenant", roles: managerRoles }),
     getContactGroupByIdController
+);
+
+// Restore a group
+router.post(
+    "/contact-group/:group_id/restore",
+    authenticate,
+    authorize({ user_type: "tenant", roles: ["tenant_admin"] }),
+    restoreContactGroupController
 );
 
 // Get available contacts (not in group)
 router.get(
     "/contact-group/:group_id/available-contacts",
     authenticate,
-    authorize({ user_type: "tenant", roles: ["tenant_admin", "staff"] }),
+    authorize({ user_type: "tenant", roles: managerRoles }),
     getAvailableContactsController
 );
 
@@ -53,7 +74,7 @@ router.get(
 router.put(
     "/contact-group/:group_id",
     authenticate,
-    authorize({ user_type: "tenant", roles: ["tenant_admin", "staff"] }),
+    authorize({ user_type: "tenant", roles: managerRoles }),
     updateContactGroupController
 );
 
@@ -61,7 +82,7 @@ router.put(
 router.post(
     "/contact-group/:group_id/add-contacts",
     authenticate,
-    authorize({ user_type: "tenant", roles: ["tenant_admin", "staff"] }),
+    authorize({ user_type: "tenant", roles: managerRoles }),
     addContactsToGroupController
 );
 
@@ -69,7 +90,7 @@ router.post(
 router.delete(
     "/contact-group/:group_id/contact/:contact_id",
     authenticate,
-    authorize({ user_type: "tenant", roles: ["tenant_admin", "staff"] }),
+    authorize({ user_type: "tenant", roles: managerRoles }),
     removeContactFromGroupController
 );
 
@@ -77,7 +98,7 @@ router.delete(
 router.delete(
     "/contact-group/:group_id",
     authenticate,
-    authorize({ user_type: "tenant", roles: ["tenant_admin", "staff"] }),
+    authorize({ user_type: "tenant", roles: managerRoles }),
     deleteContactGroupController
 );
 

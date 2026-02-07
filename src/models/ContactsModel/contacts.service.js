@@ -168,3 +168,54 @@ export const permanentDeleteContactService = async (id, tenant_id) => {
     throw err;
   }
 };
+
+/**
+ * Retrieves a list of soft-deleted contacts for a tenant.
+ */
+export const getDeletedContactListService = async (tenant_id, query) => {
+  const { search, page = 1, limit = 10 } = query;
+  const offset = (page - 1) * limit;
+
+  let where = { tenant_id, is_deleted: true };
+  if (search) {
+    where[db.Sequelize.Op.or] = [
+      { name: { [db.Sequelize.Op.like]: `%${search}%` } },
+      { phone: { [db.Sequelize.Op.like]: `%${search}%` } },
+      { email: { [db.Sequelize.Op.like]: `%${search}%` } },
+    ];
+  }
+
+  const { count, rows } = await db.Contacts.findAndCountAll({
+    where,
+    order: [["deleted_at", "DESC"]],
+    limit: parseInt(limit),
+    offset: parseInt(offset),
+  });
+
+  return {
+    totalItems: count,
+    contacts: rows,
+    totalPages: Math.ceil(count / limit),
+    currentPage: parseInt(page),
+  };
+};
+
+/**
+ * Restore a soft-deleted contact
+ */
+export const restoreContactService = async (id, tenant_id) => {
+  const contact = await db.Contacts.findOne({
+    where: { id, tenant_id, is_deleted: true }
+  });
+
+  if (!contact) {
+    throw new Error("Contact not found or not deleted");
+  }
+
+  await contact.update({
+    is_deleted: false,
+    deleted_at: null
+  });
+
+  return { message: "Contact restored successfully" };
+};

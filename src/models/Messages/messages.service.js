@@ -51,7 +51,7 @@ export const createUserMessageService = async (
     ];
 
     const [result] = await db.sequelize.query(Query, { replacements: values });
-    return result[0];
+    return { id: result };
   } catch (err) {
     throw err;
   }

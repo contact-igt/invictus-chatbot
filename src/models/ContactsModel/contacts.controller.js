@@ -8,7 +8,36 @@ import {
   getContactByIdAndTenantIdService,
   getContactByPhoneAndTenantIdService,
   updateContactService,
+  getDeletedContactListService,
+  restoreContactService,
 } from "./contacts.service.js";
+
+export const getDeletedContactListController = async (req, res) => {
+  const tenant_id = req.user.tenant_id;
+  try {
+    const data = await getDeletedContactListService(tenant_id, req.query);
+    return res.status(200).send({
+      message: "Success",
+      data,
+    });
+  } catch (err) {
+    return res.status(500).send({ message: err.message });
+  }
+};
+
+export const restoreContactController = async (req, res) => {
+  const { id } = req.params;
+  const tenant_id = req.user.tenant_id;
+  try {
+    const result = await restoreContactService(id, tenant_id);
+    return res.status(200).send(result);
+  } catch (err) {
+    if (err.message === "Contact not found or not deleted") {
+      return res.status(404).send({ message: err.message });
+    }
+    return res.status(500).send({ message: err.message });
+  }
+};
 
 export const createContactController = async (req, res) => {
   const tenant_id = req.user.tenant_id; // Get from authenticated user
