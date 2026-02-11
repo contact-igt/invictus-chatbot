@@ -6,9 +6,13 @@ import { tableNames } from "../../database/tableName.js";
 
 import { searchKnowledgeChunks } from "../Knowledge/knowledge.search.js";
 import { getConversationMemory } from "../Messages/messages.memory.js";
-import { detectLanguageAI } from "../../utils/detectLanguageStyle.js";
-import { buildChatHistory } from "../../utils/buildChatHistory.js";
+import { detectLanguageAI } from "../../utils/ai/detectLanguageStyle.js";
+import { buildChatHistory } from "../../utils/chat/buildChatHistory.js";
 import { getActivePromptService } from "../AiPrompt/aiprompt.service.js";
+import { processResponse } from "../../utils/ai/aiTagHandlers/index.js";
+import { classifyResponse } from "../../utils/ai/responseClassifier.js";
+import { handleClassification } from "../../utils/ai/classificationHandler.js";
+
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -296,6 +300,14 @@ GLOBAL BEHAVIOUR RULES
 - Do NOT hallucinate or invent information.
 
 ────────────────────────────────
+RELEVANCE CHECK (CRITICAL)
+────────────────────────────────
+If "UPLOADED KNOWLEDGE" contains a "[Previous Question]" and "[Admin Resolution]":
+- You MUST verify if the previous question is on the SAME TOPIC as the current user question.
+- If they are different (e.g., Previous was about "address", Current is about "price"), IGNORE that resolution.
+- Only use resolutions that are a direct match for the current intent.
+
+────────────────────────────────
 KNOWLEDGE DEPENDENCY RULE (VERY IMPORTANT)
 ────────────────────────────────
 All factual information MUST come ONLY from UPLOADED KNOWLEDGE.
@@ -306,6 +318,8 @@ You MUST follow these rules strictly:
    - Answer clearly using ONLY that information.
 
 2. If UPLOADED KNOWLEDGE is EMPTY, INACTIVE, DELETED, or has NO relevant data:
+   - You MUST end your response with: [MISSING_KNOWLEDGE: brief reason]
+   - Example: I'm sorry, I don't have information about the pricing at the moment. [MISSING_KNOWLEDGE: pricing not found]
    - Do NOT guess.
    - Do NOT answer partially.
    - Do NOT change the topic.
@@ -317,7 +331,7 @@ Use natural responses like:
 - “The required information has not been uploaded yet.”
 
 Never blame the user.
-Never mention technical terms like “database”, “vector”, or “AI system”.
+Never mention technical terms like “database” or “AI system”.
 
 ────────────────────────────────
 INACTIVE / DELETED KNOWLEDGE HANDLING
@@ -395,7 +409,18 @@ When in doubt:
 - Be clear
 - Do not guess
 
+────────────────────────────────
+SYSTEM BEHAVIOUR (INTERNAL USE ONLY):
+────────────────────────────────
+You are a professional hospital assistant. Your primary goal is to provide accurate and helpful information based ONLY on the "UPLOADED KNOWLEDGE" provided.
+
+Rules:
+- If info is in docs: Provide it clearly.
+- If info is NOT in docs: Politely state that you don't have that information at the moment and offer to connect them with a human specialist.
+- Be clear, concise, and professional.
+- No emojis or symbols.
 `;
+
 
 
     const systemPrompt = `
@@ -415,7 +440,7 @@ ${knowledgeContext}
 
     const response = await openai.chat.completions.create({
       model: "gpt-4o",
-      temperature: 0.2,
+      temperature: 0.1, // Very low temperature for consistent tagging behavior
       top_p: 0.9,
       max_tokens: 500,
       messages: [
@@ -425,8 +450,44 @@ ${knowledgeContext}
       ],
     });
 
-    const reply = response?.choices?.[0]?.message?.content?.trim();
-    return reply || null;
+    const rawReply = response?.choices?.[0]?.message?.content?.trim();
+
+    console.log("[WHATSAPP-AI-RAW]", rawReply);
+
+    // Step 1: Clean any residual manual tags and extract metadata
+    const processed = await processResponse(rawReply, {
+      tenant_id,
+      userMessage: cleanMessage
+    });
+
+    const finalReply = processed.message;
+
+    // Step 2: NEW Dual-AI Classification (Standardized single logging)
+    try {
+      console.log("[CLASSIFIER] Starting classification...");
+      const classification = await classifyResponse(cleanMessage, finalReply);
+
+      // If the primary AI explicitly tagged missing knowledge or out of scope, use that as a "hint"
+      if (processed.tagDetected === "MISSING_KNOWLEDGE" && classification.category !== "MISSING_KNOWLEDGE") {
+        classification.category = "MISSING_KNOWLEDGE";
+        classification.reason = processed.tagPayload || classification.reason;
+      } else if (processed.tagDetected === "OUT_OF_SCOPE" && classification.category !== "OUT_OF_SCOPE") {
+        classification.category = "OUT_OF_SCOPE";
+        classification.reason = processed.tagPayload || classification.reason;
+      }
+
+      await handleClassification(classification, {
+        tenant_id,
+        userMessage: cleanMessage,
+        aiResponse: finalReply
+      });
+    } catch (classifierError) {
+      console.error("[CLASSIFIER] Error in dual-AI flow:", classifierError.message);
+    }
+
+    console.log("[WHATSAPP-AI-FINAL]", finalReply);
+
+    return finalReply || null;
   } catch (err) {
     console.error("OpenAI error:", err.message);
     return null;

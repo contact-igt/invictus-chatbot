@@ -1,7 +1,7 @@
 import db from "../../database/index.js";
 import { tableNames } from "../../database/tableName.js";
-import { chunkText } from "../../utils/chunkText.js";
-import { cleanText } from "../../utils/cleanText.js";
+import { chunkText } from "../../utils/text/chunkText.js";
+import { cleanText } from "../../utils/text/cleanText.js";
 
 export const processKnowledgeUpload = async (
   tenant_id,
@@ -40,18 +40,21 @@ export const processKnowledgeUpload = async (
 };
 
 export const listKnowledgeService = async (tenant_id) => {
-  const Query = `
-    SELECT id, title, type, source_url, file_name , status , created_at
-    FROM ${tableNames.KNOWLEDGESOURCE} WHERE tenant_id IN (?) AND is_deleted = false
+  const dataQuery = `
+    SELECT id, title, type, source_url, file_name, status, created_at
+    FROM ${tableNames.KNOWLEDGESOURCE}
+    WHERE tenant_id = ? AND is_deleted = false
     ORDER BY created_at DESC
-    `;
+  `;
 
   try {
-    const [result] = await db.sequelize.query(Query, {
+    const [rows] = await db.sequelize.query(dataQuery, {
       replacements: [tenant_id],
     });
 
-    return result;
+    return {
+      sources: rows,
+    };
   } catch (err) {
     throw err;
   }
@@ -157,28 +160,16 @@ export const updateKnowledgeStatusService = async (status, id, tenant_id) => {
 /**
  * Retrieves a list of soft-deleted knowledge sources for a tenant.
  */
-export const getDeletedKnowledgeListService = async (tenant_id, query) => {
-  const { type, search, page = 1, limit = 10 } = query;
-  const offset = (page - 1) * limit;
-
-  let where = { tenant_id, is_deleted: true };
-  if (type) where.source_type = type;
-  if (search) {
-    where.name = { [db.Sequelize.Op.like]: `%${search}%` };
-  }
+export const getDeletedKnowledgeListService = async (tenant_id) => {
+  const where = { tenant_id, is_deleted: true };
 
   const { count, rows } = await db.KnowledgeSources.findAndCountAll({
     where,
     order: [["deleted_at", "DESC"]],
-    limit: parseInt(limit),
-    offset: parseInt(offset),
   });
 
   return {
-    totalItems: count,
     sources: rows,
-    totalPages: Math.ceil(count / limit),
-    currentPage: parseInt(page),
   };
 };
 
@@ -194,10 +185,16 @@ export const restoreKnowledgeService = async (id, tenant_id) => {
     throw new Error("Knowledge source not found or not deleted");
   }
 
-  await source.update({
-    is_deleted: false,
-    deleted_at: null
-  });
+  // Use raw query to avoid ON UPDATE CURRENT_TIMESTAMP conflict
+  await db.sequelize.query(
+    `UPDATE ${tableNames.KNOWLEDGESOURCE} 
+     SET is_deleted = false, deleted_at = NULL 
+     WHERE id = ? AND tenant_id = ?`,
+    {
+      replacements: [id, tenant_id],
+      type: db.Sequelize.QueryTypes.UPDATE
+    }
+  );
 
   return { message: "Knowledge source restored successfully" };
 };

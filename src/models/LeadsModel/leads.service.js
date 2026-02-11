@@ -1,25 +1,47 @@
 import db from "../../database/index.js";
 import { tableNames } from "../../database/tableName.js";
-import { buildChatHistory } from "../../utils/buildChatHistory.js";
-import { calculateHeatState } from "../../utils/calculateHeatState.js";
+import { buildChatHistory } from "../../utils/chat/buildChatHistory.js";
+import { calculateHeatState } from "../../utils/helpers/calculateHeatState.js";
 import cron from "node-cron";
 import { getConversationMemory } from "../Messages/messages.memory.js";
-import { AiService } from "../../utils/coreAi.js";
+import { AiService } from "../../utils/ai/coreAi.js";
+import { generateReadableIdFromLast } from "../../utils/helpers/generateReadableIdFromLast.js";
 
 export const createLeadService = async (tenant_id, contact_id, source = null) => {
-  const Query = `
+  try {
+    const lead_id = await generateReadableIdFromLast(
+      tableNames.LEADS,
+      "lead_id",
+      "L",
+      3
+    );
+
+    const Query = `
     INSERT INTO ${tableNames?.LEADS} 
-    (tenant_id, contact_id, source, last_user_message_at) 
-    VALUES (?,?,?, NOW())
+    (tenant_id, contact_id, lead_id, source, last_user_message_at) 
+    VALUES (?, ?, ?, ?, NOW())
     ON DUPLICATE KEY UPDATE updated_at = NOW()
   `;
 
-  try {
     const [result] = await db.sequelize.query(Query, {
-      replacements: [tenant_id, contact_id, source],
+      replacements: [tenant_id, contact_id, lead_id, source],
     });
 
     return result;
+  } catch (err) {
+    throw err;
+  }
+};
+
+export const getLeadByLeadIdService = async (tenant_id, lead_id) => {
+  const Query = `
+  SELECT * FROM ${tableNames?.LEADS} WHERE tenant_id = ? AND lead_id = ? AND is_deleted = false LIMIT 1`;
+
+  try {
+    const [result] = await db.sequelize.query(Query, {
+      replacements: [tenant_id, lead_id],
+    });
+    return result[0];
   } catch (err) {
     throw err;
   }
@@ -40,9 +62,9 @@ export const getLeadByContactIdService = async (tenant_id, contact_id) => {
 };
 
 export const getLeadListService = async (tenant_id) => {
-  const Query = `
+  const dataQuery = `
   SELECT 
-    led.id as lead_id,
+    led.lead_id,
     led.contact_id,
     led.tenant_id,
     led.status,
@@ -64,15 +86,17 @@ export const getLeadListService = async (tenant_id) => {
     led.internal_notes
   FROM ${tableNames?.LEADS} as led
   LEFT JOIN ${tableNames?.CONTACTS} as cta on (cta.contact_id = led.contact_id)
-  WHERE led.tenant_id IN (?) AND led.is_deleted = false
+  WHERE led.tenant_id = ? AND led.is_deleted = false
   ORDER BY led.last_user_message_at DESC`;
 
   try {
-    const [result] = await db.sequelize.query(Query, {
+    const [rows] = await db.sequelize.query(dataQuery, {
       replacements: [tenant_id],
     });
 
-    return result;
+    return {
+      leads: rows,
+    };
   } catch (err) {
     throw err;
   }
@@ -141,78 +165,154 @@ export const startLeadHeatDecayCronService = () => {
   });
 };
 
-export const getLeadSummaryService = async (tenant_id, phone, contact_id) => {
+export const getLeadSummaryService = async (
+  tenant_id,
+  phone,
+  lead_id,
+  mode = null,
+  targetDate = null,
+  startDateParam = null,
+  endDateParam = null
+) => {
   try {
     const memory = await getConversationMemory(tenant_id, phone);
 
     if (!memory || memory.length === 0) {
       return {
-        summary: "No conversation history available for this user.",
+        summary: "No conversation history available for this lead.",
         has_data: false,
       };
     }
 
-    const chatHistory = buildChatHistory(memory);
-    const lead = await getLeadByContactIdService(tenant_id, contact_id);
+    let filteredMemory = memory;
+    let promptInstruction = "";
 
-    if (lead?.summary_status === "old" && lead?.ai_summary) {
-      return {
-        summary: lead.ai_summary,
-        has_data: true,
-      };
-    } else {
-      const SUMMARIZE_PROMPT = `
-    You are an AI assistant generating a time-based overall summary for staff review.
+    // 1. Calculate Local Dates for Asia/Kolkata (IST)
+    const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
 
-    You will receive a conversation memory containing messages from the user, bot, and admin, each with timestamps.
+    let startDate = startDateParam;
+    let endDate = endDateParam;
 
-    Your task:
-    - Read the conversation in chronological order.
-    - Clearly explain:
-      • What the user talked about earlier
-      • How the bot responded at that time
-      • Whether and when the admin intervened (including sending Template messages for outreach)
-      • What the user is talking about now based on the most recent messages
-    - Describe the conversation flow as: outreach/past → recent interaction → current state.
+    // 2. Resolve Presets in IST
+    if (targetDate === "today") {
+      startDate = endDate = todayStr;
+    } else if (targetDate === "yesterday") {
+      const yesterday = new Date();
+      yesterday.setDate(yesterday.getDate() - 1);
+      startDate = endDate = yesterday.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+    } else if (targetDate === "last_week") {
+      const lastWeek = new Date();
+      lastWeek.setDate(lastWeek.getDate() - 7);
+      startDate = lastWeek.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+      endDate = todayStr;
+    } else if (targetDate === "last_month") {
+      const lastMonth = new Date();
+      lastMonth.setDate(lastMonth.getDate() - 30);
+      startDate = lastMonth.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+      endDate = todayStr;
+    } else if (targetDate === "last_year") {
+      const lastYear = new Date();
+      lastYear.setDate(lastYear.getDate() - 365);
+      startDate = lastYear.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+      endDate = todayStr;
+    } else if (targetDate && !startDate && !endDate) {
+      // Single specific day filter
+      startDate = endDate = targetDate;
+    }
 
-    Rules:
-    - Write only ONE short paragraph.
-    - Clearly mention user, bot, and admin roles.
-    - IMPORTANT: Include details about Template/Campaign messages sent by Admin/System if they exist in the memory.
-    - Use simple, professional language.
-    - Do not assume information that is not mentioned.
+    // 3. APPLY STRICT FILTERING
+    if (startDate && endDate) {
+      console.log(`Summary Filtering (IST): [${startDate}] to [${endDate}]`);
+      filteredMemory = memory.filter(m => {
+        // Fix: Use 'created_at' as returned by getConversationMemory, not 'timestamp'
+        if (!m.created_at) return false;
 
-    Conversation Memory (JSON):
-    ${JSON.stringify(memory, null, 2)}
-    `;
+        let msgDate = "";
+        try {
+          // Robust Timezone Conversion
+          const dateObj = new Date(m.created_at);
+          msgDate = dateObj.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+        } catch (e) {
+          console.error("Date parse error for:", m.created_at);
+          return false;
+        }
 
-      const aiSummary = await AiService("system", SUMMARIZE_PROMPT);
-
-      const Query = `UPDATE ${tableNames.LEADS} SET ai_summary = ? , summary_status = ?  WHERE tenant_id = ? AND contact_id = ? AND is_deleted = false `;
-
-      await db.sequelize.query(Query, {
-        replacements: [aiSummary, "old", tenant_id, contact_id],
+        return msgDate >= startDate && msgDate <= endDate;
       });
 
-      return {
-        summary: aiSummary,
-        has_data: true,
-      };
+      if (filteredMemory.length === 0) {
+        const rangeInfo = startDate === endDate ? `on ${startDate}` : `between ${startDate} and ${endDate}`;
+        return {
+          summary: `No interaction found ${rangeInfo}.`,
+          has_data: false
+        };
+      }
+
+      promptInstruction = startDate === endDate
+        ? `Summarize what happened on ${startDate} in 3-4 simple sentences. Explain what the client wanted and the result. Max 5 lines.`
+        : `Summarize interactions between ${startDate} and ${endDate} in 4-5 simple sentences. Explain the main topic and status. Max 5 lines.`;
+
+    } else if (mode === "detailed") {
+      // Timeline mode for the entire lead history
+      promptInstruction = `Provide a chronological daily log. For each date, give 1 simple sentence. 
+      Format: **YYYY-MM-DD**: [1-sentence summary]`;
+    } else {
+      // DEFAULT: Overall snapshot 
+      filteredMemory = memory.slice(-20);
+      promptInstruction = `Provide a simple 4-5 line "Status Report."
+      - Who is the client and why did they reach out?
+      - What are the key details?
+      - What is the current status and next step?
+      Keep it simple and easy to read. Max 5 lines.`;
     }
+
+    const SUMMARIZE_PROMPT = `
+    You are an AI assistant helping a Business Admin. 
+    Task: ${promptInstruction}
+
+    Rules:
+    - **Use simple, everyday English.**
+    - **Avoid complex words or corporate jargon.**
+    - **Keep it short: Maximum 5 lines of text.**
+    - Focus on THE MEANING.
+    - DO NOT use labels like "User:", "Bot:", or "Admin:". 
+    - No preamble. Start directly with the summary.
+
+    Conversation History (JSON):
+    ${JSON.stringify(filteredMemory, null, 2)}
+    `;
+
+    const aiSummary = await AiService("system", SUMMARIZE_PROMPT);
+
+    // Only save to DB if it's the overall status (no filters applied)
+    if (!startDate || mode === "overall") {
+      const Query = `UPDATE ${tableNames.LEADS} SET ai_summary = ? , summary_status = ?  WHERE tenant_id = ? AND lead_id = ? AND is_deleted = false `;
+      await db.sequelize.query(Query, {
+        replacements: [aiSummary, "old", tenant_id, lead_id],
+      });
+    }
+
+    return {
+      summary: aiSummary,
+      has_data: true,
+      mode: mode || (startDate ? "period" : "overall"),
+      date: startDate === endDate ? startDate : null
+    };
   } catch (err) {
+    console.error("Error in getLeadSummaryService:", err);
     throw err;
   }
 };
-// ... existing code ...
 
 export const updateLeadStatusService = async (
   tenant_id,
-  contact_id,
+  lead_id,
   status,
   heat_state,
   lead_stage = null,
   assigned_to = null,
   priority = null,
+  source = null,
   internal_notes = null
 ) => {
   const updates = [];
@@ -223,12 +323,13 @@ export const updateLeadStatusService = async (
   if (lead_stage) { updates.push("lead_stage = ?"); replacements.push(lead_stage); }
   if (assigned_to !== null) { updates.push("assigned_to = ?"); replacements.push(assigned_to); }
   if (priority) { updates.push("priority = ?"); replacements.push(priority); }
+  if (source) { updates.push("source = ?"); replacements.push(source); }
   if (internal_notes !== null) { updates.push("internal_notes = ?"); replacements.push(internal_notes); }
 
   if (updates.length === 0) return null;
 
-  const Query = `UPDATE ${tableNames?.LEADS} SET ${updates.join(", ")} WHERE tenant_id = ? AND contact_id = ? AND is_deleted = false`;
-  replacements.push(tenant_id, contact_id);
+  const Query = `UPDATE ${tableNames?.LEADS} SET ${updates.join(", ")} WHERE tenant_id = ? AND lead_id = ? AND is_deleted = false`;
+  replacements.push(tenant_id, lead_id);
 
   try {
     const [result] = await db.sequelize.query(Query, {
@@ -240,12 +341,12 @@ export const updateLeadStatusService = async (
   }
 };
 
-export const deleteLeadService = async (tenant_id, contact_id) => {
-  const Query = `UPDATE ${tableNames?.LEADS} SET is_deleted = true, deleted_at = NOW() WHERE tenant_id = ? AND contact_id = ? AND is_deleted = false`;
+export const deleteLeadService = async (tenant_id, lead_id) => {
+  const Query = `UPDATE ${tableNames?.LEADS} SET is_deleted = true, deleted_at = NOW() WHERE tenant_id = ? AND lead_id = ? AND is_deleted = false`;
 
   try {
     const [result] = await db.sequelize.query(Query, {
-      replacements: [tenant_id, contact_id],
+      replacements: [tenant_id, lead_id],
     });
     return result;
   } catch (err) {
@@ -253,12 +354,12 @@ export const deleteLeadService = async (tenant_id, contact_id) => {
   }
 };
 
-export const permanentDeleteLeadService = async (tenant_id, contact_id) => {
-  const Query = `DELETE FROM ${tableNames?.LEADS} WHERE tenant_id = ? AND contact_id = ?`;
+export const permanentDeleteLeadService = async (tenant_id, lead_id) => {
+  const Query = `DELETE FROM ${tableNames?.LEADS} WHERE tenant_id = ? AND lead_id = ?`;
 
   try {
     const [result] = await db.sequelize.query(Query, {
-      replacements: [tenant_id, contact_id],
+      replacements: [tenant_id, lead_id],
     });
     return result;
   } catch (err) {
@@ -269,25 +370,12 @@ export const permanentDeleteLeadService = async (tenant_id, contact_id) => {
 /**
  * Retrieves a list of soft-deleted leads for a tenant.
  */
-export const getDeletedLeadListService = async (tenant_id, query) => {
-  const { state, stage, priority, search, page = 1, limit = 10 } = query;
-  const offset = (page - 1) * limit;
-
-  let where = { tenant_id, is_deleted: true };
-  if (state) where.heat_state = state;
-  if (stage) where.lead_stage = stage;
-  if (priority) where.priority = priority;
-  if (search) {
-    where[db.Sequelize.Op.or] = [
-      { ai_summary: { [db.Sequelize.Op.like]: `%${search}%` } },
-    ];
-  }
+export const getDeletedLeadListService = async (tenant_id) => {
+  const where = { tenant_id, is_deleted: true };
 
   const { count, rows } = await db.Leads.findAndCountAll({
     where,
     order: [["deleted_at", "DESC"]],
-    limit: parseInt(limit),
-    offset: parseInt(offset),
     include: [
       {
         model: db.Contacts,
@@ -298,29 +386,27 @@ export const getDeletedLeadListService = async (tenant_id, query) => {
   });
 
   return {
-    totalItems: count,
     leads: rows,
-    totalPages: Math.ceil(count / limit),
-    currentPage: parseInt(page),
   };
 };
 
 /**
  * Restore a soft-deleted lead
  */
-export const restoreLeadService = async (id, tenant_id) => {
-  const lead = await db.Leads.findOne({
-    where: { id, tenant_id, is_deleted: true }
-  });
+export const restoreLeadService = async (lead_id, tenant_id) => {
+  const Query = `UPDATE ${tableNames?.LEADS} SET is_deleted = false, deleted_at = NULL WHERE tenant_id = ? AND lead_id = ? AND is_deleted = true`;
 
-  if (!lead) {
-    throw new Error("Lead not found or not deleted");
+  try {
+    const [result] = await db.sequelize.query(Query, {
+      replacements: [tenant_id, lead_id],
+    });
+
+    if (result.affectedRows === 0) {
+      throw new Error("Lead not found or not deleted");
+    }
+
+    return { message: "Lead restored successfully" };
+  } catch (err) {
+    throw err;
   }
-
-  await lead.update({
-    is_deleted: false,
-    deleted_at: null
-  });
-
-  return { message: "Lead restored successfully" };
 };

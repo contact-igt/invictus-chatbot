@@ -1,6 +1,6 @@
-import { sendTypingIndicator } from "../../utils/sendTypingIndicator.js";
+import { sendTypingIndicator } from "../../utils/chat/sendTypingIndicator.js";
 import { createUserMessageService } from "../Messages/messages.service.js";
-import { formatPhoneNumber } from "../../utils/formatPhoneNumber.js";
+import { formatPhoneNumber } from "../../utils/helpers/formatPhoneNumber.js";
 import fs from "fs";
 import {
   getOpenAIReply,
@@ -14,6 +14,10 @@ import {
 
 import { getTenantByPhoneNumberIdService } from "../WhatsappAccountModel/whatsappAccount.service.js";
 import { getIO } from "../../middlewares/socket/socket.js";
+import {
+  findTenantByIdService,
+  updateTenantWebhookStatusService,
+} from "../TenantModel/tenant.service.js";
 import db from "../../database/index.js";
 import {
   createContactService,
@@ -21,8 +25,10 @@ import {
 } from "../ContactsModel/contacts.service.js";
 import {
   createLeadService,
+  getLeadByLeadIdService,
   getLeadByContactIdService,
   updateLeadService,
+  updateLeadStatusService,
 } from "../LeadsModel/leads.service.js";
 import {
   createLiveChatService,
@@ -30,15 +36,32 @@ import {
   updateLiveChatTimestampService
 } from "../LiveChatModel/livechat.service.js";
 
-export const verifyWebhook = (req, res) => {
-  const mode = req.query["hub.mode"];
-  const token = req.query["hub.verify_token"];
-  const challenge = req.query["hub.challenge"];
 
-  if (mode === "subscribe" && token === process.env.META_VERIFY_TOKEN) {
-    return res.status(200).send(challenge);
+export const verifyWebhook = async (req, res) => {
+  try {
+    const { tenantId } = req.params;
+    const mode = req.query["hub.mode"];
+    const token = req.query["hub.verify_token"];
+    const challenge = req.query["hub.challenge"];
+
+    if (mode === "subscribe" && token && tenantId) {
+      // Find tenant strictly from DB - NO env fallback
+      const tenant = await findTenantByIdService(tenantId);
+      const expectedToken = tenant?.verify_token;
+
+      if (expectedToken && token === expectedToken) {
+        // Mark webhook as verified in the database
+        await updateTenantWebhookStatusService(tenantId, true);
+        return res.status(200).send(challenge);
+      }
+    }
+
+    // No more fallback to META_VERIFY_TOKEN in env
+    return res.sendStatus(403);
+  } catch (err) {
+    console.error("Verify Webhook error:", err);
+    return res.sendStatus(500);
   }
-  return res.sendStatus(403);
 };
 
 export const receiveMessage = async (req, res) => {
@@ -96,6 +119,13 @@ export const receiveMessage = async (req, res) => {
     if (!account) return res.sendStatus(200);
 
     const tenant_id = account.tenant_id;
+
+    // Optional: Validate that the incoming message's tenant matches the URL tenant
+    const { tenantId: urlTenantId } = req.params;
+    if (urlTenantId && urlTenantId !== tenant_id) {
+      console.warn(`[WEBHOOK] Tenant mismatch: URL has ${urlTenantId} but message is for ${tenant_id}`);
+      return res.sendStatus(200); // Send 200 to acknowledge Meta but don't process
+    }
 
     let phone = msg.from;
     phone = formatPhoneNumber(phone);
@@ -192,15 +222,29 @@ export const receiveMessage = async (req, res) => {
       }
     }
 
+    let lead_source = "whatsapp";
+    if (msg.referral) {
+      const referral = msg.referral;
+      if (referral.source_type === "ad") {
+        lead_source = referral.source_url?.includes("facebook.com") ? "facebook" :
+          referral.source_url?.includes("instagram.com") ? "instagram" : "meta";
+      } else if (referral.source_type === "post") {
+        lead_source = "post";
+      }
+    }
+
     fs.appendFileSync("webhook_debug.log", `Contact found/created: ${JSON.stringify(contactsaved)}\n`);
     let leadSaved = await getLeadByContactIdService(tenant_id, contactsaved?.contact_id);
     fs.appendFileSync("webhook_debug.log", `Existing Lead: ${JSON.stringify(leadSaved)}\n`);
 
     if (!leadSaved) {
-      fs.appendFileSync("webhook_debug.log", `Creating lead for contact: ${contactsaved?.contact_id}\n`);
-      await createLeadService(tenant_id, contactsaved?.contact_id, "whatsapp");
+      fs.appendFileSync("webhook_debug.log", `Creating lead for contact: ${contactsaved?.contact_id} with source: ${lead_source}\n`);
+      await createLeadService(tenant_id, contactsaved?.contact_id, lead_source);
       leadSaved = await getLeadByContactIdService(tenant_id, contactsaved?.contact_id);
       fs.appendFileSync("webhook_debug.log", `New Lead: ${JSON.stringify(leadSaved)}\n`);
+    } else if (msg.referral && leadSaved.source === "whatsapp") {
+      // Update source if it was previously just generic 'whatsapp' and we now have better info
+      await updateLeadStatusService(tenant_id, leadSaved.lead_id, null, null, null, null, null, lead_source);
     }
 
     await updateLeadService(tenant_id, leadSaved?.contact_id);
@@ -290,3 +334,4 @@ export const receiveMessage = async (req, res) => {
     return res.sendStatus(200);
   }
 };
+

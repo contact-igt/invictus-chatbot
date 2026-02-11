@@ -65,7 +65,7 @@ export const startLiveChatCleanupService = () => {
 
 
 export const getLiveChatListService = async (tenant_id) => {
-  const Query = `
+  const dataQuery = `
     SELECT
       m.contact_id,
       c.phone,
@@ -94,18 +94,18 @@ export const getLiveChatListService = async (tenant_id) => {
   `;
 
   try {
-    const [result] = await db.sequelize.query(Query, {
+    const [rows] = await db.sequelize.query(dataQuery, {
       replacements: [tenant_id, tenant_id, tenant_id],
     });
 
-    return result;
+    return rows;
   } catch (err) {
     throw err;
   }
 };
 
 export const getHistoryChatListService = async (tenant_id) => {
-  const Query = `
+  const dataQuery = `
     SELECT
       c.contact_id,
       c.phone,
@@ -134,11 +134,13 @@ export const getHistoryChatListService = async (tenant_id) => {
   `;
 
   try {
-    const [result] = await db.sequelize.query(Query, {
+    const [rows] = await db.sequelize.query(dataQuery, {
       replacements: [tenant_id, tenant_id, tenant_id],
     });
 
-    return result;
+    return {
+      chats: rows,
+    };
   } catch (err) {
     throw err;
   }

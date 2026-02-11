@@ -1,7 +1,7 @@
 import bcrypt from "bcrypt";
 import db from "../database/index.js";
 import { tableNames } from "../database/tableName.js";
-import { generateReadableIdFromLast } from "../utils/generateReadableIdFromLast.js";
+import { generateReadableIdFromLast } from "../utils/helpers/generateReadableIdFromLast.js";
 import dotenv from "dotenv";
 
 dotenv.config();

@@ -22,4 +22,6 @@ export const tableNames = {
   LEADS: "leads",
   LIVECHAT: "live_chats",
   SEQUENCES: "sequences",
+  AI_ANALYSIS_LOGS: "ai_analysis_logs",
+  OTP_VERIFICATIONS: "otp_verifications",
 };

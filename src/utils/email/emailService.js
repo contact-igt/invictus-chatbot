@@ -1,4 +1,4 @@
-import ServerEnvironmentConfig from "../config/server.config.js";
+import ServerEnvironmentConfig from "../../config/server.config.js";
 import transporter from "./mailer.js";
 
 export const sendEmail = async ({ to, subject, html }) => {

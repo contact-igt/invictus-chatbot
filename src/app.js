@@ -14,17 +14,18 @@ import AiPropmtRouter from "./models/AiPrompt/aiprompt.routes.js";
 import ManagementRouter from "./models/ManagementModel/management.routes.js";
 import TenantRouter from "./models/TenantModel/tenant.routes.js";
 import WhatsappAccountRouter from "./models/WhatsappAccountModel/whatsappAccount.routes.js";
-import ContactRouter from "./models/ContactsModel/contact.routes.js";
+import ContactRouter from "./models/ContactsModel/contacts.routes.js";
 import LeadRouter from "./models/LeadsModel/leads.routes.js";
 import LiveChatRouter from "./models/LiveChatModel/livechat.routes.js"
-import TenantInvitationRouter from "./models/TenantInvitationModel/tenantinvitation.route.js"
-import TenantUserRouter from "./models/TenantUserModel/tenantuser.route.js"
+import TenantInvitationRouter from "./models/TenantInvitationModel/tenantinvitation.routes.js";
+import TenantUserRouter from "./models/TenantUserModel/tenantuser.routes.js";
 import WhatsappTemplateRouter from "./models/WhatsappTemplateModel/whatsapptemplate.routes.js"
 import WhatsappCampaignRouter from "./models/WhatsappCampaignModel/whatsappcampaign.routes.js"
 import ContactGroupRouter from "./models/ContactGroupModel/contactGroup.routes.js"
 import { startCampaignSchedulerService } from "./models/WhatsappCampaignModel/whatsappcampaign.service.js";
 import { startLeadHeatDecayCronService } from "./models/LeadsModel/leads.service.js";
 import { startLiveChatCleanupService } from "./models/LiveChatModel/livechat.service.js";
+import AiAnalysisLogRouter from "./models/AiAnalysisLog/aiAnalysisLog.routes.js";
 
 dns.setDefaultResultOrder("ipv4first");
 
@@ -46,23 +47,29 @@ app.use((req, res, next) => {
   next();
 });
 
+app.use("/api/management", ManagementRouter);
+
+app.use(
+  "/api/tenant",
+  TenantRouter,
+  TenantUserRouter,
+  TenantInvitationRouter
+);
+
 app.use(
   "/api/whatsapp",
   AuthWhatsappRouter,
   WhatsappMessageRouter,
   KnowledgeRouter,
   AiPropmtRouter,
-  ManagementRouter,
-  TenantRouter,
   WhatsappAccountRouter,
   ContactRouter,
   LeadRouter,
   LiveChatRouter,
-  TenantInvitationRouter,
-  TenantUserRouter,
   WhatsappTemplateRouter,
   WhatsappCampaignRouter,
-  ContactGroupRouter
+  ContactGroupRouter,
+  AiAnalysisLogRouter
 );
 
 
@@ -71,7 +78,7 @@ app.get("/", (req, res) => {
 });
 
 
-await db.sequelize.sync();
+await db.sequelize.sync({ alter: true });
 console.log("DB connected");
 
 startLeadHeatDecayCronService();

@@ -23,15 +23,17 @@ export const getChatList = async (req, res) => {
   const tenant_id = req.user.tenant_id;
 
   if (!tenant_id) {
-    return res.status(400).send({ message: "Invalid tenant context" });
+    return res.status(400).send({
+      message: "Tenant id missing",
+    });
   }
 
   try {
-    const chatlist = await getChatListService(tenant_id);
+    const response = await getChatListService(tenant_id);
 
     return res.status(200).send({
       message: "success",
-      data: chatlist,
+      data: response,
     });
   } catch (err) {
     return res.status(500).send({
@@ -51,7 +53,7 @@ export const getChatByPhone = async (req, res) => {
   try {
     const messages = await getChatByPhoneService(phone, tenant_id);
     return res.status(200).send({
-      messages: "Number successfully listed",
+      message: "success",
       data: messages,
     });
   } catch (err) {

@@ -1,4 +1,4 @@
-import { generateReadableIdFromLast } from "../../utils/generateReadableIdFromLast.js";
+import { generateReadableIdFromLast } from "../../utils/helpers/generateReadableIdFromLast.js";
 import { tableNames } from "../../database/tableName.js";
 import {
   checkTemplateNameExistsOnMetaService,
@@ -20,7 +20,7 @@ import {
 export const getDeletedTemplateListController = async (req, res) => {
   const tenant_id = req.user.tenant_id;
   try {
-    const data = await getDeletedTemplateListService(tenant_id, req.query);
+    const data = await getDeletedTemplateListService(tenant_id);
     return res.status(200).send({
       message: "Success",
       data,
@@ -43,7 +43,7 @@ export const restoreTemplateController = async (req, res) => {
     return res.status(500).send({ message: err.message });
   }
 };
-import { missingFieldsChecker } from "../../utils/missingFields.js";
+import { missingFieldsChecker } from "../../utils/helpers/missingFields.js";
 
 import db from "../../database/index.js";
 import { getWhatsappAccountByTenantService } from "../WhatsappAccountModel/whatsappAccount.service.js";

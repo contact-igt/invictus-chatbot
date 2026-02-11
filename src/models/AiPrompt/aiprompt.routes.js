@@ -38,7 +38,7 @@ router.post(
   authorize({ user_type: "tenant", roles: ["tenant_admin"] }),
   restoreAiPromptController,
 );
-router.delete("/prompt/:id", authenticate, deleteAiPrompt);
+router.delete("/prompt/:id/soft", authenticate, deleteAiPrompt);
 router.delete(
   "/prompt/:id/permanent",
   authenticate,

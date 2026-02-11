@@ -40,8 +40,9 @@ export const loginManagementService = async (email) => {
     WHERE email = ? AND is_deleted = false
   `;
 
-    const [result] = await db.sequelize.query(Query, {
+    const result = await db.sequelize.query(Query, {
       replacements: [email],
+      type: db.Sequelize.QueryTypes.SELECT,
     });
 
     return result[0];
@@ -50,31 +51,74 @@ export const loginManagementService = async (email) => {
   }
 };
 
-export const getAllManagementService = async () => {
+export const findManagementByEmailService = async (email) => {
+  try {
+    const Query = `SELECT * FROM ${tableNames.MANAGEMENT} WHERE email = ? AND is_deleted = false LIMIT 1`;
+    const result = await db.sequelize.query(Query, {
+      replacements: [email],
+      type: db.Sequelize.QueryTypes.SELECT,
+    });
+    return result[0];
+  } catch (err) {
+    throw err;
+  }
+};
+
+export const findManagementByEmailOrMobileService = async (email, mobile) => {
   try {
     const Query = `
-    SELECT * FROM ${tableNames.MANAGEMENT} WHERE is_deleted IN(?)
+      SELECT * FROM ${tableNames.MANAGEMENT} 
+      WHERE (email = ? OR (mobile = ? AND mobile IS NOT NULL)) 
+      AND is_deleted = false 
+      LIMIT 1
+    `;
+    const result = await db.sequelize.query(Query, {
+      replacements: [email, mobile],
+      type: db.Sequelize.QueryTypes.SELECT,
+    });
+    return result[0];
+  } catch (err) {
+    throw err;
+  }
+};
+
+export const getAllManagementService = async () => {
+  const dataQuery = `
+    SELECT *
+    FROM ${tableNames.MANAGEMENT}
+    WHERE is_deleted = ?
     ORDER BY created_at DESC
   `;
 
-    const [result] = await db.sequelize.query(Query, { replacements: [0] });
-    return result;
+  try {
+    const [rows] = await db.sequelize.query(dataQuery, {
+      replacements: [0],
+    });
+
+    return {
+      users: rows,
+    };
   } catch (err) {
     throw err;
   }
 };
 
 export const getAllManagementAdminService = async (role) => {
-  try {
-    const Query = `
-    SELECT * FROM ${tableNames.MANAGEMENT} WHERE role IN(?) AND is_deleted IN(?)
+  const dataQuery = `
+    SELECT *
+    FROM ${tableNames.MANAGEMENT}
+    WHERE role = ? AND is_deleted = ?
     ORDER BY created_at DESC
   `;
 
-    const [result] = await db.sequelize.query(Query, {
+  try {
+    const [rows] = await db.sequelize.query(dataQuery, {
       replacements: [role, 0],
     });
-    return result;
+
+    return {
+      users: rows,
+    };
   } catch (err) {
     throw err;
   }
@@ -86,8 +130,9 @@ export const getManagementByIdService = async (management_id) => {
     WHERE management_id = ? AND is_deleted = ?
   `;
 
-  const [result] = await db.sequelize.query(Query, {
+  const result = await db.sequelize.query(Query, {
     replacements: [management_id, 0],
+    type: db.Sequelize.QueryTypes.SELECT,
   });
 
   return result[0];
@@ -156,7 +201,7 @@ export const updateManagementService = async (
   }
 };
 
-export const updateDeleteStatusByIdService = async (management_id) => {
+export const softDeleteManagementService = async (management_id) => {
   const Query = `UPDATE ${tableNames?.MANAGEMENT} SET is_deleted = ? , deleted_at = NOW() WHERE management_id = ?`;
 
   try {
@@ -176,6 +221,43 @@ export const deleteManagmentByIdService = async (management_id) => {
   try {
     const [result] = await db.sequelize.query(Query, {
       replacements: [management_id],
+    });
+
+    return result;
+  } catch (err) {
+    throw err;
+  }
+};
+
+export const getDeletedManagementListService = async () => {
+  const Query = `
+    SELECT * FROM ${tableNames.MANAGEMENT}
+    WHERE is_deleted = ?
+    ORDER BY deleted_at DESC
+  `;
+
+  try {
+    const result = await db.sequelize.query(Query, {
+      replacements: [1],
+      type: db.Sequelize.QueryTypes.SELECT,
+    });
+
+    return result;
+  } catch (err) {
+    throw err;
+  }
+};
+
+export const restoreManagementService = async (management_id) => {
+  const Query = `
+    UPDATE ${tableNames.MANAGEMENT}
+    SET is_deleted = ?, deleted_at = NULL
+    WHERE management_id = ?
+  `;
+
+  try {
+    const [result] = await db.sequelize.query(Query, {
+      replacements: [0, management_id],
     });
 
     return result;

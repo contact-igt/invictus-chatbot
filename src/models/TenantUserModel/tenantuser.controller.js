@@ -4,11 +4,12 @@ import {
   generateInviteToken,
   generateRefreshToken,
 } from "../../middlewares/auth/authMiddlewares.js";
-import { generateReadableIdFromLast } from "../../utils/generateReadableIdFromLast.js";
-import { missingFieldsChecker } from "../../utils/missingFields.js";
-import { formatPhoneNumber } from "../../utils/formatPhoneNumber.js";
+import { generateReadableIdFromLast } from "../../utils/helpers/generateReadableIdFromLast.js";
+import { missingFieldsChecker } from "../../utils/helpers/missingFields.js";
+import { formatPhoneNumber } from "../../utils/helpers/formatPhoneNumber.js";
 import {
   sendTenantInvitationService,
+  sendTenantUserWelcomeEmailService,
 } from "../TenantInvitationModel/tenantinvitation.service.js";
 import { findTenantByIdService } from "../TenantModel/tenant.service.js";
 import {
@@ -19,17 +20,56 @@ import {
   permanentDeleteTenantUserService,
   softDeleteTenantUserService,
   updateTenantUserByIdService,
+  findTenantAdminService,
+  findTenantUserByEmailGloballyService,
+  getDeletedTenantUserListService,
+  restoreTenantUserService,
 } from "./tenantuser.service.js";
 import bcrypt from "bcrypt";
+import { generatePassword } from "../../utils/helpers/generatePassword.js";
 import crypto from "crypto";
+import { normalizeMobile } from "../../utils/helpers/normalizeMobile.js";
+
+export const getLoggedTenantUserController = async (req, res) => {
+  try {
+    const { unique_id } = req.user;
+
+    if (!unique_id) {
+      return res.status(400).json({ message: "Tenant user ID not found in session" });
+    }
+
+    const user = await findTenantUserByIdService(unique_id);
+
+    if (!user) {
+      return res.status(404).json({ message: "User profile not found" });
+    }
+
+    // Remove sensitive data
+    delete user.password_hash;
+
+    // Fetch tenant details for company name and webhook status
+    const tenant = await findTenantByIdService(user.tenant_id);
+    if (tenant) {
+      user.company_name = tenant.company_name;
+      user.webhook_verified = !!tenant.webhook_verified;
+    }
+
+    return res.status(200).send({
+      message: "Logged-in tenant user profile fetched successfully",
+      data: { ...user, user_type: "tenant" },
+    });
+  } catch (err) {
+    res.status(500).send({ error: err.message });
+  }
+};
 
 import fs from "fs";
 import path from "path";
 import handlebars from "handlebars";
 import { fileURLToPath } from "url";
-import { sendEmail } from "../../utils/emailService.js";
+import { sendEmail } from "../../utils/email/emailService.js";
 
-export const createTenantUsercontroller = async (req, res) => {
+export const createTenantUserController = async (req, res) => {
   const { username, email, country_code, mobile, profile, role } = req.body;
 
   const tenant_id = req.user.tenant_id;
@@ -57,6 +97,16 @@ export const createTenantUsercontroller = async (req, res) => {
     });
   }
 
+  const trimmedEmail = email?.trim()?.toLowerCase();
+
+  // Check if email already exists globally (to prevent login collisions)
+  const existingUserGlobally = await findTenantUserByEmailGloballyService(trimmedEmail);
+  if (existingUserGlobally) {
+    return res.status(400).send({
+      message: "This email is already registered with another organization.",
+    });
+  }
+
   const getloginuserDetails = await findTenantByIdService(loginuser?.tenant_id);
 
   if (!getloginuserDetails) {
@@ -65,37 +115,75 @@ export const createTenantUsercontroller = async (req, res) => {
     });
   }
 
+  // Check if tenant_admin already exists
+  if (role === "tenant_admin") {
+    const existingAdmin = await findTenantAdminService(tenant_id);
+    if (existingAdmin) {
+      return res.status(400).send({
+        message: "Tenant admin already exists for this organization.",
+      });
+    }
+  }
+
   const tenant_user_id = await generateReadableIdFromLast(
     tableNames.TENANT_USERS,
     "tenant_user_id",
     "TTU",
   );
 
-  const sanitizedMobile = formatPhoneNumber(mobile);
+  const normalizedMobile = normalizeMobile(country_code, mobile);
 
   try {
+    let password_hash = null;
+    let auto_generated_password = null;
+    let user_status = "inactive";
+
+    if (role !== "tenant_admin") {
+      const generated = await generatePassword();
+      auto_generated_password = generated.password?.trim(); // Ensure clean password
+      password_hash = await bcrypt.hash(auto_generated_password, 10);
+      user_status = "active";
+    }
+
     await createTenantUserService(
       tenant_user_id,
       tenant_id,
       username,
-      email,
+      trimmedEmail,
       country_code,
-      sanitizedMobile,
+      normalizedMobile,
       profile || null,
       role,
+      password_hash,
+      user_status,
     );
 
-    await sendTenantInvitationService(
-      tenant_id,
-      tenant_user_id,
-      email,
-      username,
-      getloginuserDetails?.company_name,
-      loginuser?.unique_id,
-    );
+    if (role === "tenant_admin") {
+      // Send invitation link flow for admins
+      await sendTenantInvitationService(
+        tenant_id,
+        tenant_user_id,
+        trimmedEmail,
+        username,
+        getloginuserDetails?.company_name,
+        loginuser?.unique_id,
+      );
+    } else {
+      // Send direct credentials for other roles
+      await sendTenantUserWelcomeEmailService(
+        trimmedEmail,
+        username,
+        getloginuserDetails?.company_name,
+        auto_generated_password,
+        role,
+      );
+    }
 
     return res.status(200).send({
-      message: "Tenant created successfully. Invitation email sent to owner.",
+      message:
+        role === "tenant_admin"
+          ? "Tenant user invited successfully. Invitation email sent."
+          : `Tenant user created successfully. Credentials sent to ${email}`,
     });
   } catch (err) {
     if (err.original?.code === "ER_DUP_ENTRY") {
@@ -118,16 +206,28 @@ export const loginTenantUserController = async (req, res) => {
       });
     }
 
-    const user = await loginTenantUserService(email);
+    const trimmedEmail = email?.trim()?.toLowerCase();
+    const trimmedPassword = password?.trim();
+
+    const user = await loginTenantUserService(trimmedEmail);
 
     if (!user) {
+      console.log(`[LOGIN-DEBUG] User not found for email: ${trimmedEmail}`);
       return res.status(401).send({
         message: "Invalid email or password",
       });
     }
 
-    const isMatch = await bcrypt.compare(password, user.password_hash);
+    if (user.status !== "active") {
+      console.log(`[LOGIN-DEBUG] User ${trimmedEmail} is inactive. Status: ${user.status}`);
+      return res.status(403).send({
+        message: "Account is inactive. Please contact administration.",
+      });
+    }
+
+    const isMatch = await bcrypt.compare(trimmedPassword, user.password_hash);
     if (!isMatch) {
+      console.log(`[LOGIN-DEBUG] Password mismatch for user: ${trimmedEmail}`);
       return res.status(401).send({
         message: "Invalid email or password",
       });
@@ -141,13 +241,14 @@ export const loginTenantUserController = async (req, res) => {
       role: user.role,
     };
 
-    const userDetails = { ...user };
+    const userDetails = { ...user, user_type: "tenant" };
     delete userDetails.password_hash;
 
-    // Fetch tenant details for company name
+    // Fetch tenant details for company name and webhook status
     const tenant = await findTenantByIdService(user.tenant_id);
     if (tenant) {
       userDetails.company_name = tenant.company_name;
+      userDetails.webhook_verified = !!tenant.webhook_verified;
     }
 
     return res.status(200).send({
@@ -199,6 +300,15 @@ export const getTenantUserByIdController = async (req, res) => {
       return res.status(404).send({ message: "User not found" });
     }
 
+    // Remove sensitive data
+    delete user.password_hash;
+
+    // Fetch tenant details for webhook status
+    const tenant = await findTenantByIdService(user.tenant_id);
+    if (tenant) {
+      user.webhook_verified = !!tenant.webhook_verified;
+    }
+
     return res.status(200).send({
       message: "Tenant user fetched",
       data: user,
@@ -217,15 +327,15 @@ export const updateTenantUserByIdController = async (req, res) => {
       return res.status(403).send({ message: "Access denied" });
     }
 
-    // role change only for tenant_admin
-    if (loginUser.role !== "tenant_admin" && req.body.role) {
+    // role or status change only for tenant_admin
+    if (loginUser.role !== "tenant_admin" && (req.body.role || req.body.status)) {
       return res.status(403).send({
-        message: "You cannot change role",
+        message: "You do not have permission to change role or status",
       });
     }
 
-    if (req.body.mobile) {
-      req.body.mobile = formatPhoneNumber(req.body.mobile);
+    if (req.body.mobile && req.body.country_code) {
+      req.body.mobile = normalizeMobile(req.body.country_code, req.body.mobile);
     }
 
     await updateTenantUserByIdService(id, req.body);
@@ -280,6 +390,127 @@ export const permanentDeleteTenantUserController = async (req, res) => {
 
     return res.status(200).send({
       message: "Tenant user permanently deleted",
+    });
+  } catch (err) {
+    return res.status(500).send({ message: err.message });
+  }
+};
+
+export const getDeletedTenantUserListController = async (req, res) => {
+  try {
+    const { tenant_id } = req.user;
+    const users = await getDeletedTenantUserListService(tenant_id);
+
+    return res.status(200).send({
+      message: "Deleted tenant users fetched successfully",
+      data: users,
+    });
+  } catch (err) {
+    return res.status(500).send({ message: err.message });
+  }
+};
+
+export const restoreTenantUserController = async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    await restoreTenantUserService(id);
+
+    return res.status(200).send({
+      message: "Tenant user restored successfully",
+    });
+  } catch (err) {
+    return res.status(500).send({ message: err.message });
+  }
+};
+
+// --- Password Reset Controllers ---
+
+import {
+  generateOTPService,
+  verifyOTPService,
+  checkOTPVerificationService,
+} from "../OtpVerificationModel/otpverification.service.js";
+import { updateTenantPasswordService } from "./tenantuser.service.js";
+
+export const forgotTenantPasswordController = async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) {
+      return res.status(400).send({ message: "Email is required" });
+    }
+
+    const trimmedEmail = email?.trim()?.toLowerCase();
+    const user = await loginTenantUserService(trimmedEmail);
+    if (!user) {
+      // For security, do not reveal if user exists
+      return res.status(200).send({
+        message: "If your email is registered, you will receive an OTP shortly.",
+      });
+    }
+
+    await generateOTPService(trimmedEmail, "tenant");
+
+    return res.status(200).send({
+      message: "OTP sent to your email",
+    });
+  } catch (err) {
+    return res.status(500).send({ message: err.message });
+  }
+};
+
+export const verifyTenantOTPController = async (req, res) => {
+  try {
+    const { email, otp } = req.body;
+    if (!email || !otp) {
+      return res.status(400).send({ message: "Email and OTP are required" });
+    }
+
+    const trimmedEmail = email?.trim()?.toLowerCase();
+    const verification = await verifyOTPService(trimmedEmail, otp, "tenant");
+
+    if (!verification.valid) {
+      return res.status(400).send({ message: verification.message });
+    }
+
+    return res.status(200).send({
+      message: "OTP verified successfully",
+    });
+  } catch (err) {
+    return res.status(500).send({ message: err.message });
+  }
+};
+
+export const resetTenantPasswordController = async (req, res) => {
+  try {
+    const { email, new_password } = req.body;
+    if (!email || !new_password) {
+      return res
+        .status(400)
+        .send({ message: "Email and new password are required" });
+    }
+
+    const trimmedEmail = email?.trim()?.toLowerCase();
+    const trimmedPassword = new_password?.trim();
+
+    // Verify if OTP was verified recently
+    const isVerified = await checkOTPVerificationService(trimmedEmail, "tenant");
+    if (!isVerified) {
+      return res.status(400).send({
+        message: "Please verify OTP first or OTP session expired",
+      });
+    }
+
+    const user = await loginTenantUserService(trimmedEmail);
+    if (!user) {
+      return res.status(404).send({ message: "User not found" });
+    }
+
+    const hashedPassword = await bcrypt.hash(trimmedPassword, 10);
+    await updateTenantPasswordService(user.tenant_user_id, hashedPassword);
+
+    return res.status(200).send({
+      message: "Password reset successfully. Please login with new password.",
     });
   } catch (err) {
     return res.status(500).send({ message: err.message });

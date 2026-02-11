@@ -3,10 +3,16 @@ import {
   deleteManagmentByIdController,
   getManagementByIdController,
   getManagementController,
+  getLoggedManagementController,
   loginManagementController,
   registerManagementController,
-  updateDeleteStatusByIdController,
+  softDeleteManagementController,
   updateManagementController,
+  forgotManagementPasswordController,
+  verifyManagementOTPController,
+  resetManagementPasswordController,
+  getDeletedManagementListController,
+  restoreManagementController,
 } from "./management.controller.js";
 import {
   authenticate,
@@ -14,19 +20,31 @@ import {
   refreshToken,
 } from "../../middlewares/auth/authMiddlewares.js";
 
+
+
 const Router = express.Router();
 
 Router.post(
-  "/management/register",
+  "/register",
   authenticate,
-  authorize({ user_type: "management", roles: ["super_admin" ] }),
+  authorize({ user_type: "management", roles: ["super_admin"] }),
   registerManagementController,
 );
 
-Router.post("/management/login", loginManagementController);
+Router.post("/login", loginManagementController);
 
 Router.get(
-  "/managements",
+  "/profile",
+  authenticate,
+  authorize({
+    user_type: "management",
+    roles: ["platform_admin", "super_admin"],
+  }),
+  getLoggedManagementController,
+);
+
+Router.get(
+  "/list",
   authenticate,
   authorize({
     user_type: "management",
@@ -36,7 +54,7 @@ Router.get(
 );
 
 Router.get(
-  "/management/:id",
+  "/:id",
   authenticate,
   authorize({
     user_type: "management",
@@ -46,7 +64,7 @@ Router.get(
 );
 
 Router.put(
-  "/management/:id",
+  "/:id",
   authenticate,
   authorize({
     user_type: "management",
@@ -55,20 +73,40 @@ Router.put(
   updateManagementController,
 );
 
-Router.post("/management/refresh-token", refreshToken);
+Router.post("/refresh-token", refreshToken);
 
-Router.put(
-  "/management-delete/:id",
+Router.delete(
+  "/:id/soft",
   authenticate,
   authorize({
     user_type: "management",
     roles: ["super_admin"],
   }),
-  updateDeleteStatusByIdController,
+  softDeleteManagementController,
+);
+
+Router.get(
+  "/deleted/list",
+  authenticate,
+  authorize({
+    user_type: "management",
+    roles: ["super_admin"],
+  }),
+  getDeletedManagementListController,
+);
+
+Router.put(
+  "/:id/restore",
+  authenticate,
+  authorize({
+    user_type: "management",
+    roles: ["super_admin"],
+  }),
+  restoreManagementController,
 );
 
 Router.delete(
-  "/management/:id",
+  "/:id/permanent",
   authenticate,
   authorize({
     user_type: "management",
@@ -76,5 +114,15 @@ Router.delete(
   }),
   deleteManagmentByIdController,
 );
+
+
+Router.post(
+  "/forgot-password",
+  forgotManagementPasswordController,
+);
+
+
+Router.post("/verify-otp", verifyManagementOTPController);
+Router.post("/reset-password", resetManagementPasswordController);
 
 export default Router;

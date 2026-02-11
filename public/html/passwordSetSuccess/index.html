@@ -107,14 +107,21 @@
             You can now log in and start managing your AI receptionist.
         </p>
 
+        {{#if meta_verify_token}}
+        <div class="token-box">
+            <div class="token-label">Your WhatsApp Webhook URL</div>
+            <div class="token-value" style="font-size: 14px; word-break: break-all;">{{webhook_url}}</div>
+        </div>
+
         <div class="token-box">
             <div class="token-label">Your Meta Verify Token</div>
             <div class="token-value">{{meta_verify_token}}</div>
         </div>
 
         <p>
-            Use this token to verify your WhatsApp Webhook configuration in the Meta Business Suite.
+            Use these details to configure your WhatsApp Webhook in the Meta Business Suite.
         </p>
+        {{/if}}
 
         <div class="cta">
             <a href="{{login_url}}" class="button">Go to Dashboard</a>

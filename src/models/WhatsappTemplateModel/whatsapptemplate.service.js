@@ -1,9 +1,9 @@
 import db from "../../database/index.js";
 import { tableNames } from "../../database/tableName.js";
 import axios from "axios";
-import { AiService } from "../../utils/coreAi.js";
+import { AiService } from "../../utils/ai/coreAi.js";
 import { getWhatsappAccountByTenantService } from "../WhatsappAccountModel/whatsappAccount.service.js";
-import { generateReadableIdFromLast } from "../../utils/generateReadableIdFromLast.js";
+import { generateReadableIdFromLast } from "../../utils/helpers/generateReadableIdFromLast.js";
 
 const STATUS_MAP = {
   IN_REVIEW: "pending",
@@ -577,50 +577,61 @@ export const syncAllPendingTemplatesService = async (
 // ... existing code ...
 
 export const getTemplateListService = async (tenant_id) => {
-  const [templates] = await db.sequelize.query(
-    `
-    SELECT * FROM ${tableNames.WHATSAPP_TEMPLATE}
+  const dataQuery = `
+    SELECT *
+    FROM ${tableNames.WHATSAPP_TEMPLATE}
     WHERE tenant_id = ? AND is_deleted = false
     ORDER BY created_at DESC
-    `,
-    { replacements: [tenant_id] },
-  );
+  `;
 
-  // Fetch components and variables for ALL templates efficiently
-  // Note: For large datasets, this might be slow. Consider pagination or separate lookups if needed.
-  // But for typical template list sizes (10-100), this is fine.
+  try {
+    const [templates] = await db.sequelize.query(dataQuery, {
+      replacements: [tenant_id],
+    });
 
-  const templateIds = templates.map(t => t.template_id);
+    // Fetch components and variables for all templates
+    const templateIds = templates.map((t) => t.template_id);
 
-  let allComponents = [];
-  let allVariables = [];
+    let allComponents = [];
+    let allVariables = [];
 
-  if (templateIds.length > 0) {
-    [allComponents] = await db.sequelize.query(
-      `SELECT * FROM ${tableNames.WHATSAPP_TEMPLATE_COMPONENTS} WHERE template_id IN (?)`,
-      { replacements: [templateIds] }
-    );
+    if (templateIds.length > 0) {
+      [allComponents] = await db.sequelize.query(
+        `SELECT * FROM ${tableNames.WHATSAPP_TEMPLATE_COMPONENTS} WHERE template_id IN (?)`,
+        { replacements: [templateIds] },
+      );
 
-    [allVariables] = await db.sequelize.query(
-      `SELECT * FROM ${tableNames.WHATSAPP_TEMPLATE_VARIABLES} WHERE template_id IN (?) ORDER BY variable_key ASC`,
-      { replacements: [templateIds] }
-    );
-  }
+      [allVariables] = await db.sequelize.query(
+        `SELECT * FROM ${tableNames.WHATSAPP_TEMPLATE_VARIABLES} WHERE template_id IN (?) ORDER BY variable_key ASC`,
+        { replacements: [templateIds] },
+      );
+    }
 
-  return templates.map((t) => {
-    const components = allComponents.filter(c => c.template_id === t.template_id);
-    const variables = allVariables.filter(v => v.template_id === t.template_id);
+    const mappedTemplates = templates.map((t) => {
+      const components = allComponents.filter(
+        (c) => c.template_id === t.template_id,
+      );
+      const variables = allVariables.filter(
+        (v) => v.template_id === t.template_id,
+      );
+
+      return {
+        ...t,
+        is_submitted: !!t.meta_template_id,
+        can_edit: ["draft", "rejected"].includes(t.status),
+        can_submit: t.status === "draft",
+        display_status: t.status.charAt(0).toUpperCase() + t.status.slice(1),
+        components,
+        variables,
+      };
+    });
 
     return {
-      ...t,
-      is_submitted: !!t.meta_template_id,
-      can_edit: ["draft", "rejected"].includes(t.status),
-      can_submit: t.status === "draft",
-      display_status: t.status.charAt(0).toUpperCase() + t.status.slice(1),
-      components, // Now including components (body text, etc.)
-      variables   // Now including variables
+      templates: mappedTemplates,
     };
-  });
+  } catch (err) {
+    throw err;
+  }
 };
 
 export const getTemplateByIdService = async (template_id, tenant_id) => {
@@ -1167,36 +1178,19 @@ export const generateAiTemplateService = async ({
 /**
  * Retrieves a list of soft-deleted templates for a tenant.
  */
-export const getDeletedTemplateListService = async (tenant_id, query) => {
-  const { category, language, search, page = 1, limit = 10 } = query;
-  const offset = (page - 1) * limit;
-
-  let where = { tenant_id, is_deleted: true };
-  if (category) where.category = category;
-  if (language) where.language = language;
-  if (search) {
-    where.template_name = { [db.Sequelize.Op.like]: `%${search}%` };
-  }
-
-  const { count, rows } = await db.WhatsappTemplates.findAndCountAll({
-    where,
+export const getDeletedTemplateListService = async (tenant_id) => {
+  const deletedTemplates = await db.WhatsappTemplates.findAll({
+    where: { tenant_id, is_deleted: true },
     order: [["deleted_at", "DESC"]],
-    limit: parseInt(limit),
-    offset: parseInt(offset),
     include: [
       {
-        model: db.WhatsappTemplatesComponents,
+        model: db.WhatsappTemplateComponents,
         as: "components",
       },
     ],
   });
 
-  return {
-    totalItems: count,
-    templates: rows,
-    totalPages: Math.ceil(count / limit),
-    currentPage: parseInt(page),
-  };
+  return deletedTemplates;
 };
 
 /**

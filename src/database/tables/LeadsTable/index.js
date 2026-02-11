@@ -4,10 +4,17 @@ export const LeadsTable = (sequelize, Sequelize) => {
   return sequelize.define(
     tableNames.LEADS,
     {
+      lead_id: {
+        type: Sequelize.STRING,
+        allowNull: false,
+      },
+
       tenant_id: {
         type: Sequelize.STRING,
         allowNull: false,
       },
+
+      
 
       contact_id: {
         type: Sequelize.STRING,
@@ -115,6 +122,11 @@ export const LeadsTable = (sequelize, Sequelize) => {
       timestamps: true,
       underscored: true,
       indexes: [
+        {
+          name: "unique_lead_id",
+          unique: true,
+          fields: ["lead_id"],
+        },
         {
           name: "idx_lead_status",
           fields: ["tenant_id", "status", "is_deleted"],

@@ -1,6 +1,6 @@
 import db from "../../database/index.js";
 import { tableNames } from "../../database/tableName.js";
-import { cleanText } from "../../utils/cleanText.js";
+import { cleanText } from "../../utils/text/cleanText.js";
 
 export const processAiPromptUpload = async (tenant_id, name, prompt) => {
   const Query = `
@@ -20,18 +20,22 @@ export const processAiPromptUpload = async (tenant_id, name, prompt) => {
 };
 
 export const listAiPromptService = async (tenant_id) => {
-  const Query = `
-    SELECT id, name, prompt,  created_at , is_active
-    FROM ${tableNames.AIPROMPT}   WHERE tenant_id IN(?) AND is_deleted = false
+  // Get all items
+  const dataQuery = `
+    SELECT id, name, prompt, created_at, is_active
+    FROM ${tableNames.AIPROMPT}
+    WHERE tenant_id = ? AND is_deleted = false
     ORDER BY created_at DESC
-    `;
+  `;
 
   try {
-    const [result] = await db.sequelize.query(Query, {
+    const [rows] = await db.sequelize.query(dataQuery, {
       replacements: [tenant_id],
     });
 
-    return result;
+    return {
+      prompts: rows,
+    };
   } catch (err) {
     throw err;
   }
@@ -163,27 +167,16 @@ export const getActivePromptService = async (tenant_id) => {
 /**
  * Retrieves a list of soft-deleted AI prompts for a tenant.
  */
-export const getDeletedAiPromptListService = async (tenant_id, query) => {
-  const { search, page = 1, limit = 10 } = query;
-  const offset = (page - 1) * limit;
+export const getDeletedAiPromptListService = async (tenant_id) => {
+  const where = { tenant_id, is_deleted: true };
 
-  let where = { tenant_id, is_deleted: true };
-  if (search) {
-    where.name = { [db.Sequelize.Op.like]: `%${search}%` };
-  }
-
-  const { count, rows } = await db.AiPrompts.findAndCountAll({
+  const { count, rows } = await db.AiPrompt.findAndCountAll({
     where,
     order: [["deleted_at", "DESC"]],
-    limit: parseInt(limit),
-    offset: parseInt(offset),
   });
 
   return {
-    totalItems: count,
     prompts: rows,
-    totalPages: Math.ceil(count / limit),
-    currentPage: parseInt(page),
   };
 };
 
@@ -191,7 +184,7 @@ export const getDeletedAiPromptListService = async (tenant_id, query) => {
  * Restore a soft-deleted AI prompt
  */
 export const restoreAiPromptService = async (id, tenant_id) => {
-  const prompt = await db.AiPrompts.findOne({
+  const prompt = await db.AiPrompt.findOne({
     where: { id, tenant_id, is_deleted: true }
   });
 
@@ -199,10 +192,16 @@ export const restoreAiPromptService = async (id, tenant_id) => {
     throw new Error("Prompt not found or not deleted");
   }
 
-  await prompt.update({
-    is_deleted: false,
-    deleted_at: null
-  });
+  // Use raw query to avoid ON UPDATE CURRENT_TIMESTAMP conflict
+  await db.sequelize.query(
+    `UPDATE ${tableNames.AIPROMPT} 
+     SET is_deleted = false, deleted_at = NULL 
+     WHERE id = ? AND tenant_id = ?`,
+    {
+      replacements: [id, tenant_id],
+      type: db.Sequelize.QueryTypes.UPDATE
+    }
+  );
 
   return { message: "Prompt restored successfully" };
 };

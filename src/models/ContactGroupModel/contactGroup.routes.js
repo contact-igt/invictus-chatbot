@@ -96,7 +96,7 @@ router.delete(
 
 // Delete a group (soft)
 router.delete(
-    "/contact-group/:group_id",
+    "/contact-group/:group_id/soft",
     authenticate,
     authorize({ user_type: "tenant", roles: managerRoles }),
     deleteContactGroupController

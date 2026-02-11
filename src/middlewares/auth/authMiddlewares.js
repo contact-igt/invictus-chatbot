@@ -2,6 +2,7 @@ import jwt from "jsonwebtoken";
 import ServerEnvironmentConfig from "../../config/server.config.js";
 import { getManagementByIdService } from "../../models/ManagementModel/management.service.js";
 import { findTenantUserByIdService } from "../../models/TenantUserModel/tenantuser.service.js";
+import { findTenantByIdService } from "../../models/TenantModel/tenant.service.js";
 
 /* =========================
    TOKEN GENERATORS
@@ -88,12 +89,17 @@ export const authenticate = async (req, res, next) => {
     if (decoded.user_type === "tenant") {
       const user = await findTenantUserByIdService(decoded.unique_id);
 
-      console.log("tenatdecose", user)
-
-
       if (!user) {
         return res.status(401).json({
           message: "Account no longer exists. Please login again.",
+        });
+      }
+
+      // 🔴 GLOBAL TENANT STATUS CHECK
+      const tenant = await findTenantByIdService(decoded.tenant_id);
+      if (!tenant || tenant.status !== "active") {
+        return res.status(403).json({
+          message: "Tenant account is inactive. Access denied.",
         });
       }
     }

@@ -6,8 +6,8 @@ import path from "path";
 import handlebars from "handlebars";
 import { fileURLToPath } from "url";
 import { generateInviteToken } from "../../middlewares/auth/authMiddlewares.js";
-import { generateReadableIdFromLast } from "../../utils/generateReadableIdFromLast.js";
-import { sendEmail } from "../../utils/emailService.js";
+import { generateReadableIdFromLast } from "../../utils/helpers/generateReadableIdFromLast.js";
+import { sendEmail } from "../../utils/email/emailService.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -168,9 +168,12 @@ export const sendTenantPasswordSetSuccessEmailService = async (
   email,
   name,
   company_name,
+  tenant_id,
+  verify_token = null,
 ) => {
   const loginUrl = `${process.env.FRONTEND_URL}/login`;
-  const metaVerifyToken = process.env.META_VERIFY_TOKEN;
+  const webhookUrl = `${process.env.BACKEND_URL}/api/whatsapp/webhook/${tenant_id}`;
+  const metaVerifyToken = verify_token || process.env.META_VERIFY_TOKEN;
 
   const templatePath = path.join(
     __dirname,
@@ -184,12 +187,48 @@ export const sendTenantPasswordSetSuccessEmailService = async (
     name,
     company_name,
     login_url: loginUrl,
+    webhook_url: webhookUrl,
     meta_verify_token: metaVerifyToken,
   });
 
   await sendEmail({
     to: email,
     subject: `Welcome to WhatsNexus - ${company_name} Setup Complete`,
+    html: emailHtml,
+  });
+
+  return true;
+};
+
+export const sendTenantUserWelcomeEmailService = async (
+  email,
+  name,
+  company_name,
+  password,
+  role,
+) => {
+  const loginUrl = `${process.env.FRONTEND_URL}/login`;
+
+  const templatePath = path.join(
+    __dirname,
+    "../../../public/html/tenantUserWelcome/index.html",
+  );
+
+  const source = fs.readFileSync(templatePath, "utf8");
+  const template = handlebars.compile(source);
+
+  const emailHtml = template({
+    name,
+    company_name,
+    login_url: loginUrl,
+    email,
+    password,
+    role,
+  });
+
+  await sendEmail({
+    to: email,
+    subject: `Welcome to ${company_name} on WhatsNexus`,
     html: emailHtml,
   });
 

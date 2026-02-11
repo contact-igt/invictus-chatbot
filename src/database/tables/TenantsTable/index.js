@@ -79,6 +79,17 @@ export const TenantsTable = (sequelize, Sequelize) => {
         allowNull: true,
       },
 
+      verify_token: {
+        type: Sequelize.STRING,
+        allowNull: true,
+      },
+
+      webhook_verified: {
+        type: Sequelize.BOOLEAN,
+        defaultValue: false,
+        allowNull: false,
+      },
+
       is_deleted: {
         type: Sequelize.BOOLEAN,
         defaultValue: false,
