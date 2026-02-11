@@ -22,28 +22,15 @@ Router.post(
   createContactController,
 );
 
-Router.post(
-  "/contact/:id/restore",
-  authenticate,
-  authorize({ user_type: "tenant", roles: ["tenant_admin"] }),
-  restoreContactController,
-);
 
-
-
-
-Router.get(
-  "/contacts/deleted/list",
-  authenticate,
-  authorize({ user_type: "tenant", roles: tenantRoles }),
-  getDeletedContactListController,
-);
 Router.get(
   "/contacts",
   authenticate,
   authorize({ user_type: "tenant", roles: tenantRoles }),
   getAllContactsController,
 );
+
+
 Router.get(
   "/contact/:id",
   authenticate,
@@ -61,11 +48,12 @@ Router.put(
 
 
 Router.delete(
-  "/contact/:id",
+  "/contact/:id/soft",
   authenticate,
-  authorize({ user_type: "tenant", roles: ["tenant_admin"] }),
+  authorize({ user_type: "tenant", roles: tenantRoles }),
   deleteContactController,
 );
+
 Router.delete(
   "/contact/:id/permanent",
   authenticate,
@@ -73,6 +61,20 @@ Router.delete(
   permanentDeleteContactController,
 );
 
+Router.post(
+  "/contact/:id/restore",
+  authenticate,
+  authorize({ user_type: "tenant", roles: ["tenant_admin"] }),
+  restoreContactController,
+);
+
+
+Router.get(
+  "/contacts/deleted/list",
+  authenticate,
+  authorize({ user_type: "tenant", roles: tenantRoles }),
+  getDeletedContactListController,
+);
 
 
 

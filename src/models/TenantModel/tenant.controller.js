@@ -1,17 +1,21 @@
 import { tableNames } from "../../database/tableName.js";
-import { generateReadableIdFromLast } from "../../utils/generateReadableIdFromLast.js";
-import { missingFieldsChecker } from "../../utils/missingFields.js";
-import { formatPhoneNumber } from "../../utils/formatPhoneNumber.js";
+import { generateReadableIdFromLast } from "../../utils/helpers/generateReadableIdFromLast.js";
+import { missingFieldsChecker } from "../../utils/helpers/missingFields.js";
+import { formatPhoneNumber } from "../../utils/helpers/formatPhoneNumber.js";
 import crypto from "crypto";
 import {
   createTenantService,
   deleteTenantService,
-  deleteTenantStatusService,
+  softDeleteTenantService,
   findTenantByIdService,
   getAllTenantService,
   updateTenantService,
+  updateTenantStatusService,
+  getDeletedTenantListService,
+  restoreTenantService,
 } from "./tenant.service.js";
-;
+import { normalizeMobile } from "../../utils/helpers/normalizeMobile.js";
+
 import {
   sendTenantInvitationService,
 } from "../TenantInvitationModel/tenantinvitation.service.js";
@@ -19,6 +23,7 @@ import {
   createTenantUserService,
   findTenantUserByIdService,
   updateTenantUserService,
+  findTenantUserByEmailOrMobileGloballyService,
 } from "../TenantUserModel/tenantuser.service.js";
 
 export const createTenantController = async (req, res) => {
@@ -59,7 +64,18 @@ export const createTenantController = async (req, res) => {
       "TT",
     );
 
-    const sanitizedMobile = formatPhoneNumber(owner_mobile);
+    const normalizedMobile = normalizeMobile(owner_country_code, owner_mobile);
+    const trimmedEmail = owner_email?.trim()?.toLowerCase();
+
+    // Check for existing user in Tenants
+    const existingTu = await findTenantUserByEmailOrMobileGloballyService(trimmedEmail, normalizedMobile);
+
+    if (existingTu) {
+      const field = existingTu.email === trimmedEmail ? "Email" : "Mobile";
+      return res.status(400).json({
+        message: `${field} already exists in Tenant records`,
+      });
+    }
 
     await createTenantService(
       tenant_id,
@@ -67,7 +83,7 @@ export const createTenantController = async (req, res) => {
       owner_name,
       owner_email,
       owner_country_code,
-      sanitizedMobile,
+      normalizedMobile,
       type,
       subscription_start_date || null,
       subscription_end_date || null,
@@ -86,9 +102,10 @@ export const createTenantController = async (req, res) => {
       owner_name,
       owner_email,
       owner_country_code,
-      sanitizedMobile,
+      normalizedMobile,
       profile || null,
       "tenant_admin",
+      null, // Initial owners still use the invitation link flow
     );
 
     await sendTenantInvitationService(
@@ -139,6 +156,7 @@ export const getTenantByIdController = async (req, res) => {
     }
 
     return res.status(200).send({
+      message: "Tenant details fetched successfully",
       data: response,
     });
   } catch (err) {
@@ -164,14 +182,14 @@ export const updateTenantController = async (req, res) => {
       return res.status(404).json({ message: "Tenant details not found" });
     }
 
-    const sanitizedMobile = owner_mobile ? formatPhoneNumber(owner_mobile) : null;
+    const normalizedMobile = owner_mobile ? normalizeMobile(owner_country_code, owner_mobile) : null;
 
     await updateTenantService(
       company_name,
       owner_name,
       owner_email,
       owner_country_code,
-      sanitizedMobile,
+      normalizedMobile,
       type,
       id,
     );
@@ -180,7 +198,7 @@ export const updateTenantController = async (req, res) => {
     await updateTenantUserService(
       owner_name,
       owner_email,
-      sanitizedMobile,
+      normalizedMobile,
       owner_country_code,
       tenant?.owner_email, // old email used as identifier
     );
@@ -239,7 +257,7 @@ export const updateTenantStatusController = async (req, res) => {
   }
 };
 
-export const deleteTenantStatusController = async (req, res) => {
+export const softDeleteTenantController = async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -249,9 +267,34 @@ export const deleteTenantStatusController = async (req, res) => {
       return res.status(400).json({ message: "Tenant details not found" });
     }
 
-    await deleteTenantStatusService(id);
+    await softDeleteTenantService(id);
     return res.status(200).send({
-      message: "Tentnat removed successfully",
+      message: "Tenant removed successfully",
+    });
+  } catch (err) {
+    res.status(500).send({ error: err.message });
+  }
+};
+
+export const getDeletedTenantListController = async (req, res) => {
+  try {
+    const data = await getDeletedTenantListService();
+    return res.status(200).send({
+      message: "Deleted tenants fetched successfully",
+      data,
+    });
+  } catch (err) {
+    res.status(500).send({ error: err.message });
+  }
+};
+
+export const restoreTenantController = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    await restoreTenantService(id);
+    return res.status(200).send({
+      message: "Tenant restored successfully",
     });
   } catch (err) {
     res.status(500).send({ error: err.message });
@@ -263,7 +306,7 @@ export const deleteTenantController = async (req, res) => {
     const { id } = req.params;
     await deleteTenantService(id);
     return res.status(200).send({
-      message: "Tentnat removed successfully",
+      message: "Tenant removed successfully",
     });
   } catch (err) {
     res.status(500).send({ error: err.message });
@@ -312,5 +355,30 @@ export const resendTenantInvitationController = async (req, res) => {
     return res.status(500).send({
       message: err?.message,
     });
+  }
+};
+
+export const getTenantWebhookStatusController = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!id) {
+      return res.status(400).json({ message: "Tenant ID is required" });
+    }
+
+    const tenant = await findTenantByIdService(id);
+
+    if (!tenant) {
+      return res.status(404).json({ message: "Tenant not found" });
+    }
+
+    return res.status(200).json({
+      message: "success",
+      data: {
+        webhook_verified: !!tenant.webhook_verified,
+      },
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
   }
 };

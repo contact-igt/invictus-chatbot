@@ -2,12 +2,15 @@ import express from "express";
 import {
   createTenantController,
   deleteTenantController,
-  deleteTenantStatusController,
+  softDeleteTenantController,
   getAllTenantController,
   getTenantByIdController,
   updateTenantController,
   resendTenantInvitationController,
   updateTenantStatusController,
+  getTenantWebhookStatusController,
+  getDeletedTenantListController,
+  restoreTenantController,
 } from "./tenant.controller.js";
 import {
   authenticate,
@@ -17,7 +20,7 @@ import {
 const Router = express.Router();
 
 Router.post(
-  "/tenant",
+  "/",
   authenticate,
   authorize({
     user_type: "management",
@@ -27,7 +30,7 @@ Router.post(
 );
 
 Router.get(
-  "/tenants",
+  "/list",
   authenticate,
   authorize({
     user_type: "management",
@@ -37,7 +40,7 @@ Router.get(
 );
 
 Router.get(
-  "/tenant/:id",
+  "/:id",
   authenticate,
   authorize({
     user_type: "management",
@@ -47,7 +50,7 @@ Router.get(
 );
 
 Router.put(
-  "/tenant/:id",
+  "/:id",
   authenticate,
   authorize({
     user_type: "management",
@@ -57,7 +60,7 @@ Router.put(
 );
 
 Router.put(
-  "/tenant-status/:id",
+  "/:id/status",
   authenticate,
   authorize({
     user_type: "management",
@@ -66,18 +69,38 @@ Router.put(
   updateTenantStatusController,
 );
 
-Router.put(
-  "/tenant-remove/:id",
+Router.delete(
+  "/:id/soft",
   authenticate,
   authorize({
     user_type: "management",
     roles: ["platform_admin", "super_admin"],
   }),
-  deleteTenantStatusController,
+  softDeleteTenantController,
+);
+
+Router.get(
+  "/deleted/list",
+  authenticate,
+  authorize({
+    user_type: "management",
+    roles: ["platform_admin", "super_admin"],
+  }),
+  getDeletedTenantListController,
+);
+
+Router.put(
+  "/:id/restore",
+  authenticate,
+  authorize({
+    user_type: "management",
+    roles: ["platform_admin", "super_admin"],
+  }),
+  restoreTenantController,
 );
 
 Router.delete(
-  "/tenant/:id",
+  "/:id/permanent",
   authenticate,
   authorize({
     user_type: "management",
@@ -87,13 +110,23 @@ Router.delete(
 );
 
 Router.post(
-  "/tenant/resend-invite/:tenant_user_id",
+  "/:tenant_user_id/resend-invite",
   authenticate,
   authorize({
     user_type: "management",
     roles: ["platform_admin", "super_admin"],
   }),
   resendTenantInvitationController,
+);
+
+Router.get(
+  "/:id/webhook-status",
+  authenticate,
+  authorize({
+    user_type: "tenant",
+    roles: ["tenant_admin", "doctor", "staff", "agent"],
+  }),
+  getTenantWebhookStatusController,
 );
 
 export default Router;

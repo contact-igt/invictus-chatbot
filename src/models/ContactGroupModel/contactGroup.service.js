@@ -1,6 +1,6 @@
 import db from "../../database/index.js";
 import { tableNames } from "../../database/tableName.js";
-import { generateReadableIdFromLast } from "../../utils/generateReadableIdFromLast.js";
+import { generateReadableIdFromLast } from "../../utils/helpers/generateReadableIdFromLast.js";
 
 /**
  * Creates a new contact group
@@ -49,30 +49,25 @@ export const createContactGroupService = async (tenant_id, data) => {
 /**
  * Get all groups for a tenant
  */
-export const getContactGroupListService = async (tenant_id, query) => {
-    const { search, page = 1, limit = 10 } = query;
-    const offset = (page - 1) * limit;
+export const getContactGroupListService = async (tenant_id) => {
+    const where = { tenant_id, is_deleted: false };
 
-    let where = { tenant_id, is_deleted: false };
-    if (search) {
-        where.group_name = { [db.Sequelize.Op.like]: `%${search}%` };
-    }
-
-    const { count, rows } = await db.ContactGroups.findAndCountAll({
+    const rows = await db.ContactGroups.findAll({
         where,
         order: [["created_at", "DESC"]],
-        limit: parseInt(limit),
-        offset: parseInt(offset),
         include: [
             {
                 model: db.ContactGroupMembers,
                 as: "members",
                 attributes: ["id"],
+                separate: true,
                 include: [
                     {
                         model: db.Contacts,
                         as: "contact",
                         attributes: ["contact_id", "name", "phone", "email", "profile_pic"],
+                        where: { is_deleted: false },
+                        required: true,
                     },
                 ],
             },
@@ -80,10 +75,7 @@ export const getContactGroupListService = async (tenant_id, query) => {
     });
 
     return {
-        totalItems: count,
         groups: rows,
-        totalPages: Math.ceil(count / limit),
-        currentPage: parseInt(page),
     };
 };
 
@@ -97,11 +89,14 @@ export const getContactGroupByIdService = async (group_id, tenant_id) => {
             {
                 model: db.ContactGroupMembers,
                 as: "members",
+                separate: true,
                 include: [
                     {
                         model: db.Contacts,
                         as: "contact",
                         attributes: ["contact_id", "name", "phone", "email"],
+                        where: { is_deleted: false },
+                        required: true,
                     },
                 ],
             },
@@ -315,27 +310,16 @@ export const getAvailableContactsForGroupService = async (group_id, tenant_id) =
 /**
  * Retrieves a list of soft-deleted contact groups for a tenant.
  */
-export const getDeletedContactGroupListService = async (tenant_id, query) => {
-    const { search, page = 1, limit = 10 } = query;
-    const offset = (page - 1) * limit;
+export const getDeletedContactGroupListService = async (tenant_id) => {
+    const where = { tenant_id, is_deleted: true };
 
-    let where = { tenant_id, is_deleted: true };
-    if (search) {
-        where.group_name = { [db.Sequelize.Op.like]: `%${search}%` };
-    }
-
-    const { count, rows } = await db.ContactGroups.findAndCountAll({
+    const rows = await db.ContactGroups.findAll({
         where,
         order: [["deleted_at", "DESC"]],
-        limit: parseInt(limit),
-        offset: parseInt(offset),
     });
 
     return {
-        totalItems: count,
         groups: rows,
-        totalPages: Math.ceil(count / limit),
-        currentPage: parseInt(page),
     };
 };
 

@@ -1,4 +1,4 @@
-import { scrapeWebsiteText } from "../../utils/scrapeWebsiteText.js";
+import { scrapeWebsiteText } from "../../utils/text/scrapeWebsiteText.js";
 import {
   deleteKnowledgeService,
   permanentDeleteKnowledgeService,
@@ -14,7 +14,7 @@ import {
 export const getDeletedKnowledgeController = async (req, res) => {
   const tenant_id = req.user.tenant_id;
   try {
-    const data = await getDeletedKnowledgeListService(tenant_id, req.query);
+    const data = await getDeletedKnowledgeListService(tenant_id);
     return res.status(200).send({
       message: "Success",
       data,
@@ -37,7 +37,7 @@ export const restoreKnowledgeController = async (req, res) => {
     return res.status(500).send({ message: err.message });
   }
 };
-import { cleanText } from "../../utils/cleanText.js";
+import { cleanText } from "../../utils/text/cleanText.js";
 import { searchKnowledgeChunks } from "./knowledge.search.js";
 
 export const uploadKnowledge = async (req, res) => {
@@ -99,7 +99,7 @@ export const listKnowledge = async (req, res) => {
   }
 
   try {
-    const data = await listKnowledgeService(tenant_id);
+    const data = await listKnowledgeService(tenant_id, req.query);
     return res.status(200).send({
       data: data,
     });

@@ -53,7 +53,7 @@ router.put(
   updateKnowledge,
 );
 router.delete(
-  "/knowledge/:id",
+  "/knowledge/:id/soft",
   authenticate,
   authorize({ user_type: "tenant", roles: managerRoles }),
   deleteKnowledge,

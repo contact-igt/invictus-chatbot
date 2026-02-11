@@ -14,6 +14,7 @@ import {
 import {
   activateTenantService,
   findTenantByIdService,
+  updateTenantVerifyTokenService,
 } from "../TenantModel/tenant.service.js";
 import {
   generateAccessToken,
@@ -226,7 +227,7 @@ export const setTenantPasswordController = async (req, res) => {
       });
     }
 
-    const passwordHash = await bcrypt.hash(password, 10);
+    const passwordHash = await bcrypt.hash(password.trim(), 10);
 
     await updateTenantUserPasswordService(
       passwordHash,
@@ -241,10 +242,11 @@ export const setTenantPasswordController = async (req, res) => {
     const userDetails = { ...user };
     delete userDetails.password_hash;
 
-    // Fetch tenant details for company name
+    // Fetch tenant details for company name and webhook status
     const tenant = await findTenantByIdService(invitation.tenant_id);
     if (tenant) {
       userDetails.company_name = tenant.company_name;
+      userDetails.webhook_verified = tenant.webhook_verified;
     }
 
     const tokenPayload = {
@@ -255,11 +257,25 @@ export const setTenantPasswordController = async (req, res) => {
       role: user.role,
     };
 
-    // Send success email with META_VERIFY_TOKEN
+    let uniqueVerifyToken = null;
+    if (user.role === "tenant_admin") {
+      // Generate unique verify_token: whatnexus_{company_name}_2026
+      const sanitizedCompanyName = (tenant?.company_name || "tenant")
+        .toLowerCase()
+        .replace(/[^a-z0-9]/g, "_");
+      uniqueVerifyToken = `whatnexus_${sanitizedCompanyName}_2026`;
+
+      // Save verify_token to tenant
+      await updateTenantVerifyTokenService(invitation.tenant_id, uniqueVerifyToken);
+    }
+
+    // Send success email - webhook details only for tenant_admin
     await sendTenantPasswordSetSuccessEmailService(
       user.email,
       user.username,
       tenant?.company_name || "Your Company",
+      invitation.tenant_id,
+      uniqueVerifyToken, // This will be null for non-admins, hiding the webhook section
     );
 
     return res.status(200).send({

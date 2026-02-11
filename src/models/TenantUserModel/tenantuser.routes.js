@@ -4,32 +4,44 @@ import {
   authorize,
 } from "../../middlewares/auth/authMiddlewares.js";
 import {
-  createTenantUsercontroller,
+  createTenantUserController,
   getAllTenantUsersController,
   getTenantUserByIdController,
   loginTenantUserController,
   permanentDeleteTenantUserController,
   softDeleteTenantUserController,
   updateTenantUserByIdController,
+  getDeletedTenantUserListController,
+  restoreTenantUserController,
+  getLoggedTenantUserController,
 } from "./tenantuser.controller.js";
 
 const Router = express.Router();
 
 Router.post(
-  "/tenant-user",
+  "/user/create",
   authenticate,
   authorize({
     user_type: "tenant",
     roles: ["tenant_admin"],
   }),
-  createTenantUsercontroller,
+  createTenantUserController,
 );
 
-Router.post("/tenant-user/login", loginTenantUserController);
-
+Router.post("/user/login", loginTenantUserController);
 
 Router.get(
-  "/tenant-users",
+  "/user/profile",
+  authenticate,
+  authorize({
+    user_type: "tenant",
+    roles: ["tenant_admin", "doctor", "staff", "agent"],
+  }),
+  getLoggedTenantUserController,
+);
+
+Router.get(
+  "/user/list",
   authenticate,
   authorize({
     user_type: "tenant",
@@ -39,7 +51,7 @@ Router.get(
 );
 
 Router.get(
-  "/tenant-user/:id",
+  "/user/:id",
   authenticate,
   authorize({
     user_type: "tenant",
@@ -49,7 +61,7 @@ Router.get(
 );
 
 Router.put(
-  "/tenant-user/:id",
+  "/user/:id",
   authenticate,
   authorize({
     user_type: "tenant",
@@ -59,7 +71,7 @@ Router.put(
 );
 
 Router.delete(
-  "/tenant-user/:id",
+  "/user/:id/soft",
   authenticate,
   authorize({
     user_type: "tenant",
@@ -68,9 +80,29 @@ Router.delete(
   softDeleteTenantUserController,
 );
 
+Router.get(
+  "/user/deleted/list",
+  authenticate,
+  authorize({
+    user_type: "tenant",
+    roles: ["tenant_admin"],
+  }),
+  getDeletedTenantUserListController,
+);
+
+Router.put(
+  "/user/:id/restore",
+  authenticate,
+  authorize({
+    user_type: "tenant",
+    roles: ["tenant_admin"],
+  }),
+  restoreTenantUserController,
+);
+
 /* ⚠️ PERMANENT DELETE – USE CAREFULLY */
 Router.delete(
-  "/tenant-user/:id/permanent",
+  "/user/:id/permanent",
   authenticate,
   authorize({
     user_type: "tenant",
@@ -78,5 +110,16 @@ Router.delete(
   }),
   permanentDeleteTenantUserController,
 );
+
+// --- Password Reset Routes ---
+import {
+  forgotTenantPasswordController,
+  verifyTenantOTPController,
+  resetTenantPasswordController,
+} from "./tenantuser.controller.js";
+
+Router.post("/user/forgot-password", forgotTenantPasswordController);
+Router.post("/user/verify-otp", verifyTenantOTPController);
+Router.post("/user/reset-password", resetTenantPasswordController);
 
 export default Router;

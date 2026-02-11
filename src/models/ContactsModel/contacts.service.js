@@ -1,6 +1,6 @@
 import db from "../../database/index.js";
 import { tableNames } from "../../database/tableName.js";
-import { generateReadableIdFromLast } from "../../utils/generateReadableIdFromLast.js";
+import { generateReadableIdFromLast } from "../../utils/helpers/generateReadableIdFromLast.js";
 
 export const createContactService = async (
   tenant_id,
@@ -37,11 +37,43 @@ export const getContactByPhoneAndTenantIdService = async (tenant_id, phone) => {
   try {
     const Values = [tenant_id, phone];
 
-    const Query = `SELECT * FROM ${tableNames?.CONTACTS} WHERE tenant_id = ? AND phone = ? AND is_deleted = false LIMIT 1 `;
+    // First, try to find active contact
+    const activeQuery = `SELECT * FROM ${tableNames?.CONTACTS} WHERE tenant_id = ? AND phone = ? AND is_deleted = false LIMIT 1`;
+    const [activeResult] = await db.sequelize.query(activeQuery, { replacements: Values });
 
-    const [result] = await db.sequelize.query(Query, { replacements: Values });
+    if (activeResult[0]) {
+      return activeResult[0];
+    }
 
-    return result[0];
+    // If no active contact, check for deleted contact
+    const deletedQuery = `SELECT * FROM ${tableNames?.CONTACTS} WHERE tenant_id = ? AND phone = ? AND is_deleted = true LIMIT 1`;
+    const [deletedResult] = await db.sequelize.query(deletedQuery, { replacements: Values });
+
+    if (deletedResult[0]) {
+      // Auto-restore the deleted contact to preserve chat history
+      const contact_id = deletedResult[0].contact_id;
+
+      // Restore contact
+      await db.sequelize.query(
+        `UPDATE ${tableNames.CONTACTS} SET is_deleted = false, deleted_at = NULL WHERE contact_id = ? AND tenant_id = ?`,
+        { replacements: [contact_id, tenant_id] }
+      );
+
+      // Restore related leads
+      await db.sequelize.query(
+        `UPDATE ${tableNames.LEADS} SET is_deleted = false, deleted_at = NULL WHERE contact_id = ? AND tenant_id = ?`,
+        { replacements: [contact_id, tenant_id] }
+      );
+
+      console.log(`[AUTO-RESTORE] Contact ${contact_id} auto-restored for tenant ${tenant_id}`);
+
+      // Return the restored contact
+      deletedResult[0].is_deleted = false;
+      deletedResult[0].deleted_at = null;
+      return deletedResult[0];
+    }
+
+    return null;
   } catch (err) {
     throw err;
   }
@@ -61,6 +93,8 @@ export const getContactByIdAndTenantIdService = async (id, tenant_id) => {
   }
 };
 
+
+
 export const getContactByContactIdAndTenantIdService = async (contact_id, tenant_id) => {
   try {
     const Values = [contact_id, tenant_id];
@@ -76,13 +110,22 @@ export const getContactByContactIdAndTenantIdService = async (contact_id, tenant
 };
 
 export const getAllContactsService = async (tenant_id) => {
-  try {
-    const Query = `SELECT * FROM ${tableNames?.CONTACTS} WHERE tenant_id IN (?) AND is_deleted = false ORDER BY id DESC`;
 
-    const [result] = await db.sequelize.query(Query, {
+  const dataQuery = `
+    SELECT *
+    FROM ${tableNames.CONTACTS}
+    WHERE tenant_id = ? AND is_deleted = false
+    ORDER BY id DESC
+  `;
+
+  try {
+    const [rows] = await db.sequelize.query(dataQuery, {
       replacements: [tenant_id],
     });
-    return result;
+
+    return {
+      contacts: rows,
+    };
   } catch (err) {
     throw err;
   }
@@ -114,17 +157,17 @@ export const updateContactService = async (
 export const deleteContactService = async (id, tenant_id) => {
   const transaction = await db.sequelize.transaction();
   try {
-    const Query1 = `UPDATE ${tableNames?.CONTACTS} SET is_deleted = true, deleted_at = NOW() WHERE id = ? AND tenant_id = ?`;
-    const Query2 = `UPDATE ${tableNames?.LEADS} SET is_deleted = true, deleted_at = NOW() WHERE contact_id = ? AND tenant_id = ?`;
+    // Soft delete contact
+    await db.sequelize.query(
+      `UPDATE ${tableNames.CONTACTS} SET is_deleted = true, deleted_at = NOW() WHERE contact_id = ? AND tenant_id = ?`,
+      { replacements: [id, tenant_id], transaction }
+    );
 
-    await db.sequelize.query(Query1, {
-      replacements: [id, tenant_id],
-      transaction,
-    });
-    await db.sequelize.query(Query2, {
-      replacements: [id, tenant_id],
-      transaction,
-    });
+    // Soft delete related leads
+    await db.sequelize.query(
+      `UPDATE ${tableNames.LEADS} SET is_deleted = true, deleted_at = NOW() WHERE contact_id = ? AND tenant_id = ?`,
+      { replacements: [id, tenant_id], transaction }
+    );
 
     await transaction.commit();
     return true;
@@ -156,7 +199,7 @@ export const permanentDeleteContactService = async (id, tenant_id) => {
     });
 
     // 4. Delete Contact
-    await db.sequelize.query(`DELETE FROM ${tableNames.CONTACTS} WHERE id = ? AND tenant_id = ?`, {
+    await db.sequelize.query(`DELETE FROM ${tableNames.CONTACTS} WHERE contact_id = ? AND tenant_id = ?`, {
       replacements: [id, tenant_id],
       transaction,
     });
@@ -172,50 +215,53 @@ export const permanentDeleteContactService = async (id, tenant_id) => {
 /**
  * Retrieves a list of soft-deleted contacts for a tenant.
  */
-export const getDeletedContactListService = async (tenant_id, query) => {
-  const { search, page = 1, limit = 10 } = query;
-  const offset = (page - 1) * limit;
+export const getDeletedContactListService = async (tenant_id) => {
+  const where = { tenant_id, is_deleted: true };
 
-  let where = { tenant_id, is_deleted: true };
-  if (search) {
-    where[db.Sequelize.Op.or] = [
-      { name: { [db.Sequelize.Op.like]: `%${search}%` } },
-      { phone: { [db.Sequelize.Op.like]: `%${search}%` } },
-      { email: { [db.Sequelize.Op.like]: `%${search}%` } },
-    ];
-  }
-
-  const { count, rows } = await db.Contacts.findAndCountAll({
+  const rows = await db.Contacts.findAll({
     where,
     order: [["deleted_at", "DESC"]],
-    limit: parseInt(limit),
-    offset: parseInt(offset),
   });
 
   return {
-    totalItems: count,
     contacts: rows,
-    totalPages: Math.ceil(count / limit),
-    currentPage: parseInt(page),
   };
 };
 
 /**
- * Restore a soft-deleted contact
+ * Restore a soft-deleted contact and related leads
  */
-export const restoreContactService = async (id, tenant_id) => {
+export const restoreContactService = async (contact_id, tenant_id) => {
   const contact = await db.Contacts.findOne({
-    where: { id, tenant_id, is_deleted: true }
+    where: { contact_id, tenant_id, is_deleted: true }
   });
 
   if (!contact) {
     throw new Error("Contact not found or not deleted");
   }
 
-  await contact.update({
-    is_deleted: false,
-    deleted_at: null
-  });
+  const transaction = await db.sequelize.transaction();
+  try {
+    // Restore contact
+    await db.sequelize.query(
+      `UPDATE ${tableNames.CONTACTS} 
+       SET is_deleted = false, deleted_at = NULL 
+       WHERE contact_id = ? AND tenant_id = ?`,
+      { replacements: [contact_id, tenant_id], transaction, type: db.Sequelize.QueryTypes.UPDATE }
+    );
 
-  return { message: "Contact restored successfully" };
+    // Restore related leads
+    await db.sequelize.query(
+      `UPDATE ${tableNames.LEADS} 
+       SET is_deleted = false, deleted_at = NULL 
+       WHERE contact_id = ? AND tenant_id = ?`,
+      { replacements: [contact_id, tenant_id], transaction, type: db.Sequelize.QueryTypes.UPDATE }
+    );
+
+    await transaction.commit();
+    return { message: "Contact and leads restored successfully" };
+  } catch (err) {
+    await transaction.rollback();
+    throw err;
+  }
 };

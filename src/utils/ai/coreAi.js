@@ -8,7 +8,7 @@ export const AiService = async (system, propmt) => {
     const response = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [{ role: system, content: propmt }],
-      temperature: 0.05,
+      temperature: 0.01,
       max_tokens: 120,
     });
 

@@ -12,6 +12,7 @@ export const createTenantService = async (
   subscription_start_date,
   subscription_end_date,
   profile,
+  verify_token = null,
 ) => {
   const Query = `INSERT INTO ${tableNames?.TENANTS} (
       tenant_id,
@@ -23,8 +24,9 @@ export const createTenantService = async (
       type,
       subscription_start_date,
       subscription_end_date,
-      profile
-  ) VALUES (?,?,?,?,?,?,?,?,?,?)`;
+      profile,
+      verify_token
+  ) VALUES (?,?,?,?,?,?,?,?,?,?,?)`;
 
   try {
     const values = [
@@ -38,6 +40,7 @@ export const createTenantService = async (
       subscription_start_date,
       subscription_end_date,
       profile,
+      verify_token,
     ];
     console.log("values", values);
 
@@ -52,10 +55,10 @@ export const createTenantService = async (
 };
 
 export const getAllTenantService = async () => {
-  const Query = `
+  const dataQuery = `
   SELECT 
     t.*,
-    COALESCE(ti.status, t.status) as status
+    ti.status as invite_status
   FROM ${tableNames?.TENANTS} t
   LEFT JOIN (
     SELECT email, status, tenant_id
@@ -66,12 +69,15 @@ export const getAllTenantService = async () => {
       GROUP BY tenant_id, email
     )
   ) ti ON t.tenant_id = ti.tenant_id AND t.owner_email = ti.email
-  WHERE t.is_deleted IN(?)
-  ORDER BY t.tenant_id DESC  `;
+  WHERE t.is_deleted = ?
+  ORDER BY t.created_at DESC`;
 
   try {
-    const [result] = await db.sequelize.query(Query, { replacements: [0] });
-    return result;
+    const [rows] = await db.sequelize.query(dataQuery, {
+      replacements: [0],
+    });
+
+    return rows;
   } catch (err) {
     throw err;
   }
@@ -167,7 +173,7 @@ export const updateTenantStatusService = async (status, tenant_id) => {
   }
 };
 
-export const deleteTenantStatusService = async (tenant_id) => {
+export const softDeleteTenantService = async (tenant_id) => {
   const Query = `UPDATE ${tableNames?.TENANTS} SET is_deleted = ? , deleted_at = NOW() WHERE tenant_id = ? AND is_deleted = false`;
 
   const Query2 = `UPDATE ${tableNames?.TENANT_USERS} SET is_deleted = ? , deleted_at = NOW() WHERE tenant_id IN(?) AND is_deleted = false`;
@@ -181,7 +187,7 @@ export const deleteTenantStatusService = async (tenant_id) => {
       replacements: [true, tenant_id],
     });
 
-    return (result, result2);
+    return [result, result2];
   } catch (err) {
     throw err;
   }
@@ -200,7 +206,54 @@ export const deleteTenantService = async (tenant_id) => {
       replacements: [tenant_id],
     });
 
-    return (result, result2);
+    return [result, result2];
+  } catch (err) {
+    throw err;
+  }
+};
+
+export const getDeletedTenantListService = async () => {
+  const Query = `
+    SELECT * FROM ${tableNames.TENANTS}
+    WHERE is_deleted = ?
+    ORDER BY deleted_at DESC
+  `;
+
+  try {
+    const result = await db.sequelize.query(Query, {
+      replacements: [1],
+      type: db.Sequelize.QueryTypes.SELECT,
+    });
+
+    return result;
+  } catch (err) {
+    throw err;
+  }
+};
+
+export const restoreTenantService = async (tenant_id) => {
+  const Query = `
+    UPDATE ${tableNames.TENANTS}
+    SET is_deleted = ?, deleted_at = NULL
+    WHERE tenant_id = ?
+  `;
+
+  const Query2 = `
+    UPDATE ${tableNames.TENANT_USERS}
+    SET is_deleted = ?, deleted_at = NULL
+    WHERE tenant_id = ?
+  `;
+
+  try {
+    const [result] = await db.sequelize.query(Query, {
+      replacements: [0, tenant_id],
+    });
+
+    const [result2] = await db.sequelize.query(Query2, {
+      replacements: [0, tenant_id],
+    });
+
+    return [result, result2];
   } catch (err) {
     throw err;
   }
@@ -213,6 +266,32 @@ export const activateTenantService = async (tenant_id) => {
     const values = ["active", tenant_id, 0];
 
     const [result] = await db.sequelize.query(Query, { replacements: values });
+    return result;
+  } catch (err) {
+    throw err;
+  }
+};
+
+export const updateTenantVerifyTokenService = async (tenant_id, verify_token) => {
+  const Query = `UPDATE ${tableNames?.TENANTS} SET verify_token = ? WHERE tenant_id = ? AND is_deleted = ?`;
+
+  try {
+    const [result] = await db.sequelize.query(Query, {
+      replacements: [verify_token, tenant_id, 0],
+    });
+    return result;
+  } catch (err) {
+    throw err;
+  }
+};
+
+export const updateTenantWebhookStatusService = async (tenant_id, verified) => {
+  const Query = `UPDATE ${tableNames?.TENANTS} SET webhook_verified = ? WHERE tenant_id = ? AND is_deleted = ?`;
+
+  try {
+    const [result] = await db.sequelize.query(Query, {
+      replacements: [verified, tenant_id, 0],
+    });
     return result;
   } catch (err) {
     throw err;

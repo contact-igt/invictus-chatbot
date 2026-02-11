@@ -8,17 +8,17 @@ import {
     getDeletedCampaignListService,
     restoreCampaignService,
 } from "./whatsappcampaign.service.js";
-import { missingFieldsChecker } from "../../utils/missingFields.js";
+import { missingFieldsChecker } from "../../utils/helpers/missingFields.js";
 
 // ... existing code ...
 
 export const getDeletedCampaignListController = async (req, res) => {
     const tenant_id = req.user.tenant_id;
     try {
-        const data = await getDeletedCampaignListService(tenant_id, req.query);
+        const result = await getDeletedCampaignListService(tenant_id);
         return res.status(200).send({
-            message: "Success",
-            data,
+            message: "success",
+            data: result,
         });
     } catch (err) {
         return res.status(500).send({ message: err.message });
@@ -81,7 +81,7 @@ export const createCampaignController = async (req, res) => {
 export const getCampaignListController = async (req, res) => {
     const tenant_id = req.user.tenant_id;
     try {
-        const data = await getCampaignListService(tenant_id, req.query);
+        const data = await getCampaignListService(tenant_id);
         return res.status(200).send({
             message: "Success",
             data,

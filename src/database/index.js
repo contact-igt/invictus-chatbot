@@ -24,7 +24,8 @@ import { WhatsappCampaignRecipientTable } from "./tables/WhatsappCampaignRecipie
 import { ContactGroupTable } from "./tables/ContactGroupTable/index.js";
 import { ContactGroupMemberTable } from "./tables/ContactGroupMemberTable/index.js";
 import { SequencesTable } from "./tables/SequencesTable/index.js";
-
+import { AiAnalysisLogTable } from "./tables/AiAnalysisLogTable/index.js";
+import { OtpVerificationTable } from "./tables/OtpVerificationTable/index.js";
 
 const dbconfig =
   ServerEnvironmentConfig?.server?.line === "production"
@@ -97,6 +98,8 @@ db.ChatLocks = ChatLocksTable(sequelize, Sequelize);
 db.Leads = LeadsTable(sequelize, Sequelize);
 db.LiveChat = LiveChatTable(sequelize, Sequelize);
 db.Sequences = SequencesTable(sequelize, Sequelize);
+db.AiAnalysisLog = AiAnalysisLogTable(sequelize, Sequelize);
+db.OtpVerification = OtpVerificationTable(sequelize, Sequelize);
 
 // ========================================
 // ASSOCIATIONS
@@ -417,6 +420,20 @@ db.ContactGroupMembers.belongsTo(db.Contacts, {
   foreignKey: "contact_id",
   targetKey: "contact_id",
   as: "contact",
+  constraints: false
+});
+
+// Tenant -> AiAnalysisLogs (One-to-Many)
+db.Tenants.hasMany(db.AiAnalysisLog, {
+  foreignKey: "tenant_id",
+  sourceKey: "tenant_id",
+  as: "aiAnalysisLogs",
+  constraints: false
+});
+db.AiAnalysisLog.belongsTo(db.Tenants, {
+  foreignKey: "tenant_id",
+  targetKey: "tenant_id",
+  as: "tenant",
   constraints: false
 });
 

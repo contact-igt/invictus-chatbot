@@ -1,11 +1,11 @@
 import db from "../../database/index.js";
 import { tableNames } from "../../database/tableName.js";
-import { generateReadableIdFromLast } from "../../utils/generateReadableIdFromLast.js";
+import { generateReadableIdFromLast } from "../../utils/helpers/generateReadableIdFromLast.js";
 import { sendWhatsAppTemplate } from "../AuthWhatsapp/AuthWhatsapp.service.js";
 import { createContactService, getContactByPhoneAndTenantIdService } from "../ContactsModel/contacts.service.js";
 import { createUserMessageService } from "../Messages/messages.service.js";
 import { createLeadService, getLeadByContactIdService } from "../LeadsModel/leads.service.js";
-import { formatPhoneNumber } from "../../utils/formatPhoneNumber.js";
+import { formatPhoneNumber } from "../../utils/helpers/formatPhoneNumber.js";
 import {
     createLiveChatService,
     getLivechatByIdService,
@@ -132,22 +132,12 @@ export const createCampaignService = async (tenant_id, data, created_by) => {
 /**
  * Retrieves a list of campaigns for a tenant with filtering.
  */
-export const getCampaignListService = async (tenant_id, query) => {
-    const { status, type, search, page = 1, limit = 10 } = query;
-    const offset = (page - 1) * limit;
+export const getCampaignListService = async (tenant_id) => {
+    const where = { tenant_id, is_deleted: false };
 
-    let where = { tenant_id, is_deleted: false };
-    if (status) where.status = status;
-    if (type) where.campaign_type = type;
-    if (search) {
-        where.campaign_name = { [db.Sequelize.Op.like]: `%${search}%` };
-    }
-
-    const { count, rows } = await db.WhatsappCampaigns.findAndCountAll({
+    const rows = await db.WhatsappCampaigns.findAll({
         where,
         order: [["created_at", "DESC"]],
-        limit: parseInt(limit),
-        offset: parseInt(offset),
         include: [
             {
                 model: db.WhatsappTemplates,
@@ -158,10 +148,7 @@ export const getCampaignListService = async (tenant_id, query) => {
     });
 
     return {
-        totalItems: count,
         campaigns: rows,
-        totalPages: Math.ceil(count / limit),
-        currentPage: parseInt(page),
     };
 };
 
@@ -439,22 +426,12 @@ export const startCampaignSchedulerService = () => {
 /**
  * Retrieves a list of deleted campaigns for a tenant with filtering.
  */
-export const getDeletedCampaignListService = async (tenant_id, query) => {
-    const { status, type, search, page = 1, limit = 10 } = query;
-    const offset = (page - 1) * limit;
+export const getDeletedCampaignListService = async (tenant_id) => {
+    const where = { tenant_id, is_deleted: true };
 
-    let where = { tenant_id, is_deleted: true };
-    if (status) where.status = status;
-    if (type) where.campaign_type = type;
-    if (search) {
-        where.campaign_name = { [db.Sequelize.Op.like]: `%${search}%` };
-    }
-
-    const { count, rows } = await db.WhatsappCampaigns.findAndCountAll({
+    const rows = await db.WhatsappCampaigns.findAll({
         where,
         order: [["deleted_at", "DESC"]],
-        limit: parseInt(limit),
-        offset: parseInt(offset),
         include: [
             {
                 model: db.WhatsappTemplates,
@@ -465,10 +442,7 @@ export const getDeletedCampaignListService = async (tenant_id, query) => {
     });
 
     return {
-        totalItems: count,
         campaigns: rows,
-        totalPages: Math.ceil(count / limit),
-        currentPage: parseInt(page),
     };
 };
 

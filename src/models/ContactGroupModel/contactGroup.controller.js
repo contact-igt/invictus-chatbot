@@ -15,10 +15,10 @@ import {
 export const getDeletedContactGroupListController = async (req, res) => {
     const tenant_id = req.user.tenant_id;
     try {
-        const data = await getDeletedContactGroupListService(tenant_id, req.query);
+        const result = await getDeletedContactGroupListService(tenant_id);
         return res.status(200).send({
-            message: "Success",
-            data,
+            message: "success",
+            data: result,
         });
     } catch (err) {
         return res.status(500).send({ message: err.message });
@@ -56,7 +56,7 @@ export const createContactGroupController = async (req, res) => {
 export const getContactGroupListController = async (req, res) => {
     const tenant_id = req.user.tenant_id;
     try {
-        const data = await getContactGroupListService(tenant_id, req.query);
+        const data = await getContactGroupListService(tenant_id);
         return res.status(200).send({
             message: "Success",
             data,

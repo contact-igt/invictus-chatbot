@@ -6,7 +6,7 @@ import {
   softDeleteWhatsappAccountService,
   permanentDeleteWhatsappAccountService,
 } from "./whatsappAccount.service.js";
-import { missingFieldsChecker } from "../../utils/missingFields.js";
+import { missingFieldsChecker } from "../../utils/helpers/missingFields.js";
 
 export const whatsappOAuthCallbackController = async (req, res) => {
   try {

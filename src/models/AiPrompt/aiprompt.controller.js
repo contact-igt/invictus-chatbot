@@ -1,4 +1,4 @@
-import { cleanText } from "../../utils/cleanText.js";
+import { cleanText } from "../../utils/text/cleanText.js";
 import {
   deleteAiPromptService,
   getActivePromptService,
@@ -15,10 +15,10 @@ import {
 export const getDeletedAiPromptListController = async (req, res) => {
   const tenant_id = req.user.tenant_id;
   try {
-    const data = await getDeletedAiPromptListService(tenant_id, req.query);
+    const result = await getDeletedAiPromptListService(tenant_id);
     return res.status(200).send({
-      message: "Success",
-      data,
+      message: "success",
+      data: result,
     });
   } catch (err) {
     return res.status(500).send({ message: err.message });

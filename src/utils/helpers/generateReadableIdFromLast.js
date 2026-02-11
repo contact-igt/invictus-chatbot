@@ -1,5 +1,5 @@
-import db from "../database/index.js";
-import { tableNames } from "../database/tableName.js";
+import db from "../../database/index.js";
+import { tableNames } from "../../database/tableName.js";
 
 export const generateReadableIdFromLast = async (
   tableName,
@@ -27,9 +27,12 @@ export const generateReadableIdFromLast = async (
       await sequence.update({ value: nextNumber }, { transaction });
     } else {
       // 3. If sequence doesn't exist, initialize it from existing table data (Migration path)
-      const [rows] = await db.sequelize.query(
+      const rows = await db.sequelize.query(
         `SELECT ${field} FROM ${tableName} ORDER BY id DESC LIMIT 1`,
-        { transaction },
+        {
+          transaction,
+          type: db.Sequelize.QueryTypes.SELECT
+        },
       );
 
       if (rows.length > 0 && rows[0][field]) {

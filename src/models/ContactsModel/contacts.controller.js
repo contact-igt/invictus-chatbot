@@ -1,5 +1,5 @@
-import { missingFieldsChecker } from "../../utils/missingFields.js";
-import { formatPhoneNumber } from "../../utils/formatPhoneNumber.js";
+import { missingFieldsChecker } from "../../utils/helpers/missingFields.js";
+import { formatPhoneNumber } from "../../utils/helpers/formatPhoneNumber.js";
 import {
   createContactService,
   deleteContactService,
@@ -15,10 +15,10 @@ import {
 export const getDeletedContactListController = async (req, res) => {
   const tenant_id = req.user.tenant_id;
   try {
-    const data = await getDeletedContactListService(tenant_id, req.query);
+    const result = await getDeletedContactListService(tenant_id);
     return res.status(200).send({
-      message: "Success",
-      data,
+      message: "success",
+      data: result,
     });
   } catch (err) {
     return res.status(500).send({ message: err.message });
