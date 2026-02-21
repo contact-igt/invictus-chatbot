@@ -5,6 +5,9 @@ import { processResponse } from "../../utils/ai/aiTagHandlers/index.js";
 import { searchKnowledgeChunks } from "../Knowledge/knowledge.search.js";
 import { classifyResponse } from "../../utils/ai/responseClassifier.js";
 import { handleClassification } from "../../utils/ai/classificationHandler.js";
+import { getContactByPhoneAndTenantIdService } from "../ContactsModel/contacts.service.js";
+import { getLeadByContactIdService } from "../LeadsModel/leads.service.js";
+import { getLastAppointmentService } from "../AppointmentModel/appointment.service.js";
 
 export const createUserMessageService = async (
   tenant_id,
@@ -132,7 +135,84 @@ export const markSeenMessageService = async (tenant_id, phone) => {
 };
 
 export const suggestReplyService = async (tenant_id, phone) => {
-  const ADMIN_SYSTEM_PROMPT = `
+  try {
+    let leadSourcePrompt = "";
+    let appointmentHistoryPrompt = "";
+    let contact_id = null;
+
+    try {
+      const contact = await getContactByPhoneAndTenantIdService(tenant_id, phone);
+      if (contact) {
+        contact_id = contact.contact_id;
+
+        // 1. Lead Source Detection
+        const lead = await getLeadByContactIdService(tenant_id, contact_id);
+        if (lead && lead.source === "none") {
+          leadSourcePrompt = `
+────────────────────────────────
+LEAD SOURCE DETECTION (INTERNAL)
+────────────────────────────────
+The source of this lead is currently UNKNOWN.
+
+During the FIRST conversation, after greeting the user, naturally and politely ask:
+"How did you hear about us?" or "Where did you find us?"
+
+When the user responds, identify the source and add ONE of these tags at the END of your reply:
+- [LEAD_SOURCE: meta] — if they mention Meta, Facebook ads
+- [LEAD_SOURCE: google] — if they mention Google, Google ads, search
+- [LEAD_SOURCE: website] — if they mention website, online
+- [LEAD_SOURCE: instagram] — if they mention Instagram
+- [LEAD_SOURCE: facebook] — if they mention Facebook page/post (not ads)
+- [LEAD_SOURCE: twitter] — if they mention Twitter, X
+- [LEAD_SOURCE: referral] — if they mention friend, family, someone told them
+- [LEAD_SOURCE: other] — if the source doesn't match any above
+
+Rules:
+- Ask about the source ONLY ONCE. If already asked in previous messages, do NOT ask again.
+- The tag is INTERNAL. The user must NEVER see it.
+- Add the tag ONLY when the user gives a clear answer about their source.
+- Do NOT guess. If the user's answer is unclear, do NOT add the tag.
+`;
+        }
+
+        // 2. Appointment History Detection
+        const lastAppointment = await getLastAppointmentService(tenant_id, contact_id);
+        if (lastAppointment) {
+          const status = lastAppointment.status;
+          const date = lastAppointment.appointment_date;
+          const time = lastAppointment.appointment_time;
+
+          appointmentHistoryPrompt = `
+────────────────────────────────
+APPOINTMENT HISTORY (INTERNAL)
+────────────────────────────────
+This person HAS booked with us before.
+Latest Appointment Info:
+- Status: ${status}
+- Date: ${date}
+- Time: ${time}
+
+Guidelines for your response:
+${status === "Completed" ? '- They had a good experience last time. Acknowledge their return and ask if they need a new booking.' : ""}
+${status === "Noshow" ? '- They missed their last appointment. Be polite but note that they missed it if they try to book again.' : ""}
+${status === "Confirmed" ? `- They already have an upcoming appointment on ${date} at ${time}. If they try to book again, remind them of this existing one.` : ""}
+${status === "Cancelled" ? '- They cancelled their previous booking. Ask if they want to reschedule now.' : ""}
+`;
+        } else {
+          appointmentHistoryPrompt = `
+────────────────────────────────
+NEW VISITOR (INTERNAL)
+────────────────────────────────
+This person has NO previous appointment history.
+Naturally guide them towards booking if they show interest.
+`;
+        }
+      }
+    } catch (err) {
+      console.error("[APPOINTMENT-HISTORY] Error in suggestReply initial lookup:", err.message);
+    }
+
+    const ADMIN_SYSTEM_PROMPT = `
 You are a professional customer support executive.
 
 Rules:
@@ -143,27 +223,36 @@ Rules:
    - If the information is NOT found or NOT relevant:
    - You MUST end your response with: [MISSING_KNOWLEDGE: brief reason]
    - Example: I'm sorry, I don't have information about the pricing at the moment. [MISSING_KNOWLEDGE: pricing not found]
-3. Professional English only.
-4. No emojis or symbols.
-5. Be clear and helpful.
+
+3. Appointment Booking:
+   - If the user wants to book, collect: Name, Date (YYYY-MM-DD), Time (HH:mm), and Doctor (optional).
+   - Once confirmed, output: [BOOK_APPOINTMENT: {"date": "YYYY-MM-DD", "time": "HH:mm", "patient_name": "...", "doctor_id": "..."}]
+   - ONLY output the tag when the user has explicitly agreed to the final details.
+
+4. Professional English only.
+5. No emojis or symbols.
+6. Be clear and helpful.
+
+${leadSourcePrompt}
+${appointmentHistoryPrompt}
 `;
 
-  const [messages] = await db.sequelize.query(
-    `
+    const [messages] = await db.sequelize.query(
+      `
     SELECT sender, message
     FROM ${tableNames.MESSAGES}
     WHERE phone = ? AND tenant_id = ?
   ORDER BY created_at ASC
     `,
-    { replacements: [phone, tenant_id] },
-  );
+      { replacements: [phone, tenant_id] },
+    );
 
-  const chatHistory = messages
-    .map((m) => `${m.sender.toUpperCase()}: ${m.message} `)
-    .join("\n");
+    const chatHistory = messages
+      .map((m) => `${m.sender.toUpperCase()}: ${m.message} `)
+      .join("\n");
 
-  const [lastMsg] = await db.sequelize.query(
-    `
+    const [lastMsg] = await db.sequelize.query(
+      `
     SELECT message
     FROM ${tableNames.MESSAGES}
     WHERE phone = ?
@@ -171,25 +260,25 @@ Rules:
     ORDER BY created_at DESC
     LIMIT 1
   `,
-    { replacements: [phone, tenant_id] },
-  );
+      { replacements: [phone, tenant_id] },
+    );
 
-  if (!lastMsg.length) {
-    return "No recent customer message found.";
-  }
+    if (!lastMsg.length) {
+      return "No recent customer message found.";
+    }
 
-  const lastUserMessage = lastMsg[0].message;
+    const lastUserMessage = lastMsg[0].message;
 
-  /* 3️⃣ Knowledge base search (Uses Smart AI Retrieval internally) */
-  const chunks = await searchKnowledgeChunks(tenant_id, lastUserMessage);
+    /* 3️⃣ Knowledge base search (Uses Smart AI Retrieval internally) */
+    const chunks = await searchKnowledgeChunks(tenant_id, lastUserMessage);
 
-  const knowledgeText =
-    chunks && chunks.length > 0
-      ? chunks.join("\n\n")
-      : "No relevant knowledge found.";
+    const knowledgeText =
+      chunks && chunks.length > 0
+        ? chunks.join("\n\n")
+        : "No relevant knowledge found.";
 
-  /* 4️⃣ AI prompt */
-  const prompt = `
+    /* 4️⃣ AI prompt */
+    const prompt = `
 ${ADMIN_SYSTEM_PROMPT}
 
 Conversation history:
@@ -207,41 +296,47 @@ Write a professional reply to the last customer message.
   Reply:
 `;
 
-  const rawReply = await AiService("system", prompt);
+    const rawReply = await AiService("system", prompt);
 
-  console.log("[AI-RAW-RESPONSE]", rawReply);
+    console.log("[AI-RAW-RESPONSE]", rawReply);
 
-  // Step 1: Process tags (Self-Tagging) and extract metadata
-  const processed = await processResponse(rawReply, {
-    tenant_id,
-    userMessage: lastUserMessage,
-  });
-
-  const cleanReply = processed.message;
-
-  // Step 2: Dual-AI Classification (Standardized single logging)
-  try {
-    const classification = await classifyResponse(lastUserMessage, cleanReply);
-
-    // If the primary AI explicitly tagged missing knowledge or out of scope, use that as a "hint"
-    if (processed.tagDetected === "MISSING_KNOWLEDGE" && classification.category !== "MISSING_KNOWLEDGE") {
-      classification.category = "MISSING_KNOWLEDGE";
-      classification.reason = processed.tagPayload || classification.reason;
-    } else if (processed.tagDetected === "OUT_OF_SCOPE" && classification.category !== "OUT_OF_SCOPE") {
-      classification.category = "OUT_OF_SCOPE";
-      classification.reason = processed.tagPayload || classification.reason;
-    }
-
-    await handleClassification(classification, {
+    // Step 1: Process tags (Self-Tagging) and extract metadata
+    const processed = await processResponse(rawReply, {
       tenant_id,
       userMessage: lastUserMessage,
-      aiResponse: cleanReply,
+      contact_id,
+      phone,
+      name: contact?.name
     });
-  } catch (classifierError) {
-    console.error("[CLASSIFIER-ADMIN] Error:", classifierError.message);
+
+    const cleanReply = processed.message;
+
+    // Step 2: Dual-AI Classification (Standardized single logging)
+    try {
+      const classification = await classifyResponse(lastUserMessage, cleanReply);
+
+      // If the primary AI explicitly tagged missing knowledge or out of scope, use that as a "hint"
+      if (processed.tagDetected === "MISSING_KNOWLEDGE" && classification.category !== "MISSING_KNOWLEDGE") {
+        classification.category = "MISSING_KNOWLEDGE";
+        classification.reason = processed.tagPayload || classification.reason;
+      } else if (processed.tagDetected === "OUT_OF_SCOPE" && classification.category !== "OUT_OF_SCOPE") {
+        classification.category = "OUT_OF_SCOPE";
+        classification.reason = processed.tagPayload || classification.reason;
+      }
+
+      await handleClassification(classification, {
+        tenant_id,
+        userMessage: lastUserMessage,
+        aiResponse: cleanReply,
+      });
+    } catch (classifierError) {
+      console.error("[CLASSIFIER-ADMIN] Error:", classifierError.message);
+    }
+
+    console.log("[AI-CLEAN-RESPONSE]", cleanReply);
+
+    return cleanReply;
+  } catch (err) {
+    throw err;
   }
-
-  console.log("[AI-CLEAN-RESPONSE]", cleanReply);
-
-  return cleanReply;
 };

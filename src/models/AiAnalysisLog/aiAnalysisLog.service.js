@@ -87,7 +87,7 @@ export const updateAiLogStatusService = async (
 
         if (status) {
             const validStatuses = ["pending", "act_on", "resolved", "ignored"];
-            const lowerStatus = status.toLowerCase();
+            const lowerStatus = (typeof status === 'string' ? status.toLowerCase() : status);
             if (!validStatuses.includes(lowerStatus)) {
                 throw new Error(`Invalid status. Allowed: ${validStatuses.join(", ")}`);
             }
@@ -96,7 +96,7 @@ export const updateAiLogStatusService = async (
 
         if (type) {
             const validTypes = ["missing_knowledge", "out_of_scope", "urgent", "sentiment"];
-            const lowerType = type.toLowerCase();
+            const lowerType = (typeof type === 'string' ? type.toLowerCase() : type);
             if (!validTypes.includes(lowerType)) {
                 throw new Error(`Invalid type. Allowed: ${validTypes.join(", ")}`);
             }
@@ -169,5 +169,25 @@ export const permanentDeleteAiAnalysisLogService = async (id, tenant_id) => {
         return result;
     } catch (error) {
         throw new Error(`Error permanently deleting AI log: ${error.message}`);
+    }
+};
+
+export const searchResolvedLogsService = async (tenant_id, limit = 10) => {
+    try {
+        const logs = await db.AiAnalysisLog.findAll({
+            where: {
+                tenant_id,
+                status: "resolved",
+                resolution: { [Op.ne]: null },
+                is_deleted: false
+            },
+            order: [["updated_at", "DESC"]],
+            limit: parseInt(limit),
+            attributes: ["user_message", "resolution", "ai_response"] // minimal fields
+        });
+        return logs;
+    } catch (error) {
+        console.error("Error fetching resolved logs:", error.message);
+        return [];
     }
 };

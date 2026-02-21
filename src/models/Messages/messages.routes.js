@@ -5,6 +5,7 @@ import {
   markSeenMessage,
   sendAdminMessage,
   sendTemplateMessageController,
+  sendTestMessageController,
   suggestReplyController,
 } from "./messages.controller.js";
 import {
@@ -51,6 +52,13 @@ Router.post(
   authenticate,
   authorize({ user_type: "tenant", roles: tenantRoles }),
   suggestReplyController,
+);
+
+Router.post(
+  "/chats/send-test",
+  authenticate,
+  authorize({ user_type: "tenant", roles: tenantRoles }),
+  sendTestMessageController,
 );
 
 export default Router;

@@ -64,7 +64,7 @@ Router.delete(
 Router.post(
   "/contact/:id/restore",
   authenticate,
-  authorize({ user_type: "tenant", roles: ["tenant_admin"] }),
+  authorize({ user_type: "tenant", roles: tenantRoles }),
   restoreContactController,
 );
 

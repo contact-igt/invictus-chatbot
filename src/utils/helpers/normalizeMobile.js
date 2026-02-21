@@ -21,3 +21,14 @@ export const normalizeMobile = (countryCode, rawMobile) => {
     // Otherwise return cleaned mobile
     return cleanedMobile;
 };
+
+/**
+ * Cleans a country code by removing non-digits (e.g., "+91" -> "91")
+ * 
+ * @param {string} countryCode
+ * @returns {string}
+ */
+export const cleanCountryCode = (countryCode) => {
+    if (!countryCode) return "";
+    return countryCode.toString().replace(/\D/g, "");
+};

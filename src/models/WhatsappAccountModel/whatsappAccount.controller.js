@@ -165,18 +165,20 @@ export const testWhatsappAccountController = async (req, res) => {
   } catch (err) {
     const isNetworkError = err.code === "ENOTFOUND";
 
+    const metaError = err.response?.data?.error?.message || err.response?.data || err.message;
+
     await updateWhatsappAccountStatusService(
       account.id,
       "failed",
       isNetworkError
         ? "Server cannot reach Meta (DNS/network issue)"
-        : err.response?.data || err.message,
+        : metaError,
     );
 
     return res.status(500).send({
       message: isNetworkError
         ? "Server network issue. Please contact support."
-        : "WhatsApp verification failed",
+        : `WhatsApp verification failed: ${metaError}`,
     });
   }
 };

@@ -7,7 +7,7 @@ import { getConversationMemory } from "../Messages/messages.memory.js";
 import { AiService } from "../../utils/ai/coreAi.js";
 import { generateReadableIdFromLast } from "../../utils/helpers/generateReadableIdFromLast.js";
 
-export const createLeadService = async (tenant_id, contact_id, source = null) => {
+export const createLeadService = async (tenant_id, contact_id, source = "none") => {
   try {
     const lead_id = await generateReadableIdFromLast(
       tableNames.LEADS,
@@ -33,19 +33,75 @@ export const createLeadService = async (tenant_id, contact_id, source = null) =>
   }
 };
 
+
 export const getLeadByLeadIdService = async (tenant_id, lead_id) => {
-  const Query = `
-  SELECT * FROM ${tableNames?.LEADS} WHERE tenant_id = ? AND lead_id = ? AND is_deleted = false LIMIT 1`;
+  const dataQuery = `
+    SELECT 
+      led.lead_id,
+      led.contact_id,
+      led.tenant_id,
+      led.status,
+      led.heat_state,
+      led.score,
+      led.ai_summary,
+      led.summary_status,
+      led.last_user_message_at,
+      led.last_admin_reply_at,
+      led.ai_summary_created_at,
+      led.created_at as lead_created_at,
+      cta.name,
+      cta.phone,
+      cta.email,
+      cta.profile_pic,
+      led.lead_stage,
+      led.assigned_to,
+      led.source,
+      led.priority,
+      led.internal_notes
+    FROM ${tableNames?.LEADS} as led
+    LEFT JOIN ${tableNames?.CONTACTS} as cta on (cta.contact_id = led.contact_id)
+    WHERE led.tenant_id = ? AND led.lead_id = ? AND led.is_deleted = false
+    LIMIT 1`;
 
   try {
-    const [result] = await db.sequelize.query(Query, {
+    const [leads] = await db.sequelize.query(dataQuery, {
       replacements: [tenant_id, lead_id],
     });
-    return result[0];
+
+    if (!leads.length) {
+      return null;
+    }
+
+    const lead = leads[0];
+
+    // Fetch last 4 messages for this lead
+    const messagesQuery = `
+      SELECT contact_id, sender, message, created_at
+      FROM (
+        SELECT 
+          contact_id, sender, message, created_at,
+          ROW_NUMBER() OVER(PARTITION BY contact_id ORDER BY created_at DESC) as rn
+        FROM ${tableNames.MESSAGES}
+        WHERE tenant_id = ? AND contact_id = ?
+      ) as ranked
+      WHERE rn <= 4
+      ORDER BY created_at ASC
+    `;
+
+    const [messages] = await db.sequelize.query(messagesQuery, {
+      replacements: [tenant_id, lead.contact_id],
+    });
+
+    return {
+      ...lead,
+      last_messages: messages || []
+    };
+
   } catch (err) {
     throw err;
   }
 };
+
 
 export const getLeadByContactIdService = async (tenant_id, contact_id) => {
   const Query = `
@@ -61,6 +117,7 @@ export const getLeadByContactIdService = async (tenant_id, contact_id) => {
   }
 };
 
+
 export const getLeadListService = async (tenant_id) => {
   const dataQuery = `
   SELECT 
@@ -74,6 +131,7 @@ export const getLeadListService = async (tenant_id) => {
     led.summary_status,
     led.last_user_message_at,
     led.last_admin_reply_at,
+    led.ai_summary_created_at,
     led.created_at as lead_created_at,
     cta.name,
     cta.phone,
@@ -90,17 +148,54 @@ export const getLeadListService = async (tenant_id) => {
   ORDER BY led.last_user_message_at DESC`;
 
   try {
-    const [rows] = await db.sequelize.query(dataQuery, {
+    const [leads] = await db.sequelize.query(dataQuery, {
       replacements: [tenant_id],
     });
 
+    if (!leads.length) {
+      return { leads: [] };
+    }
+
+    // 2. Fetch last 4 messages for these leads for preview
+    const contactIds = leads.map(l => l.contact_id);
+    const messagesQuery = `
+      SELECT contact_id, sender, message, created_at
+      FROM (
+        SELECT 
+          contact_id, sender, message, created_at,
+          ROW_NUMBER() OVER(PARTITION BY contact_id ORDER BY created_at DESC) as rn
+        FROM ${tableNames.MESSAGES}
+        WHERE tenant_id = ? AND contact_id IN (?)
+      ) as ranked
+      WHERE rn <= 4
+      ORDER BY contact_id, created_at ASC
+    `;
+
+    const [allMessages] = await db.sequelize.query(messagesQuery, {
+      replacements: [tenant_id, contactIds],
+    });
+
+    // 3. Group messages by contact_id and attach to leads
+    const messagesMap = allMessages.reduce((acc, msg) => {
+      if (!acc[msg.contact_id]) acc[msg.contact_id] = [];
+      acc[msg.contact_id].push(msg);
+      return acc;
+    }, {});
+
+    const leadsWithMessages = leads.map(lead => ({
+      ...lead,
+      last_messages: messagesMap[lead.contact_id] || []
+    }));
+
     return {
-      leads: rows,
+      leads: leadsWithMessages,
     };
   } catch (err) {
+    console.error("Error in getLeadListService:", err.message);
     throw err;
   }
 };
+
 
 export const updateLeadService = async (tenant_id, contact_id) => {
   const { heat_state, heat_score } = calculateHeatState(new Date());
@@ -108,15 +203,19 @@ export const updateLeadService = async (tenant_id, contact_id) => {
   const Query = `UPDATE ${tableNames?.LEADS} SET last_user_message_at = Now() , heat_state = ?, score = ? , summary_status = ?  WHERE tenant_id = ? AND contact_id = ? AND is_deleted = false`;
 
   try {
+    console.log("[DEBUG-HEAT] Updating specific lead:", { tenant_id, contact_id, heat_score });
     const [result] = await db.sequelize.query(Query, {
       replacements: [heat_state, heat_score, "new", tenant_id, contact_id],
     });
+    console.log("[DEBUG-HEAT] Key Update Result (info):", result);
 
     return result;
   } catch (err) {
+    console.error("[DEBUG-HEAT] Error updating lead:", err);
     throw err;
   }
 };
+
 
 export const updateAdminLeadService = async (tenant_id, contact_id) => {
   const { heat_state, heat_score } = calculateHeatState(new Date());
@@ -133,6 +232,7 @@ export const updateAdminLeadService = async (tenant_id, contact_id) => {
     throw err;
   }
 };
+
 
 export const startLeadHeatDecayCronService = () => {
   cron.schedule("*/30 * * * *", async () => {
@@ -165,16 +265,143 @@ export const startLeadHeatDecayCronService = () => {
   });
 };
 
-export const getLeadSummaryService = async (
+
+
+export const getBulkLeadSummaryService = async (
   tenant_id,
-  phone,
-  lead_id,
+  lead_ids,
   mode = null,
   targetDate = null,
   startDateParam = null,
   endDateParam = null
 ) => {
   try {
+    if (!lead_ids || !Array.isArray(lead_ids) || lead_ids.length === 0) {
+      throw new Error("Invalid lead_ids provided");
+    }
+    const Query = `
+      SELECT led.lead_id, led.contact_id, cta.phone 
+      FROM ${tableNames.LEADS} as led
+      LEFT JOIN ${tableNames.CONTACTS} as cta ON (cta.contact_id = led.contact_id)
+      WHERE led.tenant_id = ? AND led.lead_id IN (?) AND led.is_deleted = false
+    `;
+
+    const [leads] = await db.sequelize.query(Query, {
+      replacements: [tenant_id, lead_ids],
+    });
+
+    if (!leads.length) {
+      return [];
+    }
+
+    // 2. Process in parallel (Limit concurrency if needed, e.g. using p-limit or just Promise.all for small batches)
+    // Assuming reasonable batch size from frontend (e.g. 5-10)
+    const summaryPromises = leads.map(async (lead) => {
+      try {
+        if (!lead.phone) {
+          return {
+            lead_id: lead.lead_id,
+            error: "Phone number not found for this lead",
+          };
+        }
+
+        const result = await getLeadSummaryService(
+          tenant_id,
+          lead.phone,
+          lead.lead_id,
+          mode,
+          targetDate,
+          startDateParam,
+          endDateParam,
+          lead.contact_id
+        );
+
+        return {
+          lead_id: lead.lead_id,
+          ...result,
+        };
+      } catch (err) {
+        return {
+          lead_id: lead.lead_id,
+          error: err.message || "Failed to generate summary",
+        };
+      }
+    });
+
+    const results = await Promise.all(summaryPromises);
+    return results;
+
+  } catch (err) {
+    console.error("Error in getBulkLeadSummaryService:", err);
+    throw err;
+  }
+};
+
+
+export const getLeadSummaryService = async (
+  tenant_id,
+  phone,
+  lead_id = null,
+  mode = null,
+  targetDate = null,
+  startDateParam = null,
+  endDateParam = null,
+  contact_id = null
+) => {
+  try {
+
+    const sanitize = (val) => (val === "null" || val === "undefined" || !val) ? null : val;
+
+
+    const cleanMode = sanitize(mode);
+    const cleanTargetDate = sanitize(targetDate);
+    const cleanStartDate = sanitize(startDateParam);
+    const cleanEndDate = sanitize(endDateParam);
+
+
+    const hasDateFilter = !!(cleanTargetDate || cleanStartDate || cleanEndDate);
+    const resultingMode = (cleanMode === "detailed" || hasDateFilter) ? "filtered" : "overall";
+
+    let startDate = cleanStartDate;
+    let endDate = cleanEndDate;
+    if (cleanTargetDate === "today") {
+      const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+      startDate = endDate = today;
+    } else if (cleanTargetDate === "yesterday") {
+      const yesterday = new Date();
+      yesterday.setDate(yesterday.getDate() - 1);
+      startDate = endDate = yesterday.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+    } else if (cleanTargetDate && !cleanStartDate && !cleanEndDate) {
+      startDate = endDate = cleanTargetDate;
+    }
+
+    let activeLeadId = lead_id;
+    if (!activeLeadId && contact_id) {
+      const lead = await getLeadByContactIdService(tenant_id, contact_id);
+      activeLeadId = lead?.lead_id;
+    }
+
+    let currentLead = null;
+    if (activeLeadId) {
+      currentLead = await getLeadByLeadIdService(tenant_id, activeLeadId);
+    }
+
+    if (resultingMode === "overall" && currentLead?.summary_status === "old" && currentLead?.ai_summary) {
+      console.log(`[AI-SUMMARY] Cache Hit! Returning saved overall summary for lead: ${activeLeadId}`);
+      return {
+        summary: currentLead.ai_summary,
+        has_data: true,
+        mode: "overall",
+        date: null,
+        cached: true,
+        summary_created_at: currentLead.ai_summary_created_at
+      };
+    }
+
+    // Update lead_id to the resolved one for subsequent DB updates
+    lead_id = activeLeadId;
+
+    // 5. No cache? (Status is 'new' OR filters applied) -> Proceed with AI generation
     const memory = await getConversationMemory(tenant_id, phone);
 
     if (!memory || memory.length === 0) {
@@ -186,84 +413,58 @@ export const getLeadSummaryService = async (
 
     let filteredMemory = memory;
     let promptInstruction = "";
-
-    // 1. Calculate Local Dates for Asia/Kolkata (IST)
     const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
 
-    let startDate = startDateParam;
-    let endDate = endDateParam;
-
-    // 2. Resolve Presets in IST
-    if (targetDate === "today") {
-      startDate = endDate = todayStr;
-    } else if (targetDate === "yesterday") {
-      const yesterday = new Date();
-      yesterday.setDate(yesterday.getDate() - 1);
-      startDate = endDate = yesterday.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
-    } else if (targetDate === "last_week") {
+    // Re-apply date filters for memory slicing
+    if (cleanTargetDate === "last_week") {
       const lastWeek = new Date();
       lastWeek.setDate(lastWeek.getDate() - 7);
       startDate = lastWeek.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
       endDate = todayStr;
-    } else if (targetDate === "last_month") {
+    } else if (cleanTargetDate === "last_month") {
       const lastMonth = new Date();
       lastMonth.setDate(lastMonth.getDate() - 30);
       startDate = lastMonth.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
       endDate = todayStr;
-    } else if (targetDate === "last_year") {
+    } else if (cleanTargetDate === "last_year") {
       const lastYear = new Date();
       lastYear.setDate(lastYear.getDate() - 365);
       startDate = lastYear.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
       endDate = todayStr;
-    } else if (targetDate && !startDate && !endDate) {
-      // Single specific day filter
-      startDate = endDate = targetDate;
     }
 
-    // 3. APPLY STRICT FILTERING
     if (startDate && endDate) {
       console.log(`Summary Filtering (IST): [${startDate}] to [${endDate}]`);
       filteredMemory = memory.filter(m => {
-        // Fix: Use 'created_at' as returned by getConversationMemory, not 'timestamp'
         if (!m.created_at) return false;
-
         let msgDate = "";
         try {
-          // Robust Timezone Conversion
           const dateObj = new Date(m.created_at);
           msgDate = dateObj.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
-        } catch (e) {
-          console.error("Date parse error for:", m.created_at);
-          return false;
-        }
-
+        } catch (e) { return false; }
         return msgDate >= startDate && msgDate <= endDate;
       });
 
       if (filteredMemory.length === 0) {
         const rangeInfo = startDate === endDate ? `on ${startDate}` : `between ${startDate} and ${endDate}`;
-        return {
-          summary: `No interaction found ${rangeInfo}.`,
-          has_data: false
-        };
+        return { summary: `No interaction found ${rangeInfo}.`, has_data: false };
       }
 
       promptInstruction = startDate === endDate
         ? `Summarize what happened on ${startDate} in 3-4 simple sentences. Explain what the client wanted and the result. Max 5 lines.`
         : `Summarize interactions between ${startDate} and ${endDate} in 4-5 simple sentences. Explain the main topic and status. Max 5 lines.`;
 
-    } else if (mode === "detailed") {
-      // Timeline mode for the entire lead history
+    } else if (cleanMode === "detailed") {
       promptInstruction = `Provide a chronological daily log. For each date, give 1 simple sentence. 
       Format: **YYYY-MM-DD**: [1-sentence summary]`;
     } else {
-      // DEFAULT: Overall snapshot 
+      // Default / Overall mode prompt
       filteredMemory = memory.slice(-20);
       promptInstruction = `Provide a simple 4-5 line "Status Report."
       - Who is the client and why did they reach out?
       - What are the key details?
-      - What is the current status and next step?
-      Keep it simple and easy to read. Max 5 lines.`;
+      - What is the current status and next steps?
+      Keep it simple and easy to read. Max 3 lines.`;
     }
 
     const SUMMARIZE_PROMPT = `
@@ -273,7 +474,8 @@ export const getLeadSummaryService = async (
     Rules:
     - **Use simple, everyday English.**
     - **Avoid complex words or corporate jargon.**
-    - **Keep it short: Maximum 5 lines of text.**
+    - **Keep it short: Maximum 3 lines of text.**
+    - **DO NOT mention the date, day, or year (e.g., "On February 13..." or "Today...").**
     - Focus on THE MEANING.
     - DO NOT use labels like "User:", "Bot:", or "Admin:". 
     - No preamble. Start directly with the summary.
@@ -282,22 +484,45 @@ export const getLeadSummaryService = async (
     ${JSON.stringify(filteredMemory, null, 2)}
     `;
 
+    // 6. Generate Summary
     const aiSummary = await AiService("system", SUMMARIZE_PROMPT);
 
-    // Only save to DB if it's the overall status (no filters applied)
-    if (!startDate || mode === "overall") {
-      const Query = `UPDATE ${tableNames.LEADS} SET ai_summary = ? , summary_status = ?  WHERE tenant_id = ? AND lead_id = ? AND is_deleted = false `;
-      await db.sequelize.query(Query, {
-        replacements: [aiSummary, "old", tenant_id, lead_id],
-      });
+    // 7. DB UPDATE LOGIC (Strictly Lazy)
+    //    We ONLY update the DB if we are in 'overall' mode.
+    //    Date-filtered summaries are temporary/view-only and should NOT overwrite the main status.
+    let summaryCreatedAt = null;
+
+    const isTodayFilter = (startDate === todayStr && endDate === todayStr);
+
+    if (lead_id && (resultingMode === "overall" || (isTodayFilter && currentLead?.summary_status === "new"))) {
+      try {
+        // Update Summary + Set Status to 'old' + Set Timestamp
+        await db.sequelize.query(
+          `UPDATE ${tableNames.LEADS} 
+           SET ai_summary = ?, summary_status = 'old', ai_summary_created_at = NOW()
+           WHERE tenant_id = ? AND lead_id = ? AND is_deleted = false`,
+          {
+            replacements: [aiSummary, tenant_id, lead_id],
+            type: db.Sequelize.QueryTypes.UPDATE
+          }
+        );
+        summaryCreatedAt = new Date(); // Approximate timestamp for immediate return
+        console.log(`[AI-SUMMARY] Saved usage-based summary & marked as 'old' for lead: ${lead_id} (Mode: ${resultingMode})`);
+      } catch (saveErr) {
+        console.error("[AI-SUMMARY] Error saving summary:", saveErr.message);
+      }
+    } else {
+      console.log(`[AI-SUMMARY] generated (Mode: ${resultingMode}, Status: ${currentLead?.summary_status}) - NOT saving to DB to preserve overall status.`);
     }
 
     return {
       summary: aiSummary,
       has_data: true,
-      mode: mode || (startDate ? "period" : "overall"),
-      date: startDate === endDate ? startDate : null
+      mode: resultingMode,
+      date: startDate === endDate ? startDate : null,
+      summary_created_at: summaryCreatedAt || (currentLead?.ai_summary_created_at)
     };
+
   } catch (err) {
     console.error("Error in getLeadSummaryService:", err);
     throw err;
@@ -313,7 +538,8 @@ export const updateLeadStatusService = async (
   assigned_to = null,
   priority = null,
   source = null,
-  internal_notes = null
+  internal_notes = null,
+  summary_status = null
 ) => {
   const updates = [];
   const replacements = [];
@@ -325,6 +551,7 @@ export const updateLeadStatusService = async (
   if (priority) { updates.push("priority = ?"); replacements.push(priority); }
   if (source) { updates.push("source = ?"); replacements.push(source); }
   if (internal_notes !== null) { updates.push("internal_notes = ?"); replacements.push(internal_notes); }
+  if (summary_status) { updates.push("summary_status = ?"); replacements.push(summary_status); }
 
   if (updates.length === 0) return null;
 
@@ -341,6 +568,7 @@ export const updateLeadStatusService = async (
   }
 };
 
+
 export const deleteLeadService = async (tenant_id, lead_id) => {
   const Query = `UPDATE ${tableNames?.LEADS} SET is_deleted = true, deleted_at = NOW() WHERE tenant_id = ? AND lead_id = ? AND is_deleted = false`;
 
@@ -353,6 +581,7 @@ export const deleteLeadService = async (tenant_id, lead_id) => {
     throw err;
   }
 };
+
 
 export const permanentDeleteLeadService = async (tenant_id, lead_id) => {
   const Query = `DELETE FROM ${tableNames?.LEADS} WHERE tenant_id = ? AND lead_id = ?`;
@@ -367,32 +596,86 @@ export const permanentDeleteLeadService = async (tenant_id, lead_id) => {
   }
 };
 
-/**
- * Retrieves a list of soft-deleted leads for a tenant.
- */
+
 export const getDeletedLeadListService = async (tenant_id) => {
-  const where = { tenant_id, is_deleted: true };
+  const dataQuery = `
+  SELECT 
+    led.lead_id,
+    led.contact_id,
+    led.tenant_id,
+    led.status,
+    led.heat_state,
+    led.score,
+    led.ai_summary,
+    led.summary_status,
+    led.last_user_message_at,
+    led.last_admin_reply_at,
+    led.created_at as lead_created_at,
+    cta.name,
+    cta.phone,
+    cta.email,
+    cta.profile_pic,
+    led.lead_stage,
+    led.assigned_to,
+    led.source,
+    led.priority,
+    led.internal_notes,
+    led.deleted_at
+  FROM ${tableNames?.LEADS} as led
+  LEFT JOIN ${tableNames?.CONTACTS} as cta on (cta.contact_id = led.contact_id)
+  WHERE led.tenant_id = ? AND led.is_deleted = true
+  ORDER BY led.deleted_at DESC`;
 
-  const { count, rows } = await db.Leads.findAndCountAll({
-    where,
-    order: [["deleted_at", "DESC"]],
-    include: [
-      {
-        model: db.Contacts,
-        as: "contact",
-        attributes: ["name", "phone", "email"],
-      },
-    ],
-  });
+  try {
+    const [leads] = await db.sequelize.query(dataQuery, {
+      replacements: [tenant_id],
+    });
 
-  return {
-    leads: rows,
-  };
+    if (!leads.length) {
+      return { leads: [] };
+    }
+
+    // 2. Fetch last 4 messages for these leads for preview
+    const contactIds = leads.map(l => l.contact_id);
+    const messagesQuery = `
+      SELECT contact_id, sender, message, created_at
+      FROM (
+        SELECT 
+          contact_id, sender, message, created_at,
+          ROW_NUMBER() OVER(PARTITION BY contact_id ORDER BY created_at DESC) as rn
+        FROM ${tableNames.MESSAGES}
+        WHERE tenant_id = ? AND contact_id IN (?)
+      ) as ranked
+      WHERE rn <= 4
+      ORDER BY contact_id, created_at ASC
+    `;
+
+    const [allMessages] = await db.sequelize.query(messagesQuery, {
+      replacements: [tenant_id, contactIds],
+    });
+
+    // 3. Group messages by contact_id and attach to leads
+    const messagesMap = allMessages.reduce((acc, msg) => {
+      if (!acc[msg.contact_id]) acc[msg.contact_id] = [];
+      acc[msg.contact_id].push(msg);
+      return acc;
+    }, {});
+
+    const leadsWithMessages = leads.map(lead => ({
+      ...lead,
+      last_messages: messagesMap[lead.contact_id] || []
+    }));
+
+    return {
+      leads: leadsWithMessages,
+    };
+  } catch (err) {
+    console.error("Error in getDeletedLeadListService:", err.message);
+    throw err;
+  }
 };
 
-/**
- * Restore a soft-deleted lead
- */
+
 export const restoreLeadService = async (lead_id, tenant_id) => {
   const Query = `UPDATE ${tableNames?.LEADS} SET is_deleted = false, deleted_at = NULL WHERE tenant_id = ? AND lead_id = ? AND is_deleted = true`;
 

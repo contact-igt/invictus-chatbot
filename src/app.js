@@ -26,6 +26,10 @@ import { startCampaignSchedulerService } from "./models/WhatsappCampaignModel/wh
 import { startLeadHeatDecayCronService } from "./models/LeadsModel/leads.service.js";
 import { startLiveChatCleanupService } from "./models/LiveChatModel/livechat.service.js";
 import AiAnalysisLogRouter from "./models/AiAnalysisLog/aiAnalysisLog.routes.js";
+import DoctorRouter from "./models/DoctorModel/doctor.routes.js";
+import SpecializationRouter from "./models/SpecializationModel/specialization.routes.js";
+import AppointmentRouter from "./models/AppointmentModel/appointment.routes.js";
+import { startAppointmentSchedulerService } from "./models/AppointmentModel/appointment.service.js";
 
 dns.setDefaultResultOrder("ipv4first");
 
@@ -69,7 +73,10 @@ app.use(
   WhatsappTemplateRouter,
   WhatsappCampaignRouter,
   ContactGroupRouter,
-  AiAnalysisLogRouter
+  AiAnalysisLogRouter,
+  DoctorRouter,
+  SpecializationRouter,
+  AppointmentRouter
 );
 
 
@@ -84,6 +91,7 @@ console.log("DB connected");
 startLeadHeatDecayCronService();
 startLiveChatCleanupService();
 startCampaignSchedulerService();
+startAppointmentSchedulerService();
 
 const PORT = process.env.PORT || 8000;
 const server = http.createServer(app);

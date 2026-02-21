@@ -4,6 +4,7 @@ import { tableNames } from "../../database/tableName.js";
 export const createTenantUserService = async (
   tenant_user_id,
   tenant_id,
+  title,
   username,
   email,
   country_code,
@@ -12,12 +13,14 @@ export const createTenantUserService = async (
   role,
   password_hash,
   status = "inactive",
+  transaction = null
 ) => {
   const query = `
     INSERT INTO ${tableNames.TENANT_USERS}
     (
   tenant_user_id,
   tenant_id,
+  title,
   username,
   email,
   country_code,
@@ -26,12 +29,13 @@ export const createTenantUserService = async (
   role,
   password_hash,
   status  )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `;
 
   const values = [
     tenant_user_id,
     tenant_id,
+    title,
     username,
     email,
     country_code,
@@ -45,6 +49,7 @@ export const createTenantUserService = async (
   try {
     const [result] = await db.sequelize.query(query, {
       replacements: values,
+      transaction,
     });
 
     return result;
@@ -196,6 +201,7 @@ export const getAllTenantUsersService = async (tenant_id) => {
   const dataQuery = `
     SELECT 
       tu.tenant_user_id,
+      tu.title,
       tu.username,
       tu.email,
       tu.role,
@@ -260,8 +266,9 @@ export const updateTenantUserByIdService = async (tenant_user_id, data) => {
   }
 };
 
-export const softDeleteTenantUserService = async (tenant_user_id) => {
-  const query = `
+export const softDeleteTenantUserService = async (tenant_user_id, transaction = null) => {
+  try {
+    const query = `
     UPDATE ${tableNames.TENANT_USERS}
     SET is_deleted = true,
         deleted_at = NOW()
@@ -269,20 +276,29 @@ export const softDeleteTenantUserService = async (tenant_user_id) => {
       AND is_deleted = false
   `;
 
-  await db.sequelize.query(query, {
-    replacements: [tenant_user_id],
-  });
+    await db.sequelize.query(query, {
+      replacements: [tenant_user_id],
+      transaction,
+    });
+  } catch (err) {
+    throw err;
+  }
 };
 
-export const permanentDeleteTenantUserService = async (tenant_user_id) => {
-  const query = `
+export const permanentDeleteTenantUserService = async (tenant_user_id, transaction = null) => {
+  try {
+    const query = `
     DELETE FROM ${tableNames.TENANT_USERS}
     WHERE tenant_user_id = ?
   `;
 
-  await db.sequelize.query(query, {
-    replacements: [tenant_user_id],
-  });
+    await db.sequelize.query(query, {
+      replacements: [tenant_user_id],
+      transaction,
+    });
+  } catch (err) {
+    throw err;
+  }
 };
 
 export const getDeletedTenantUserListService = async (tenant_id) => {
@@ -303,7 +319,7 @@ export const getDeletedTenantUserListService = async (tenant_id) => {
   }
 };
 
-export const restoreTenantUserService = async (tenant_user_id) => {
+export const restoreTenantUserService = async (tenant_user_id, transaction = null) => {
   const query = `
     UPDATE ${tableNames.TENANT_USERS}
     SET is_deleted = false, deleted_at = NULL
@@ -313,6 +329,7 @@ export const restoreTenantUserService = async (tenant_user_id) => {
   try {
     const [result] = await db.sequelize.query(query, {
       replacements: [tenant_user_id],
+      transaction,
     });
     return result;
   } catch (err) {

@@ -116,53 +116,57 @@ export const sendTenantInvitationService = async (
   company_name,
   invited_by,
 ) => {
-  const invitation_id = await generateReadableIdFromLast(
-    tableNames.TENANT_INVITATIONS,
-    "invitation_id",
-    "INV",
-  );
+  try {
+    const invitation_id = await generateReadableIdFromLast(
+      tableNames.TENANT_INVITATIONS,
+      "invitation_id",
+      "INV",
+    );
 
-  const inviteToken = generateInviteToken({
-    tenant_id,
-    tenant_user_id,
-    email,
-  });
+    const inviteToken = generateInviteToken({
+      tenant_id,
+      tenant_user_id,
+      email,
+    });
 
-  const tokenHash = crypto.createHash("sha256").update(inviteToken).digest("hex");
+    const tokenHash = crypto.createHash("sha256").update(inviteToken).digest("hex");
 
-  await createTenantInvitationService(
-    invitation_id,
-    tenant_id,
-    tenant_user_id,
-    email,
-    tokenHash,
-    invited_by,
-  );
+    await createTenantInvitationService(
+      invitation_id,
+      tenant_id,
+      tenant_user_id,
+      email,
+      tokenHash,
+      invited_by,
+    );
 
-  const inviteUrl = `${process.env.FRONTEND_URL}/account/activate?token=${inviteToken}`;
+    const inviteUrl = `${process.env.FRONTEND_URL}/account/activate?token=${inviteToken}`;
 
-  const templatePath = path.join(
-    __dirname,
-    "../../../public/html/tenantInvite/index.html",
-  );
+    const templatePath = path.join(
+      __dirname,
+      "../../../public/html/tenantInvite/index.html",
+    );
 
-  const source = fs.readFileSync(templatePath, "utf8");
-  const template = handlebars.compile(source);
+    const source = fs.readFileSync(templatePath, "utf8");
+    const template = handlebars.compile(source);
 
-  const emailHtml = template({
-    name,
-    company_name,
-    invite_url: inviteUrl,
-    expiry_hours: 48,
-  });
+    const emailHtml = template({
+      name,
+      company_name,
+      invite_url: inviteUrl,
+      expiry_hours: 48,
+    });
 
-  await sendEmail({
-    to: email,
-    subject: `You're invited to manage ${company_name} on WhatsNexus`,
-    html: emailHtml,
-  });
+    await sendEmail({
+      to: email,
+      subject: `You're invited to manage ${company_name} on WhatsNexus`,
+      html: emailHtml,
+    });
 
-  return { invitation_id, inviteToken };
+    return { invitation_id, inviteToken };
+  } catch (err) {
+    throw err;
+  }
 };
 export const sendTenantPasswordSetSuccessEmailService = async (
   email,
@@ -171,33 +175,37 @@ export const sendTenantPasswordSetSuccessEmailService = async (
   tenant_id,
   verify_token = null,
 ) => {
-  const loginUrl = `${process.env.FRONTEND_URL}/login`;
-  const webhookUrl = `${process.env.BACKEND_URL}/api/whatsapp/webhook/${tenant_id}`;
-  const metaVerifyToken = verify_token || process.env.META_VERIFY_TOKEN;
+  try {
+    const loginUrl = `${process.env.FRONTEND_URL}/login`;
+    const webhookUrl = `${process.env.BACKEND_URL}/api/whatsapp/webhook/${tenant_id}`;
+    const metaVerifyToken = verify_token || process.env.META_VERIFY_TOKEN;
 
-  const templatePath = path.join(
-    __dirname,
-    "../../../public/html/passwordSetSuccess/index.html",
-  );
+    const templatePath = path.join(
+      __dirname,
+      "../../../public/html/passwordSetSuccess/index.html",
+    );
 
-  const source = fs.readFileSync(templatePath, "utf8");
-  const template = handlebars.compile(source);
+    const source = fs.readFileSync(templatePath, "utf8");
+    const template = handlebars.compile(source);
 
-  const emailHtml = template({
-    name,
-    company_name,
-    login_url: loginUrl,
-    webhook_url: webhookUrl,
-    meta_verify_token: metaVerifyToken,
-  });
+    const emailHtml = template({
+      name,
+      company_name,
+      login_url: loginUrl,
+      webhook_url: webhookUrl,
+      meta_verify_token: metaVerifyToken,
+    });
 
-  await sendEmail({
-    to: email,
-    subject: `Welcome to WhatsNexus - ${company_name} Setup Complete`,
-    html: emailHtml,
-  });
+    await sendEmail({
+      to: email,
+      subject: `Welcome to WhatsNexus - ${company_name} Setup Complete`,
+      html: emailHtml,
+    });
 
-  return true;
+    return true;
+  } catch (err) {
+    throw err;
+  }
 };
 
 export const sendTenantUserWelcomeEmailService = async (
@@ -207,30 +215,34 @@ export const sendTenantUserWelcomeEmailService = async (
   password,
   role,
 ) => {
-  const loginUrl = `${process.env.FRONTEND_URL}/login`;
+  try {
+    const loginUrl = `${process.env.FRONTEND_URL}/login`;
 
-  const templatePath = path.join(
-    __dirname,
-    "../../../public/html/tenantUserWelcome/index.html",
-  );
+    const templatePath = path.join(
+      __dirname,
+      "../../../public/html/tenantUserWelcome/index.html",
+    );
 
-  const source = fs.readFileSync(templatePath, "utf8");
-  const template = handlebars.compile(source);
+    const source = fs.readFileSync(templatePath, "utf8");
+    const template = handlebars.compile(source);
 
-  const emailHtml = template({
-    name,
-    company_name,
-    login_url: loginUrl,
-    email,
-    password,
-    role,
-  });
+    const emailHtml = template({
+      name,
+      company_name,
+      login_url: loginUrl,
+      email,
+      password,
+      role,
+    });
 
-  await sendEmail({
-    to: email,
-    subject: `Welcome to ${company_name} on WhatsNexus`,
-    html: emailHtml,
-  });
+    await sendEmail({
+      to: email,
+      subject: `Welcome to ${company_name} on WhatsNexus`,
+      html: emailHtml,
+    });
 
-  return true;
+    return true;
+  } catch (err) {
+    throw err;
+  }
 };

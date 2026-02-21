@@ -169,8 +169,26 @@ export const deleteContactService = async (id, tenant_id) => {
       { replacements: [id, tenant_id], transaction }
     );
 
+    // Soft delete messages
+    await db.sequelize.query(
+      `UPDATE ${tableNames.MESSAGES} SET is_deleted = true, deleted_at = NOW() WHERE contact_id = ? AND tenant_id = ?`,
+      { replacements: [id, tenant_id], transaction }
+    );
+
+    // Soft delete live chat
+    await db.sequelize.query(
+      `UPDATE ${tableNames.LIVECHAT} SET is_deleted = true, deleted_at = NOW() WHERE contact_id = ? AND tenant_id = ?`,
+      { replacements: [id, tenant_id], transaction }
+    );
+
+    // Hard delete group memberships (junction table - no soft delete needed)
+    await db.sequelize.query(
+      `DELETE FROM ${tableNames.CONTACT_GROUP_MEMBERS} WHERE contact_id = ? AND tenant_id = ?`,
+      { replacements: [id, tenant_id], transaction }
+    );
+
     await transaction.commit();
-    return true;
+    return { message: "Contact and all related data deleted successfully" };
   } catch (err) {
     await transaction.rollback();
     throw err;
@@ -216,16 +234,20 @@ export const permanentDeleteContactService = async (id, tenant_id) => {
  * Retrieves a list of soft-deleted contacts for a tenant.
  */
 export const getDeletedContactListService = async (tenant_id) => {
-  const where = { tenant_id, is_deleted: true };
+  try {
+    const where = { tenant_id, is_deleted: true };
 
-  const rows = await db.Contacts.findAll({
-    where,
-    order: [["deleted_at", "DESC"]],
-  });
+    const rows = await db.Contacts.findAll({
+      where,
+      order: [["deleted_at", "DESC"]],
+    });
 
-  return {
-    contacts: rows,
-  };
+    return {
+      contacts: rows,
+    };
+  } catch (err) {
+    throw err;
+  }
 };
 
 /**

@@ -12,25 +12,29 @@ export const registerManagementService = async (
   password,
   role,
 ) => {
-  const Query = `
+  try {
+    const Query = `
     INSERT INTO ${tableNames.MANAGEMENT}
     (management_id, title, username, email, country_code, mobile, password, role)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `;
 
-  const values = [
-    management_id,
-    title,
-    username,
-    email,
-    country_code,
-    mobile,
-    password,
-    role,
-  ];
+    const values = [
+      management_id,
+      title,
+      username,
+      email,
+      country_code,
+      mobile,
+      password,
+      role,
+    ];
 
-  const [result] = await db.sequelize.query(Query, { replacements: values });
-  return result;
+    const [result] = await db.sequelize.query(Query, { replacements: values });
+    return result;
+  } catch (err) {
+    throw err;
+  }
 };
 
 export const loginManagementService = async (email) => {
@@ -125,17 +129,21 @@ export const getAllManagementAdminService = async (role) => {
 };
 
 export const getManagementByIdService = async (management_id) => {
-  const Query = `
+  try {
+    const Query = `
     SELECT * FROM ${tableNames.MANAGEMENT}
     WHERE management_id = ? AND is_deleted = ?
   `;
 
-  const result = await db.sequelize.query(Query, {
-    replacements: [management_id, 0],
-    type: db.Sequelize.QueryTypes.SELECT,
-  });
+    const result = await db.sequelize.query(Query, {
+      replacements: [management_id, 0],
+      type: db.Sequelize.QueryTypes.SELECT,
+    });
 
-  return result[0];
+    return result[0];
+  } catch (err) {
+    throw err;
+  }
 };
 
 export const updateManagementService = async (

@@ -28,7 +28,7 @@ import {
 import bcrypt from "bcrypt";
 import { generatePassword } from "../../utils/helpers/generatePassword.js";
 import crypto from "crypto";
-import { normalizeMobile } from "../../utils/helpers/normalizeMobile.js";
+import { normalizeMobile, cleanCountryCode } from "../../utils/helpers/normalizeMobile.js";
 
 export const getLoggedTenantUserController = async (req, res) => {
   try {
@@ -63,14 +63,9 @@ export const getLoggedTenantUserController = async (req, res) => {
   }
 };
 
-import fs from "fs";
-import path from "path";
-import handlebars from "handlebars";
-import { fileURLToPath } from "url";
-import { sendEmail } from "../../utils/email/emailService.js";
 
 export const createTenantUserController = async (req, res) => {
-  const { username, email, country_code, mobile, profile, role } = req.body;
+  const { title, username, email, country_code, mobile, profile, role } = req.body;
 
   const tenant_id = req.user.tenant_id;
   const loginuser = req.user;
@@ -99,7 +94,6 @@ export const createTenantUserController = async (req, res) => {
 
   const trimmedEmail = email?.trim()?.toLowerCase();
 
-  // Check if email already exists globally (to prevent login collisions)
   const existingUserGlobally = await findTenantUserByEmailGloballyService(trimmedEmail);
   if (existingUserGlobally) {
     return res.status(400).send({
@@ -131,7 +125,8 @@ export const createTenantUserController = async (req, res) => {
     "TTU",
   );
 
-  const normalizedMobile = normalizeMobile(country_code, mobile);
+  const cleanedCC = cleanCountryCode(country_code);
+  const normalizedMobile = normalizeMobile(cleanedCC, mobile);
 
   try {
     let password_hash = null;
@@ -148,9 +143,10 @@ export const createTenantUserController = async (req, res) => {
     await createTenantUserService(
       tenant_user_id,
       tenant_id,
+      title || null,
       username,
       trimmedEmail,
-      country_code,
+      cleanedCC,
       normalizedMobile,
       profile || null,
       role,
@@ -268,12 +264,6 @@ export const getAllTenantUsersController = async (req, res) => {
   try {
     const user = req.user;
 
-    if (user.role !== "tenant_admin") {
-      return res.status(403).send({
-        message: "Only tenant admin can view all users",
-      });
-    }
-
     const users = await getAllTenantUsersService(user.tenant_id);
 
     return res.status(200).send({
@@ -290,14 +280,15 @@ export const getTenantUserByIdController = async (req, res) => {
     const loginUser = req.user;
     const { id } = req.params;
 
-    if (loginUser.role !== "tenant_admin" && loginUser.tenant_user_id !== id) {
-      return res.status(403).send({ message: "Access denied" });
-    }
-
     const user = await findTenantUserByIdService(id);
 
     if (!user) {
       return res.status(404).send({ message: "User not found" });
+    }
+
+    // 🔒 Security Check: Ensure the requested user belongs to the same tenant
+    if (user.tenant_id !== loginUser.tenant_id) {
+      return res.status(403).send({ message: "Access denied: User belongs to a different organization" });
     }
 
     // Remove sensitive data
@@ -323,6 +314,18 @@ export const updateTenantUserByIdController = async (req, res) => {
     const loginUser = req.user;
     const { id } = req.params;
 
+    const user = await findTenantUserByIdService(id);
+
+    if (!user) {
+      return res.status(404).send({ message: "User not found" });
+    }
+
+    // 🔒 Security Check: Ensure the target user belongs to the same tenant
+    if (user.tenant_id !== loginUser.tenant_id) {
+      return res.status(403).send({ message: "Access denied: User belongs to a different organization" });
+    }
+
+    // 🔒 Security Check: Only admins or the user themselves can update
     if (loginUser.role !== "tenant_admin" && loginUser.unique_id !== id) {
       return res.status(403).send({ message: "Access denied" });
     }
@@ -353,15 +356,20 @@ export const softDeleteTenantUserController = async (req, res) => {
     const loginUser = req.user;
     const { id } = req.params;
 
-    if (loginUser.role !== "tenant_admin") {
-      return res.status(403).send({
-        message: "Only tenant admin can delete users",
-      });
+    const user = await findTenantUserByIdService(id);
+
+    if (!user) {
+      return res.status(404).send({ message: "User not found" });
+    }
+
+    // 🔒 Security Check: Ensure target user belongs to the same tenant
+    if (user.tenant_id !== loginUser.tenant_id) {
+      return res.status(403).send({ message: "Access denied: User belongs to a different organization" });
     }
 
     if (loginUser.tenant_user_id === id) {
       return res.status(400).send({
-        message: "Tenant admin cannot delete himself",
+        message: "Tenant user cannot delete himself",
       });
     }
 
@@ -380,10 +388,15 @@ export const permanentDeleteTenantUserController = async (req, res) => {
     const loginUser = req.user;
     const { id } = req.params;
 
-    if (loginUser.role !== "tenant_admin") {
-      return res.status(403).send({
-        message: "Only tenant admin can permanently delete users",
-      });
+    const user = await findTenantUserByIdService(id);
+
+    if (!user) {
+      return res.status(404).send({ message: "User not found" });
+    }
+
+    // 🔒 Security Check: Ensure target user belongs to the same tenant
+    if (user.tenant_id !== loginUser.tenant_id) {
+      return res.status(403).send({ message: "Access denied: User belongs to a different organization" });
     }
 
     await permanentDeleteTenantUserService(id);
@@ -443,9 +456,8 @@ export const forgotTenantPasswordController = async (req, res) => {
     const trimmedEmail = email?.trim()?.toLowerCase();
     const user = await loginTenantUserService(trimmedEmail);
     if (!user) {
-      // For security, do not reveal if user exists
-      return res.status(200).send({
-        message: "If your email is registered, you will receive an OTP shortly.",
+      return res.status(400).send({
+        message: "Invalid email",
       });
     }
 

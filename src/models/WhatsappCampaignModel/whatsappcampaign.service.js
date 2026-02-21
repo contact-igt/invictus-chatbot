@@ -133,231 +133,267 @@ export const createCampaignService = async (tenant_id, data, created_by) => {
  * Retrieves a list of campaigns for a tenant with filtering.
  */
 export const getCampaignListService = async (tenant_id) => {
-    const where = { tenant_id, is_deleted: false };
+    try {
+        const where = { tenant_id, is_deleted: false };
 
-    const rows = await db.WhatsappCampaigns.findAll({
-        where,
-        order: [["created_at", "DESC"]],
-        include: [
-            {
-                model: db.WhatsappTemplates,
-                as: "template",
-                attributes: ["template_name", "category", "language"],
-            },
-        ],
-    });
+        const rows = await db.WhatsappCampaigns.findAll({
+            where,
+            order: [["created_at", "DESC"]],
+            include: [
+                {
+                    model: db.WhatsappTemplates,
+                    as: "template",
+                    attributes: ["template_name", "category", "language"],
+                },
+            ],
+        });
 
-    return {
-        campaigns: rows,
-    };
+        return {
+            campaigns: rows,
+        };
+    } catch (err) {
+        throw err;
+    }
 };
 
 /**
  * Retrieves detailed info for a single campaign.
  */
 export const getCampaignByIdService = async (campaign_id, tenant_id, query = {}) => {
-    const { recipient_status } = query;
-    let recipientWhere = { campaign_id };
-    if (recipient_status) {
-        recipientWhere.status = recipient_status;
-    }
+    try {
+        const { recipient_status } = query;
+        let recipientWhere = { campaign_id };
+        if (recipient_status) {
+            recipientWhere.status = recipient_status;
+        }
 
-    const campaign = await db.WhatsappCampaigns.findOne({
-        where: { campaign_id, tenant_id, is_deleted: false },
-        include: [
-            {
-                model: db.WhatsappTemplates,
-                as: "template",
-            },
-            {
-                model: db.WhatsappCampaignRecipients,
-                as: "recipients",
-                where: recipientWhere,
-                required: false, // Ensure campaign is returned even if no recipients match filter
-                limit: 100, // Preview of first 100 recipients
-            },
-        ],
-    });
-    return campaign;
+        const campaign = await db.WhatsappCampaigns.findOne({
+            where: { campaign_id, tenant_id, is_deleted: false },
+            include: [
+                {
+                    model: db.WhatsappTemplates,
+                    as: "template",
+                },
+                {
+                    model: db.WhatsappCampaignRecipients,
+                    as: "recipients",
+                    where: recipientWhere,
+                    required: false, // Ensure campaign is returned even if no recipients match filter
+                    limit: 100, // Preview of first 100 recipients
+                },
+            ],
+        });
+        return campaign;
+    } catch (err) {
+        throw err;
+    }
 };
 
 /**
  * Processes a batch of pending recipients for an active campaign.
  */
 export const executeCampaignBatchService = async (campaign_id, tenant_id, batchSize = 50) => {
-    const campaign = await db.WhatsappCampaigns.findOne({
-        where: { campaign_id, tenant_id, status: ["active", "scheduled"] },
-        include: [
-            {
-                model: db.WhatsappTemplates,
-                as: "template",
-            },
-        ],
-    });
+    try {
+        const campaign = await db.WhatsappCampaigns.findOne({
+            where: { campaign_id, tenant_id, status: ["active", "scheduled"] },
+            include: [
+                {
+                    model: db.WhatsappTemplates,
+                    as: "template",
+                },
+            ],
+        });
 
-    if (!campaign) {
-        throw new Error("Campaign not found or not in executable state");
-    }
-
-    const recipients = await db.WhatsappCampaignRecipients.findAll({
-        where: { campaign_id, status: "pending" },
-        limit: batchSize,
-    });
-
-    // Fetch Template Body Text
-    const [[bodyComponent]] = await db.sequelize.query(
-        `SELECT text_content FROM ${tableNames.WHATSAPP_TEMPLATE_COMPONENTS} WHERE template_id = ? AND component_type = 'body' LIMIT 1`,
-        { replacements: [campaign.template_id] },
-    );
-    const templateBodyText = bodyComponent?.text_content || `Template: ${campaign.template.template_name}`;
-
-    if (recipients.length === 0) {
-        // Mark campaign as completed if no more pending recipients
-        await campaign.update({ status: "completed" });
-        return { finished: true };
-    }
-
-    // Update campaign status to active if it was scheduled
-    if (campaign.status === "scheduled") {
-        await campaign.update({ status: "active" });
-    }
-
-    for (const recipient of recipients) {
-        try {
-            // 1. Ensure Contact Exists
-            let contactId = recipient.contact_id;
-            if (!contactId) {
-                const existingContact = await getContactByPhoneAndTenantIdService(tenant_id, recipient.mobile_number);
-                if (existingContact) {
-                    contactId = existingContact.contact_id;
-                } else {
-                    const newContact = await createContactService(tenant_id, recipient.mobile_number, null, null);
-                    contactId = newContact.contact_id;
-                }
-
-                if (contactId) {
-                    await recipient.update({ contact_id: contactId });
-                }
-            }
-
-            // 2. Ensure Lead Exists for this Contact
-            if (contactId) {
-                const existingLead = await getLeadByContactIdService(tenant_id, contactId);
-                if (!existingLead) {
-                    await createLeadService(tenant_id, contactId, "campaign");
-                }
-            }
-
-            let components = [];
-
-            let dynamicVariables = recipient.dynamic_variables || [];
-            if (typeof dynamicVariables === 'string') {
-                try {
-                    dynamicVariables = JSON.parse(dynamicVariables);
-                } catch (e) {
-                    dynamicVariables = [];
-                }
-            }
-
-            if (Array.isArray(dynamicVariables) && dynamicVariables.length > 0) {
-                components = [
-                    {
-                        type: "body",
-                        parameters: dynamicVariables.map((v) => ({
-                            type: "text",
-                            text: String(v), // Ensure it's a string
-                        })),
-                    },
-                ];
-            } else {
-                // Check if template actually needs variables
-                const [templateVars] = await db.sequelize.query(
-                    `SELECT COUNT(*) as count FROM ${tableNames.WHATSAPP_TEMPLATE_VARIABLES} WHERE template_id = ?`,
-                    { replacements: [campaign.template_id] }
-                );
-
-                if (templateVars[0].count > 0) {
-                    console.warn(`Campaign ${campaign_id}: Recipient ${recipient.mobile_number} has no dynamic variables, but template requires ${templateVars[0].count}`);
-                }
-            }
-
-            const result = await sendWhatsAppTemplate(
-                tenant_id,
-                recipient.mobile_number,
-                campaign.template.template_name,
-                campaign.template.language,
-                components,
-            );
-
-            await recipient.update({
-                status: "sent",
-                meta_message_id: result.meta_message_id || null,
-            });
-
-            // 3. Log to Message History and Activate Live Chat
-            if (contactId && result.meta_message_id) {
-                let personalizedMessage = templateBodyText;
-                if (Array.isArray(dynamicVariables) && dynamicVariables.length > 0) {
-                    dynamicVariables.forEach((val, idx) => {
-                        personalizedMessage = personalizedMessage.replace(`{{${idx + 1}}}`, val);
-                    });
-                }
-
-                // 6. Log to Messages Table
-                await createUserMessageService(
-                    tenant_id,
-                    contactId,
-                    result.phone_number_id,
-                    recipient.mobile_number,
-                    result.meta_message_id,
-                    "System",
-                    "admin",
-                    null,
-                    personalizedMessage,
-                    "template",
-                    null,
-                    null,
-                    "sent"
-                );
-
-                // 7. Activate Live Chat
-                const livelist = await getLivechatByIdService(tenant_id, contactId);
-                if (!livelist) {
-                    await createLiveChatService(tenant_id, contactId);
-                } else {
-                    await updateLiveChatTimestampService(tenant_id, contactId);
-                }
-            }
-        } catch (err) {
-            console.error(`Failed to send campaign message to ${recipient.mobile_number}:`, err.message);
-            await recipient.update({
-                status: "failed",
-                error_message: err.message,
-            });
+        if (!campaign) {
+            throw new Error("Campaign not found or not in executable state");
         }
-    }
 
-    return { finished: false, processedCount: recipients.length };
+        const recipients = await db.WhatsappCampaignRecipients.findAll({
+            where: { campaign_id, status: "pending" },
+            limit: batchSize,
+        });
+
+        // Fetch Template Body Text
+        const [[bodyComponent]] = await db.sequelize.query(
+            `SELECT text_content FROM ${tableNames.WHATSAPP_TEMPLATE_COMPONENTS} WHERE template_id = ? AND component_type = 'body' LIMIT 1`,
+            { replacements: [campaign.template_id] },
+        );
+        const templateBodyText = bodyComponent?.text_content || `Template: ${campaign.template.template_name}`;
+
+        if (recipients.length === 0) {
+            // Mark campaign as completed if no more pending recipients
+            await campaign.update({ status: "completed" });
+            return { finished: true };
+        }
+
+        // Update campaign status to active if it was scheduled
+        if (campaign.status === "scheduled") {
+            await campaign.update({ status: "active" });
+        }
+
+        for (const recipient of recipients) {
+            try {
+                // 1. Ensure Contact Exists
+                let contactId = recipient.contact_id;
+                if (!contactId) {
+                    const existingContact = await getContactByPhoneAndTenantIdService(tenant_id, recipient.mobile_number);
+                    if (existingContact) {
+                        contactId = existingContact.contact_id;
+                    } else {
+                        const newContact = await createContactService(tenant_id, recipient.mobile_number, null, null);
+                        contactId = newContact.contact_id;
+                    }
+
+                    if (contactId) {
+                        await recipient.update({ contact_id: contactId });
+                    }
+                }
+
+                // 2. Ensure Lead Exists for this Contact
+                if (contactId) {
+                    const existingLead = await getLeadByContactIdService(tenant_id, contactId);
+                    if (!existingLead) {
+                        await createLeadService(tenant_id, contactId, "campaign");
+                    }
+                }
+
+                let components = [];
+
+                let dynamicVariables = recipient.dynamic_variables || [];
+                if (typeof dynamicVariables === 'string') {
+                    try {
+                        dynamicVariables = JSON.parse(dynamicVariables);
+                    } catch (e) {
+                        dynamicVariables = [];
+                    }
+                }
+
+                if (Array.isArray(dynamicVariables) && dynamicVariables.length > 0) {
+                    components = [
+                        {
+                            type: "body",
+                            parameters: dynamicVariables.map((v) => ({
+                                type: "text",
+                                text: String(v), // Ensure it's a string
+                            })),
+                        },
+                    ];
+                } else {
+                    // Check if template actually needs variables
+                    const [templateVars] = await db.sequelize.query(
+                        `SELECT COUNT(*) as count FROM ${tableNames.WHATSAPP_TEMPLATE_VARIABLES} WHERE template_id = ?`,
+                        { replacements: [campaign.template_id] }
+                    );
+
+                    if (templateVars[0].count > 0) {
+                        console.warn(`Campaign ${campaign_id}: Recipient ${recipient.mobile_number} has no dynamic variables, but template requires ${templateVars[0].count}`);
+                    }
+                }
+
+                const result = await sendWhatsAppTemplate(
+                    tenant_id,
+                    recipient.mobile_number,
+                    campaign.template.template_name,
+                    campaign.template.language,
+                    components,
+                );
+
+                await recipient.update({
+                    status: "sent",
+                    meta_message_id: result.meta_message_id || null,
+                });
+
+                // 3. Log to Message History and Activate Live Chat
+                if (contactId && result.meta_message_id) {
+                    let personalizedMessage = templateBodyText;
+                    if (Array.isArray(dynamicVariables) && dynamicVariables.length > 0) {
+                        dynamicVariables.forEach((val, idx) => {
+                            personalizedMessage = personalizedMessage.replace(`{{${idx + 1}}}`, val);
+                        });
+                    }
+
+                    // 6. Log to Messages Table
+                    await createUserMessageService(
+                        tenant_id,
+                        contactId,
+                        result.phone_number_id,
+                        recipient.mobile_number,
+                        result.meta_message_id,
+                        "System",
+                        "admin",
+                        null,
+                        personalizedMessage,
+                        "template",
+                        null,
+                        null,
+                        "sent"
+                    );
+
+                    // 7. Activate Live Chat
+                    const livelist = await getLivechatByIdService(tenant_id, contactId);
+                    if (!livelist) {
+                        await createLiveChatService(tenant_id, contactId);
+                    } else {
+                        await updateLiveChatTimestampService(tenant_id, contactId);
+                    }
+                }
+            } catch (err) {
+                console.error(`Failed to send campaign message to ${recipient.mobile_number}:`, err.message);
+                await recipient.update({
+                    status: "failed",
+                    error_message: err.message,
+                });
+            }
+        }
+
+        return { finished: false, processedCount: recipients.length };
+    } catch (err) {
+        throw err;
+    }
 };
 
 /**
- * Soft delete a campaign
+ * Soft delete a campaign and its recipients
  */
 export const softDeleteCampaignService = async (campaign_id, tenant_id) => {
-    const campaign = await db.WhatsappCampaigns.findOne({
-        where: { campaign_id, tenant_id, is_deleted: false }
-    });
+    const transaction = await db.sequelize.transaction();
+    try {
+        const campaign = await db.WhatsappCampaigns.findOne({
+            where: { campaign_id, tenant_id, is_deleted: false },
+            transaction
+        });
 
-    if (!campaign) {
-        throw new Error("Campaign not found");
+        if (!campaign) {
+            throw new Error("Campaign not found");
+        }
+
+        // Soft delete the campaign
+        await campaign.update(
+            {
+                is_deleted: true,
+                deleted_at: new Date()
+            },
+            { transaction }
+        );
+
+        // Soft delete all recipients
+        await db.WhatsappCampaignRecipients.update(
+            {
+                is_deleted: true,
+                deleted_at: new Date()
+            },
+            {
+                where: { campaign_id },
+                transaction
+            }
+        );
+
+        await transaction.commit();
+        return { message: "Campaign and recipients soft deleted successfully" };
+    } catch (err) {
+        await transaction.rollback();
+        throw err;
     }
-
-    await campaign.update({
-        is_deleted: true,
-        deleted_at: new Date()
-    });
-
-    return { message: "Campaign soft deleted successfully" };
 };
 
 /**
@@ -427,41 +463,49 @@ export const startCampaignSchedulerService = () => {
  * Retrieves a list of deleted campaigns for a tenant with filtering.
  */
 export const getDeletedCampaignListService = async (tenant_id) => {
-    const where = { tenant_id, is_deleted: true };
+    try {
+        const where = { tenant_id, is_deleted: true };
 
-    const rows = await db.WhatsappCampaigns.findAll({
-        where,
-        order: [["deleted_at", "DESC"]],
-        include: [
-            {
-                model: db.WhatsappTemplates,
-                as: "template",
-                attributes: ["template_name", "category", "language"],
-            },
-        ],
-    });
+        const rows = await db.WhatsappCampaigns.findAll({
+            where,
+            order: [["deleted_at", "DESC"]],
+            include: [
+                {
+                    model: db.WhatsappTemplates,
+                    as: "template",
+                    attributes: ["template_name", "category", "language"],
+                },
+            ],
+        });
 
-    return {
-        campaigns: rows,
-    };
+        return {
+            campaigns: rows,
+        };
+    } catch (err) {
+        throw err;
+    }
 };
 
 /**
  * Restore a soft-deleted campaign
  */
 export const restoreCampaignService = async (campaign_id, tenant_id) => {
-    const campaign = await db.WhatsappCampaigns.findOne({
-        where: { campaign_id, tenant_id, is_deleted: true }
-    });
+    try {
+        const campaign = await db.WhatsappCampaigns.findOne({
+            where: { campaign_id, tenant_id, is_deleted: true }
+        });
 
-    if (!campaign) {
-        throw new Error("Campaign not found or not deleted");
+        if (!campaign) {
+            throw new Error("Campaign not found or not deleted");
+        }
+
+        await campaign.update({
+            is_deleted: false,
+            deleted_at: null
+        });
+
+        return { message: "Campaign restored successfully" };
+    } catch (err) {
+        throw err;
     }
-
-    await campaign.update({
-        is_deleted: false,
-        deleted_at: null
-    });
-
-    return { message: "Campaign restored successfully" };
 };

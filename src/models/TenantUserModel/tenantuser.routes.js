@@ -45,7 +45,7 @@ Router.get(
   authenticate,
   authorize({
     user_type: "tenant",
-    roles: ["tenant_admin"],
+    roles: ["tenant_admin", "doctor", "staff", "agent"],
   }),
   getAllTenantUsersController,
 );
@@ -85,7 +85,7 @@ Router.get(
   authenticate,
   authorize({
     user_type: "tenant",
-    roles: ["tenant_admin"],
+    roles: ["tenant_admin", "doctor", "staff", "agent"],
   }),
   getDeletedTenantUserListController,
 );

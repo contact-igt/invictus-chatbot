@@ -28,8 +28,7 @@ import path from "path";
 import handlebars from "handlebars";
 import { fileURLToPath } from "url";
 import { sendEmail } from "../../utils/email/emailService.js";
-import { normalizeMobile } from "../../utils/helpers/normalizeMobile.js";
-
+import { normalizeMobile, cleanCountryCode } from "../../utils/helpers/normalizeMobile.js";
 
 export const registerManagementController = async (req, res) => {
   try {
@@ -52,8 +51,12 @@ export const registerManagementController = async (req, res) => {
 
     const trimmedEmail = email?.trim()?.toLowerCase();
     const normalizedMobile = normalizeMobile(country_code, mobile);
+    const cleanedCC = country_code ? cleanCountryCode(country_code) : null;
 
-    const existingMg = await findManagementByEmailOrMobileService(trimmedEmail, normalizedMobile);
+    const existingMg = await findManagementByEmailOrMobileService(
+      trimmedEmail,
+      normalizedMobile,
+    );
 
     if (existingMg) {
       const field = existingMg.email === trimmedEmail ? "Email" : "Mobile";
@@ -77,7 +80,7 @@ export const registerManagementController = async (req, res) => {
       title || null,
       username,
       trimmedEmail,
-      country_code || null,
+      cleanedCC,
       normalizedMobile || null,
       hashedPassword,
       role,
@@ -117,7 +120,9 @@ export const registerManagementController = async (req, res) => {
       });
     }
 
-    return res.status(500).send({ message: "An internal server error occurred." });
+    return res
+      .status(500)
+      .send({ message: "An internal server error occurred." });
   }
 };
 
@@ -222,7 +227,9 @@ export const getManagementByIdController = async (req, res) => {
       data,
     });
   } catch (err) {
-    return res.status(500).send({ message: "An internal server error occurred." });
+    return res
+      .status(500)
+      .send({ message: "An internal server error occurred." });
   }
 };
 
@@ -277,19 +284,21 @@ export const updateManagementController = async (req, res) => {
       }
     }
 
+    const cleanedCC = country_code ? cleanCountryCode(country_code) : null;
+
     await updateManagementService(
       targetUserId,
       title,
       username,
-      country_code,
-      normalizeMobile(country_code, mobile),
+      cleanedCC,
+      normalizeMobile(cleanedCC, mobile),
       profile,
       loggedInUser.role === "super_admin" && req.body.role
         ? req.body.role
         : null,
       loggedInUser.role === "super_admin" && req.body.status
         ? req.body.status
-        : null
+        : null,
     );
 
     return res.status(200).send({
@@ -396,8 +405,8 @@ export const forgotManagementPasswordController = async (req, res) => {
     const trimmedEmail = email?.trim()?.toLowerCase();
     const user = await loginManagementService(trimmedEmail);
     if (!user) {
-      return res.status(200).send({
-        message: "If your email is registered, you will receive an OTP shortly.",
+      return res.status(400).send({
+        message: "Invalid email",
       });
     }
 
@@ -419,7 +428,11 @@ export const verifyManagementOTPController = async (req, res) => {
     }
 
     const trimmedEmail = email?.trim()?.toLowerCase();
-    const verification = await verifyOTPService(trimmedEmail, otp, "management");
+    const verification = await verifyOTPService(
+      trimmedEmail,
+      otp,
+      "management",
+    );
 
     if (!verification.valid) {
       return res.status(400).send({ message: verification.message });
@@ -445,7 +458,10 @@ export const resetManagementPasswordController = async (req, res) => {
     const trimmedEmail = email?.trim()?.toLowerCase();
     const trimmedPassword = new_password?.trim();
 
-    const isVerified = await checkOTPVerificationService(trimmedEmail, "management");
+    const isVerified = await checkOTPVerificationService(
+      trimmedEmail,
+      "management",
+    );
     if (!isVerified) {
       return res.status(400).send({
         message: "Please verify OTP first or OTP session expired",

@@ -44,7 +44,7 @@ export const createContactGroupController = async (req, res) => {
 
     try {
         const group = await createContactGroupService(tenant_id, req.body);
-        return res.status(200).send({
+        return res.status(201).send({
             message: "Group created successfully",
             group,
         });

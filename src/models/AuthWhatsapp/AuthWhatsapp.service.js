@@ -13,6 +13,8 @@ import { processResponse } from "../../utils/ai/aiTagHandlers/index.js";
 import { classifyResponse } from "../../utils/ai/responseClassifier.js";
 import { handleClassification } from "../../utils/ai/classificationHandler.js";
 
+import { getLeadByContactIdService } from "../LeadsModel/leads.service.js";
+import { searchResolvedLogsService } from "../AiAnalysisLog/aiAnalysisLog.service.js";
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -24,41 +26,45 @@ const httpsAgent = new https.Agent({
 });
 
 export const sendWhatsAppMessage = async (tenant_id, to, message) => {
-  if (!message || !message.trim()) return;
+  try {
+    if (!message || !message.trim()) return;
 
-  const [rows] = await db.sequelize.query(
-    `
+    const [rows] = await db.sequelize.query(
+      `
     SELECT phone_number_id, access_token
     FROM ${tableNames.WHATSAPP_ACCOUNT}
     WHERE tenant_id = ?
       AND status = 'active'
     LIMIT 1
     `,
-    { replacements: [tenant_id] },
-  );
+      { replacements: [tenant_id] },
+    );
 
-  if (!rows.length) {
-    throw new Error("No active WhatsApp account for tenant");
-  }
+    if (!rows.length) {
+      throw new Error("No active WhatsApp account for tenant");
+    }
 
-  const { phone_number_id, access_token } = rows[0];
+    const { phone_number_id, access_token } = rows[0];
 
-  await axios.post(
-    `https://graph.facebook.com/v19.0/${phone_number_id}/messages`,
-    {
-      messaging_product: "whatsapp",
-      to,
-      type: "text",
-      text: { body: message.trim() },
-    },
-    {
-      headers: {
-        Authorization: `Bearer ${access_token}`,
-        "Content-Type": "application/json",
+    await axios.post(
+      `https://graph.facebook.com/v19.0/${phone_number_id}/messages`,
+      {
+        messaging_product: "whatsapp",
+        to,
+        type: "text",
+        text: { body: message.trim() },
       },
-      httpsAgent,
-    },
-  );
+      {
+        headers: {
+          Authorization: `Bearer ${access_token}`,
+          "Content-Type": "application/json",
+        },
+        httpsAgent,
+      },
+    );
+  } catch (err) {
+    throw err;
+  }
 };
 
 export const sendWhatsAppTemplate = async (
@@ -125,8 +131,9 @@ export const sendWhatsAppTemplate = async (
 };
 
 export const sendTypingIndicator = async (tenant_id, phone_number_id, to) => {
-  const [rows] = await db.sequelize.query(
-    `
+  try {
+    const [rows] = await db.sequelize.query(
+      `
     SELECT access_token
     FROM ${tableNames.WHATSAPP_ACCOUNT}
     WHERE tenant_id = ?
@@ -134,25 +141,28 @@ export const sendTypingIndicator = async (tenant_id, phone_number_id, to) => {
       AND status = 'active'
     LIMIT 1
     `,
-    { replacements: [tenant_id, phone_number_id] },
-  );
+      { replacements: [tenant_id, phone_number_id] },
+    );
 
-  if (!rows.length) return;
+    if (!rows.length) return;
 
-  await axios.post(
-    `https://graph.facebook.com/v19.0/${phone_number_id}/messages`,
-    {
-      messaging_product: "whatsapp",
-      to,
-      type: "typing",
-    },
-    {
-      headers: {
-        Authorization: `Bearer ${rows[0].access_token}`,
-        "Content-Type": "application/json",
+    await axios.post(
+      `https://graph.facebook.com/v19.0/${phone_number_id}/messages`,
+      {
+        messaging_product: "whatsapp",
+        to,
+        type: "typing",
       },
-    },
-  );
+      {
+        headers: {
+          Authorization: `Bearer ${rows[0].access_token}`,
+          "Content-Type": "application/json",
+        },
+      },
+    );
+  } catch (err) {
+    throw err;
+  }
 };
 
 export const isMessageProcessed = async (
@@ -193,8 +203,9 @@ export const markMessageProcessed = async (
 };
 
 export const isChatLocked = async (tenant_id, phone_number_id, phone) => {
-  const [rows] = await db.sequelize.query(
-    `
+  try {
+    const [rows] = await db.sequelize.query(
+      `
     SELECT 1
     FROM ${tableNames.CHATLOCKS}
     WHERE tenant_id = ?
@@ -203,36 +214,48 @@ export const isChatLocked = async (tenant_id, phone_number_id, phone) => {
       AND created_at > (NOW() - INTERVAL 15 SECOND)
     LIMIT 1
     `,
-    { replacements: [tenant_id, phone_number_id, phone] },
-  );
+      { replacements: [tenant_id, phone_number_id, phone] },
+    );
 
-  return rows.length > 0;
+    return rows.length > 0;
+  } catch (err) {
+    throw err;
+  }
 };
 
 export const lockChat = async (tenant_id, phone_number_id, phone) => {
-  await db.sequelize.query(
-    `
+  try {
+    await db.sequelize.query(
+      `
     INSERT IGNORE INTO ${tableNames.CHATLOCKS}
     (tenant_id, phone_number_id, phone)
     VALUES (?,?,?)
     `,
-    { replacements: [tenant_id, phone_number_id, phone] },
-  );
+      { replacements: [tenant_id, phone_number_id, phone] },
+    );
+  } catch (err) {
+    throw err;
+  }
 };
 
 export const unlockChat = async (tenant_id, phone_number_id, phone) => {
-  await db.sequelize.query(
-    `
+  try {
+    await db.sequelize.query(
+      `
     DELETE FROM ${tableNames.CHATLOCKS}
     WHERE tenant_id = ?
       AND phone_number_id = ?
       AND phone = ?
     `,
-    { replacements: [tenant_id, phone_number_id, phone] },
-  );
+      { replacements: [tenant_id, phone_number_id, phone] },
+    );
+  } catch (err) {
+    throw err;
+  }
 };
 
-export const getOpenAIReply = async (tenant_id, phone, userMessage) => {
+
+export const getOpenAIReply = async (tenant_id, phone, userMessage, contact_id = null) => {
   try {
     if (!userMessage) return null;
 
@@ -271,10 +294,30 @@ export const getOpenAIReply = async (tenant_id, phone, userMessage) => {
       "You are a hospital front-desk assistant.";
 
     const chunks = await searchKnowledgeChunks(tenant_id, cleanMessage);
+
+    // NEW: Fetch resolved logs
+    const resolvedLogs = await searchResolvedLogsService(tenant_id, 5);
+    const resolvedContext = resolvedLogs.map(log =>
+      `[Previous Question]: ${log.user_message}\n[Admin Resolution]: ${log.resolution}`
+    ).join("\n\n");
+
     const knowledgeContext =
       chunks && chunks.length > 0
         ? chunks.join("\n\n")
-        : "No relevant knowledge available.";
+        : "No relevant uploaded documents.";
+
+    const combinedKnowledge = `
+${knowledgeContext}
+
+${resolvedLogs.length > 0 ? `
+────────────────────────────────
+RESOLVED PAST QUESTIONS (HIGH PRIORITY)
+────────────────────────────────
+Use these past resolutions to answer if the user's question matches:
+
+${resolvedContext}
+` : ""}
+`;
 
     const COMMON_BASE_PROMPT = `
 
@@ -419,11 +462,46 @@ Rules:
 - If info is NOT in docs: Politely state that you don't have that information at the moment and offer to connect them with a human specialist.
 - Be clear, concise, and professional.
 - No emojis or symbols.
+    `;
+
+    // Lead source detection prompt (only when source is unknown)
+    let leadSourcePrompt = "";
+    if (contact_id) {
+      try {
+        const lead = await getLeadByContactIdService(tenant_id, contact_id);
+        if (lead && lead.source === "none") {
+          leadSourcePrompt = `
+────────────────────────────────
+LEAD SOURCE DETECTION (MANDATORY)
+────────────────────────────────
+The source of this lead is UNKNOWN. 
+
+CRITICAL INSTRUCTION:
+- You MUST find out how the user found this business.
+- In your CURRENT response, you MUST naturally ask: "How did you hear about us?" or "Where did you find us?"
+- Do NOT stop asking in every message until the user provides an answer.
+- You can answer the user's question first, but ALWAYS append the source question at the end.
+- Example: "I can help you with that! By the way, how did you hear about us?"
+
+Once the user responds with a platform or source, identify it and add EXACTLY ONE of these tags at the END of your reply:
+- [LEAD_SOURCE: meta] — if they mention Meta, Ads (FB/IG)
+- [LEAD_SOURCE: google] — if they mention Google, Search, Maps
+- [LEAD_SOURCE: website] — if they mention your website
+- [LEAD_SOURCE: instagram] — if they mention Instagram
+- [LEAD_SOURCE: facebook] — if they mention Facebook
+- [LEAD_SOURCE: twitter] — if they mention Twitter, X
+- [LEAD_SOURCE: referral] — if they mention a friend or family
+- [LEAD_SOURCE: other] — for anything else 
 `;
-
-
+        }
+      } catch (err) {
+        console.error("[LEAD_SOURCE] Error checking lead source:", err.message);
+      }
+    }
 
     const systemPrompt = `
+    
+${leadSourcePrompt}
 
 ${COMMON_BASE_PROMPT}
 
@@ -435,7 +513,7 @@ Day: ${currentDayFormatted}
 Time: ${currentTimeFormatted}
 
 UPLOADED KNOWLEDGE:
-${knowledgeContext}
+${combinedKnowledge}
 `;
 
     const response = await openai.chat.completions.create({
@@ -457,7 +535,8 @@ ${knowledgeContext}
     // Step 1: Clean any residual manual tags and extract metadata
     const processed = await processResponse(rawReply, {
       tenant_id,
-      userMessage: cleanMessage
+      userMessage: cleanMessage,
+      contact_id
     });
 
     const finalReply = processed.message;

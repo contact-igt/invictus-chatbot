@@ -21,6 +21,12 @@ export const TenantUsersTable = (sequelize, Sequelize) => {
         allowNull: false,
       },
 
+      title: {
+        type: Sequelize.ENUM("Mr", "Mrs", "Dr", "Ms"),
+        allowNull: true,
+        defaultValue: "Mr",
+      },
+
       username: {
         type: Sequelize.STRING,
         allowNull: false,
@@ -89,9 +95,7 @@ export const TenantUsersTable = (sequelize, Sequelize) => {
       updatedAt: {
         type: Sequelize.DATE,
         allowNull: false,
-        defaultValue: sequelize.literal(
-          "CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"
-        ),
+        defaultValue: sequelize.literal("CURRENT_TIMESTAMP"),
         field: "updated_at",
       },
     },

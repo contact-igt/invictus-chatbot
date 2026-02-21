@@ -14,7 +14,7 @@ import {
   getDeletedTenantListService,
   restoreTenantService,
 } from "./tenant.service.js";
-import { normalizeMobile } from "../../utils/helpers/normalizeMobile.js";
+import { normalizeMobile, cleanCountryCode } from "../../utils/helpers/normalizeMobile.js";
 
 import {
   sendTenantInvitationService,
@@ -64,7 +64,8 @@ export const createTenantController = async (req, res) => {
       "TT",
     );
 
-    const normalizedMobile = normalizeMobile(owner_country_code, owner_mobile);
+    const cleanedCC = cleanCountryCode(owner_country_code);
+    const normalizedMobile = normalizeMobile(cleanedCC, owner_mobile);
     const trimmedEmail = owner_email?.trim()?.toLowerCase();
 
     // Check for existing user in Tenants
@@ -82,7 +83,7 @@ export const createTenantController = async (req, res) => {
       company_name,
       owner_name,
       owner_email,
-      owner_country_code,
+      cleanedCC,
       normalizedMobile,
       type,
       subscription_start_date || null,
@@ -99,9 +100,10 @@ export const createTenantController = async (req, res) => {
     await createTenantUserService(
       tenant_user_id,
       tenant_id,
+      "Mr", // Default title as Mr
       owner_name,
       owner_email,
-      owner_country_code,
+      cleanedCC,
       normalizedMobile,
       profile || null,
       "tenant_admin",
@@ -182,13 +184,14 @@ export const updateTenantController = async (req, res) => {
       return res.status(404).json({ message: "Tenant details not found" });
     }
 
-    const normalizedMobile = owner_mobile ? normalizeMobile(owner_country_code, owner_mobile) : null;
+    const cleanedCC = owner_country_code ? cleanCountryCode(owner_country_code) : null;
+    const normalizedMobile = owner_mobile ? normalizeMobile(cleanedCC, owner_mobile) : null;
 
     await updateTenantService(
       company_name,
       owner_name,
       owner_email,
-      owner_country_code,
+      cleanedCC,
       normalizedMobile,
       type,
       id,
@@ -199,7 +202,7 @@ export const updateTenantController = async (req, res) => {
       owner_name,
       owner_email,
       normalizedMobile,
-      owner_country_code,
+      cleanedCC,
       tenant?.owner_email, // old email used as identifier
     );
 
@@ -360,10 +363,16 @@ export const resendTenantInvitationController = async (req, res) => {
 
 export const getTenantWebhookStatusController = async (req, res) => {
   try {
+    const loginUser = req.user;
     const { id } = req.params;
 
     if (!id) {
       return res.status(400).json({ message: "Tenant ID is required" });
+    }
+
+    // 🔒 Security Check: A tenant user can only check their OWN webhook status
+    if (loginUser.user_type === "tenant" && loginUser.tenant_id !== id) {
+      return res.status(403).json({ message: "Access denied: You can only check your own organization's status" });
     }
 
     const tenant = await findTenantByIdService(id);

@@ -540,39 +540,43 @@ export const syncAllPendingTemplatesService = async (
   tenant_id,
   whatsappAccount,
 ) => {
-  const [templates] = await db.sequelize.query(
-    `
+  try {
+    const [templates] = await db.sequelize.query(
+      `
     SELECT * FROM ${tableNames.WHATSAPP_TEMPLATE}
     WHERE tenant_id = ?
       AND status = 'pending'
       AND meta_template_id IS NOT NULL
       AND is_deleted = false
     `,
-    { replacements: [tenant_id] },
-  );
+      { replacements: [tenant_id] },
+    );
 
-  const results = [];
+    const results = [];
 
-  for (const template of templates) {
-    try {
-      const result = await syncWhatsappTemplateStatusService({
-        template,
-        whatsappAccount,
-      });
+    for (const template of templates) {
+      try {
+        const result = await syncWhatsappTemplateStatusService({
+          template,
+          whatsappAccount,
+        });
 
-      results.push({
-        template_id: template.template_id,
-        status: result.status,
-      });
-    } catch (err) {
-      results.push({
-        template_id: template.template_id,
-        error: err.message,
-      });
+        results.push({
+          template_id: template.template_id,
+          status: result.status,
+        });
+      } catch (err) {
+        results.push({
+          template_id: template.template_id,
+          error: err.message,
+        });
+      }
     }
-  }
 
-  return results;
+    return results;
+  } catch (err) {
+    throw err;
+  }
 };
 // ... existing code ...
 
@@ -635,40 +639,44 @@ export const getTemplateListService = async (tenant_id) => {
 };
 
 export const getTemplateByIdService = async (template_id, tenant_id) => {
-  // Join all related data
-  const [[template]] = await db.sequelize.query(
-    `SELECT * FROM ${tableNames.WHATSAPP_TEMPLATE} WHERE template_id = ? AND tenant_id = ? AND is_deleted = false`,
-    { replacements: [template_id, tenant_id] },
-  );
+  try {
+    // Join all related data
+    const [[template]] = await db.sequelize.query(
+      `SELECT * FROM ${tableNames.WHATSAPP_TEMPLATE} WHERE template_id = ? AND tenant_id = ? AND is_deleted = false`,
+      { replacements: [template_id, tenant_id] },
+    );
 
-  if (!template) return null;
+    if (!template) return null;
 
-  const [components] = await db.sequelize.query(
-    `SELECT * FROM ${tableNames.WHATSAPP_TEMPLATE_COMPONENTS} WHERE template_id = ?`,
-    { replacements: [template_id] },
-  );
+    const [components] = await db.sequelize.query(
+      `SELECT * FROM ${tableNames.WHATSAPP_TEMPLATE_COMPONENTS} WHERE template_id = ?`,
+      { replacements: [template_id] },
+    );
 
-  const [variables] = await db.sequelize.query(
-    `SELECT * FROM ${tableNames.WHATSAPP_TEMPLATE_VARIABLES} WHERE template_id = ? ORDER BY variable_key ASC`,
-    { replacements: [template_id] },
-  );
+    const [variables] = await db.sequelize.query(
+      `SELECT * FROM ${tableNames.WHATSAPP_TEMPLATE_VARIABLES} WHERE template_id = ? ORDER BY variable_key ASC`,
+      { replacements: [template_id] },
+    );
 
-  const [logs] = await db.sequelize.query(
-    `SELECT * FROM ${tableNames.WHATSAPP_TEMPLATE_SYNC_LOGS} WHERE template_id = ? ORDER BY created_at DESC LIMIT 20`,
-    { replacements: [template_id] },
-  );
+    const [logs] = await db.sequelize.query(
+      `SELECT * FROM ${tableNames.WHATSAPP_TEMPLATE_SYNC_LOGS} WHERE template_id = ? ORDER BY created_at DESC LIMIT 20`,
+      { replacements: [template_id] },
+    );
 
-  return {
-    ...template,
-    is_submitted: !!template.meta_template_id,
-    can_edit: ["draft", "rejected"].includes(template.status),
-    can_submit: template.status === "draft",
-    display_status:
-      template.status.charAt(0).toUpperCase() + template.status.slice(1),
-    components,
-    variables,
-    logs,
-  };
+    return {
+      ...template,
+      is_submitted: !!template.meta_template_id,
+      can_edit: ["draft", "rejected"].includes(template.status),
+      can_submit: template.status === "draft",
+      display_status:
+        template.status.charAt(0).toUpperCase() + template.status.slice(1),
+      components,
+      variables,
+      logs,
+    };
+  } catch (err) {
+    throw err;
+  }
 };
 
 export const pullTemplatesFromMetaService = async (tenant_id) => {
@@ -1179,36 +1187,44 @@ export const generateAiTemplateService = async ({
  * Retrieves a list of soft-deleted templates for a tenant.
  */
 export const getDeletedTemplateListService = async (tenant_id) => {
-  const deletedTemplates = await db.WhatsappTemplates.findAll({
-    where: { tenant_id, is_deleted: true },
-    order: [["deleted_at", "DESC"]],
-    include: [
-      {
-        model: db.WhatsappTemplateComponents,
-        as: "components",
-      },
-    ],
-  });
+  try {
+    const deletedTemplates = await db.WhatsappTemplates.findAll({
+      where: { tenant_id, is_deleted: true },
+      order: [["deleted_at", "DESC"]],
+      include: [
+        {
+          model: db.WhatsappTemplateComponents,
+          as: "components",
+        },
+      ],
+    });
 
-  return deletedTemplates;
+    return deletedTemplates;
+  } catch (err) {
+    throw err;
+  }
 };
 
 /**
  * Restore a soft-deleted template
  */
 export const restoreTemplateService = async (template_id, tenant_id) => {
-  const template = await db.WhatsappTemplates.findOne({
-    where: { template_id, tenant_id, is_deleted: true }
-  });
+  try {
+    const template = await db.WhatsappTemplates.findOne({
+      where: { template_id, tenant_id, is_deleted: true }
+    });
 
-  if (!template) {
-    throw new Error("Template not found or not deleted");
+    if (!template) {
+      throw new Error("Template not found or not deleted");
+    }
+
+    await template.update({
+      is_deleted: false,
+      deleted_at: null
+    });
+
+    return { message: "Template restored successfully" };
+  } catch (err) {
+    throw err;
   }
-
-  await template.update({
-    is_deleted: false,
-    deleted_at: null
-  });
-
-  return { message: "Template restored successfully" };
 };

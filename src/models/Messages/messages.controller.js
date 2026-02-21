@@ -314,3 +314,82 @@ export const sendTemplateMessageController = async (req, res) => {
     });
   }
 };
+
+// ─── Send Test Message (Fire & Forget, No Logging) ───
+export const sendTestMessageController = async (req, res) => {
+  const { phone, message_type, message, template_id, components } = req.body;
+  const tenant_id = req.user.tenant_id;
+
+  if (!tenant_id) {
+    return res.status(400).send({ message: "Invalid tenant context" });
+  }
+
+  if (!phone) {
+    return res.status(400).send({ message: "Phone number is required" });
+  }
+
+  if (!message_type || !["text", "template"].includes(message_type)) {
+    return res.status(400).send({
+      message: "message_type is required and must be 'text' or 'template'",
+    });
+  }
+
+  try {
+    // ── Text Message ──
+    if (message_type === "text") {
+      if (!message || !message.trim()) {
+        return res.status(400).send({ message: "Message text is required" });
+      }
+
+      await sendWhatsAppMessage(tenant_id, phone, message);
+
+      return res.status(200).send({
+        message: "Test text message sent successfully",
+      });
+    }
+
+    // ── Template Message ──
+    if (message_type === "template") {
+      if (!template_id) {
+        return res.status(400).send({ message: "template_id is required for template messages" });
+      }
+
+      const [[template]] = await db.sequelize.query(
+        `SELECT template_name, language, status FROM ${tableNames.WHATSAPP_TEMPLATE}
+         WHERE template_id = ? AND tenant_id = ? AND is_deleted = false`,
+        { replacements: [template_id, tenant_id] },
+      );
+
+      if (!template) {
+        return res.status(404).send({ message: "Template not found" });
+      }
+
+      if (template.status !== "approved") {
+        return res.status(400).send({
+          message: `Template is not approved (current status: ${template.status}). Only approved templates can be sent.`,
+        });
+      }
+
+      const metaResponse = await sendWhatsAppTemplate(
+        tenant_id,
+        phone,
+        template.template_name,
+        template.language,
+        components || [],
+      );
+
+      return res.status(200).send({
+        message: "Test template message sent successfully",
+        data: {
+          meta_message_id: metaResponse.meta_message_id,
+        },
+      });
+    }
+  } catch (err) {
+    const metaErrorMsg = err.message?.startsWith("Meta API Error:")
+      ? err.message
+      : `Failed to send test message: ${err.message}`;
+
+    return res.status(500).send({ message: metaErrorMsg });
+  }
+};

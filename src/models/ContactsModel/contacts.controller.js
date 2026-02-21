@@ -75,7 +75,7 @@ export const createContactController = async (req, res) => {
       profile_pic || null,
     );
 
-    return res.status(200).send({
+    return res.status(201).send({
       message: "Contact created successfully",
     });
   } catch (err) {

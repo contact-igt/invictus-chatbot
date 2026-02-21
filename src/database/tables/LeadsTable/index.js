@@ -14,7 +14,7 @@ export const LeadsTable = (sequelize, Sequelize) => {
         allowNull: false,
       },
 
-      
+
 
       contact_id: {
         type: Sequelize.STRING,
@@ -42,6 +42,11 @@ export const LeadsTable = (sequelize, Sequelize) => {
         type: Sequelize.ENUM("new", "old"),
         allowNull: false,
         defaultValue: "new",
+      },
+
+      ai_summary_created_at: {
+        type: Sequelize.DATE,
+        allowNull: true,
       },
 
       last_user_message_at: {
@@ -74,8 +79,22 @@ export const LeadsTable = (sequelize, Sequelize) => {
       },
 
       source: {
-        type: Sequelize.STRING,
-        allowNull: true,
+        type: Sequelize.ENUM(
+          "none",
+          "whatsapp",
+          "meta",
+          "website",
+          "google",
+          "referral",
+          "instagram",
+          "facebook",
+          "twitter",
+          "campaign",
+          "post",
+          "other"
+        ),
+        allowNull: false,
+        defaultValue: "none",
         field: "source",
       },
 
@@ -113,7 +132,7 @@ export const LeadsTable = (sequelize, Sequelize) => {
       updatedAt: {
         type: Sequelize.DATE,
         allowNull: false,
-        defaultValue: sequelize.literal("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"),
+        defaultValue: sequelize.literal("CURRENT_TIMESTAMP"),
         field: "updated_at",
       },
     },

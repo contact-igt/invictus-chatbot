@@ -24,4 +24,9 @@ export const tableNames = {
   SEQUENCES: "sequences",
   AI_ANALYSIS_LOGS: "ai_analysis_logs",
   OTP_VERIFICATIONS: "otp_verifications",
+  DOCTORS: "doctors",
+  DOCTOR_AVAILABILITY: "doctor_availability",
+  SPECIALIZATIONS: "specializations",
+  DOCTOR_SPECIALIZATIONS: "doctor_specializations",
+  APPOINTMENTS: "appointments",
 };

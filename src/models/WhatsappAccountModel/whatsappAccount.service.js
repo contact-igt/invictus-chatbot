@@ -81,6 +81,28 @@ export const createOrUpdateWhatsappAccountService = async (
   access_token,
 ) => {
   try {
+    // 1️⃣ Check if this exact account (whatsapp_number or phone_number_id) is already registered by ANY tenant
+    const [existingAccounts] = await db.sequelize.query(
+      `SELECT tenant_id, whatsapp_number, phone_number_id FROM ${tableNames.WHATSAPP_ACCOUNT} 
+       WHERE (whatsapp_number = ? OR phone_number_id = ?) AND is_deleted = false LIMIT 1`,
+      { replacements: [whatsapp_number, phone_number_id] },
+    );
+
+    if (existingAccounts.length > 0) {
+      const existing = existingAccounts[0];
+
+      if (existing.tenant_id === tenant_id) {
+        throw new Error(
+          "This WhatsApp account is already linked to your profile.",
+        );
+      } else {
+        throw new Error(
+          "This WhatsApp number or Phone ID is already registered by another user.",
+        );
+      }
+    }
+
+    // 2️⃣ If no duplicates, proceed with Insert or Update
     const Query = `
     INSERT INTO ${tableNames.WHATSAPP_ACCOUNT}
     (tenant_id, whatsapp_number, phone_number_id, waba_id, access_token, status)
@@ -122,6 +144,9 @@ export const getWhatsappAccountByTenantService = async (tenant_id) => {
 
 export const updateWhatsappAccountStatusService = async (id, status, error) => {
   try {
+    const formattedError =
+      typeof error === "object" ? JSON.stringify(error) : error;
+
     await db.sequelize.query(
       `
     UPDATE ${tableNames.WHATSAPP_ACCOUNT}
@@ -131,7 +156,7 @@ export const updateWhatsappAccountStatusService = async (id, status, error) => {
       {
         replacements: [
           status,
-          error,
+          formattedError,
           status === "verified",
           status === "verified" ? new Date() : null,
           id,

@@ -90,7 +90,7 @@ Router.get(
   authenticate,
   authorize({
     user_type: "management",
-    roles: ["super_admin"],
+    roles: ["super_admin", "platform_admin"],
   }),
   getDeletedManagementListController,
 );
