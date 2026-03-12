@@ -179,7 +179,7 @@ export const sendTenantPasswordSetSuccessEmailService = async (
     const loginUrl = `${process.env.FRONTEND_URL}/login`;
     const webhookUrl = `${process.env.BACKEND_URL}/api/whatsapp/webhook/${tenant_id}`;
     const metaVerifyToken = verify_token || process.env.META_VERIFY_TOKEN;
-
+    console.log("webhookUrl", webhookUrl)
     const templatePath = path.join(
       __dirname,
       "../../../public/html/passwordSetSuccess/index.html",

@@ -5,6 +5,7 @@ import {
   updateWhatsappAccountStatusService,
   softDeleteWhatsappAccountService,
   permanentDeleteWhatsappAccountService,
+  syncWabaMetaInfoService
 } from "./whatsappAccount.service.js";
 import { missingFieldsChecker } from "../../utils/helpers/missingFields.js";
 
@@ -272,6 +273,13 @@ export const activateWhatsappAccountController = async (req, res) => {
 
     await updateWhatsappAccountStatusService(account.id, newStatus, null);
 
+    // Sync quality & tier from Meta when account goes active
+    if (newStatus === "active") {
+      syncWabaMetaInfoService(tenant_id).catch(e =>
+        console.error("[WABA Sync] Post-activate sync failed:", e.message)
+      );
+    }
+
     return res.status(200).send({
       message: message,
       status: newStatus,
@@ -288,6 +296,16 @@ export const getWhatsappAccountController = async (req, res) => {
     const tenant_id = req.user.tenant_id;
 
     const account = await getWhatsappAccountByTenantService(tenant_id);
+
+    if (!account) {
+      return res.status(404).send({ message: "WhatsApp account not found" });
+    }
+
+    // Non-blocking: refresh quality & tier from Meta in background
+    // so next dashboard load always has up-to-date values
+    syncWabaMetaInfoService(tenant_id).catch(e =>
+      console.error("[WABA Sync] Background sync failed:", e.message)
+    );
 
     return res.status(200).send({
       data: account,

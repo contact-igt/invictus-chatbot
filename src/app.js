@@ -29,6 +29,7 @@ import AiAnalysisLogRouter from "./models/AiAnalysisLog/aiAnalysisLog.routes.js"
 import DoctorRouter from "./models/DoctorModel/doctor.routes.js";
 import SpecializationRouter from "./models/SpecializationModel/specialization.routes.js";
 import AppointmentRouter from "./models/AppointmentModel/appointment.routes.js";
+import DashboardRouter from "./models/DashboardModel/dashboard.routes.js";
 import { startAppointmentSchedulerService } from "./models/AppointmentModel/appointment.service.js";
 
 dns.setDefaultResultOrder("ipv4first");
@@ -76,7 +77,8 @@ app.use(
   AiAnalysisLogRouter,
   DoctorRouter,
   SpecializationRouter,
-  AppointmentRouter
+  AppointmentRouter,
+  DashboardRouter
 );
 
 
