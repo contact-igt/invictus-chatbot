@@ -87,7 +87,7 @@ app.get("/", (req, res) => {
 });
 
 
-await db.sequelize.sync({ alter: true });
+await db.sequelize.sync();
 console.log("DB connected");
 
 startLeadHeatDecayCronService();

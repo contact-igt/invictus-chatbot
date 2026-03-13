@@ -46,22 +46,36 @@ export const sendWhatsAppMessage = async (tenant_id, to, message) => {
 
     const { phone_number_id, access_token } = rows[0];
 
-    await axios.post(
-      `https://graph.facebook.com/v19.0/${phone_number_id}/messages`,
-      {
-        messaging_product: "whatsapp",
-        to,
-        type: "text",
-        text: { body: message.trim() },
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${access_token}`,
-          "Content-Type": "application/json",
+    const META_API_VERSION = process.env.META_API_VERSION || "v22.0";
+    console.log(`[SEND-MSG] Using Meta API version: ${META_API_VERSION}, phone_number_id: ${phone_number_id}, to: ${to}`);
+
+    try {
+      await axios.post(
+        `https://graph.facebook.com/${META_API_VERSION}/${phone_number_id}/messages`,
+        {
+          messaging_product: "whatsapp",
+          to,
+          type: "text",
+          text: { body: message.trim() },
         },
-        httpsAgent,
-      },
-    );
+        {
+          headers: {
+            Authorization: `Bearer ${access_token}`,
+            "Content-Type": "application/json",
+          },
+          httpsAgent,
+        },
+      );
+    } catch (axiosErr) {
+      if (axiosErr.response) {
+        console.error("[SEND-MSG] Meta API Error:", JSON.stringify(axiosErr.response.data, null, 2));
+        const metaMsg = axiosErr.response.data?.error?.message || axiosErr.message;
+        throw new Error(`Meta API Error: ${metaMsg}`);
+      }
+      throw axiosErr;
+    }
+
+    return { phone_number_id };
   } catch (err) {
     throw err;
   }
@@ -104,9 +118,12 @@ export const sendWhatsAppTemplate = async (
     },
   };
 
+  const META_API_VERSION = process.env.META_API_VERSION || "v22.0";
+  console.log(`[SEND-TEMPLATE] Using Meta API version: ${META_API_VERSION}, phone_number_id: ${phone_number_id}, to: ${to}`);
+
   try {
     const response = await axios.post(
-      `https://graph.facebook.com/v19.0/${phone_number_id}/messages`,
+      `https://graph.facebook.com/${META_API_VERSION}/${phone_number_id}/messages`,
       payload,
       {
         headers: {
@@ -146,8 +163,9 @@ export const sendTypingIndicator = async (tenant_id, phone_number_id, to) => {
 
     if (!rows.length) return;
 
+    const META_API_VERSION = process.env.META_API_VERSION || "v22.0";
     await axios.post(
-      `https://graph.facebook.com/v19.0/${phone_number_id}/messages`,
+      `https://graph.facebook.com/${META_API_VERSION}/${phone_number_id}/messages`,
       {
         messaging_product: "whatsapp",
         to,

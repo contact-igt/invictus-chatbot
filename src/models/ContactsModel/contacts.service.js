@@ -45,6 +45,16 @@ export const getContactByPhoneAndTenantIdService = async (tenant_id, phone) => {
       return activeResult[0];
     }
 
+    // fallback: match by last 10 digits if strict match fails
+    if (phone && phone.length >= 10) {
+      const suffix = phone.slice(-10);
+      const suffixQuery = `SELECT * FROM ${tableNames?.CONTACTS} WHERE tenant_id = ? AND phone LIKE ? AND is_deleted = false LIMIT 1`;
+      const [suffixResult] = await db.sequelize.query(suffixQuery, { replacements: [tenant_id, `%${suffix}`] });
+      if (suffixResult[0]) {
+        return suffixResult[0];
+      }
+    }
+
     // If no active contact, check for deleted contact
     const deletedQuery = `SELECT * FROM ${tableNames?.CONTACTS} WHERE tenant_id = ? AND phone = ? AND is_deleted = true LIMIT 1`;
     const [deletedResult] = await db.sequelize.query(deletedQuery, { replacements: Values });

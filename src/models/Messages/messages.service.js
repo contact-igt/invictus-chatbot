@@ -71,6 +71,7 @@ export const getChatListService = async (tenant_id) => {
     c.phone,
     c.name,
     m.message,
+    m.message_type,
     m.seen,
     m.created_at AS last_message_at
   FROM messages m
@@ -107,14 +108,24 @@ export const getChatListService = async (tenant_id) => {
 
 export const getChatByPhoneService = async (phone, tenant_id) => {
   try {
+    const contact = await getContactByPhoneAndTenantIdService(tenant_id, phone);
+
+    let whereClause = "phone = ? AND tenant_id = ?";
+    let replacements = [phone, tenant_id];
+
+    if (contact) {
+      whereClause = "contact_id = ? AND tenant_id = ?";
+      replacements = [contact.contact_id, tenant_id];
+    }
+
     const Query = `
-    SELECT contact_id , sender, message, seen , created_at
-    FROM  ${tableNames?.MESSAGES}
-    WHERE phone = ? AND tenant_id = ?
+    SELECT id, contact_id, sender, message, message_type, media_url, media_mime_type, seen, created_at
+    FROM ${tableNames?.MESSAGES}
+    WHERE ${whereClause}
     ORDER BY created_at ASC
   `;
     const [result] = await db.sequelize.query(Query, {
-      replacements: [phone, tenant_id],
+      replacements: replacements,
     });
     return result;
   } catch (err) {
@@ -123,10 +134,20 @@ export const getChatByPhoneService = async (phone, tenant_id) => {
 };
 
 export const markSeenMessageService = async (tenant_id, phone) => {
-  const Query = `UPDATE ${tableNames?.MESSAGES} SET seen = ? WHERE phone = ? AND seen = ? AND tenant_id = ?`;
   try {
+    const contact = await getContactByPhoneAndTenantIdService(tenant_id, phone);
+
+    let whereClause = "phone = ? AND tenant_id = ?";
+    let replacements = [true, phone, false, tenant_id];
+
+    if (contact) {
+      whereClause = "contact_id = ? AND tenant_id = ?";
+      replacements = [true, contact.contact_id, false, tenant_id];
+    }
+
+    const Query = `UPDATE ${tableNames?.MESSAGES} SET seen = ? WHERE ${whereClause} AND seen = ? AND tenant_id = ?`;
     const [result] = await db.sequelize.query(Query, {
-      replacements: [true, phone, false, tenant_id],
+      replacements: replacements,
     });
     return result;
   } catch (err) {
@@ -237,14 +258,22 @@ ${leadSourcePrompt}
 ${appointmentHistoryPrompt}
 `;
 
+    let msgWhere = "phone = ? AND tenant_id = ?";
+    let msgReplacements = [phone, tenant_id];
+
+    if (contact_id) {
+      msgWhere = "contact_id = ? AND tenant_id = ?";
+      msgReplacements = [contact_id, tenant_id];
+    }
+
     const [messages] = await db.sequelize.query(
       `
     SELECT sender, message
     FROM ${tableNames.MESSAGES}
-    WHERE phone = ? AND tenant_id = ?
+    WHERE ${msgWhere}
   ORDER BY created_at ASC
     `,
-      { replacements: [phone, tenant_id] },
+      { replacements: msgReplacements },
     );
 
     const chatHistory = messages

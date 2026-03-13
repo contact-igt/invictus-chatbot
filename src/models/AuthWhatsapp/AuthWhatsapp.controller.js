@@ -161,19 +161,7 @@ export const receiveMessage = async (req, res) => {
     if (ismessage?.length > 0) return res.sendStatus(200);
     await markMessageProcessed(tenant_id, phone_number_id, messageId, phone);
 
-    // 5. Emit Real-time Event to Frontend
-    const io = getIO();
-    io.to(`tenant-${tenant_id}`).emit("new-message", {
-      tenant_id,
-      phone,
-      phone_number_id,
-      name,
-      message: text,
-      sender: "user",
-      created_at: new Date(),
-    });
-
-    // 6. Manage Contact and LiveChat
+    // 5. Manage Contact and LiveChat
     let contactsaved = await getContactByPhoneAndTenantIdService(tenant_id, phone);
     if (!contactsaved) {
       await createContactService(tenant_id, phone, name ? name : null, null);
@@ -187,8 +175,8 @@ export const receiveMessage = async (req, res) => {
       await updateLiveChatTimestampService(tenant_id, contactsaved?.contact_id);
     }
 
-    // 7. Store User Message
-    await createUserMessageService(
+    // 6. Store User Message
+    const savedMsg = await createUserMessageService(
       tenant_id,
       contactsaved?.contact_id,
       phone_number_id,
@@ -197,8 +185,23 @@ export const receiveMessage = async (req, res) => {
       name,
       "user",
       null,
-      text
+      text,
+      type
     );
+
+    // 7. Emit Real-time Event to Frontend
+    const io = getIO();
+    io.to(`tenant-${tenant_id}`).emit("new-message", {
+      tenant_id,
+      phone,
+      id: savedMsg?.id,
+      contact_id: contactsaved?.contact_id,
+      phone_number_id,
+      name,
+      message: text,
+      sender: "user",
+      created_at: new Date(),
+    });
 
     // 8. Campaign Reply Tracking
     const cleanPhone = phone.replace(/\D/g, "");

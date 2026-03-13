@@ -44,7 +44,6 @@ export const updateLiveChatTimestampService = async (tenant_id, contact_id) => {
   }
 };
 
-
 export const startLiveChatCleanupService = () => {
   cron.schedule("*/1 * * * *", async () => {
     console.log("livechat cleaup started");
@@ -62,8 +61,6 @@ export const startLiveChatCleanupService = () => {
   });
 };
 
-
-
 export const getLiveChatListService = async (tenant_id) => {
   const dataQuery = `
     SELECT
@@ -71,8 +68,11 @@ export const getLiveChatListService = async (tenant_id) => {
       c.phone,
       c.name,
       m.message,
+      m.message_type,
       m.seen,
-      m.created_at AS last_message_at
+      m.created_at AS last_message_at,
+      lc.assigned_admin_id,
+      agent.username AS assigned_agent_name
     FROM messages m
     INNER JOIN (
       SELECT
@@ -89,6 +89,9 @@ export const getLiveChatListService = async (tenant_id) => {
     INNER JOIN ${tableNames.LIVECHAT} lc
       ON lc.contact_id = m.contact_id
      AND lc.tenant_id = ?
+    LEFT JOIN ${tableNames.TENANT_USERS} agent
+      ON agent.tenant_user_id = lc.assigned_admin_id
+     AND agent.is_deleted = false
     WHERE m.tenant_id = ?
     ORDER BY m.created_at DESC
   `;
@@ -141,6 +144,72 @@ export const getHistoryChatListService = async (tenant_id) => {
     return {
       chats: rows,
     };
+  } catch (err) {
+    throw err;
+  }
+};
+
+// ─── AGENT ASSIGNMENT SERVICES ───────────────────────────────────────────────
+
+/**
+ * Agent self-claims a live chat (sets assigned_admin_id to the caller's user id)
+ */
+export const claimLiveChatService = async (tenant_id, contact_id, agent_id) => {
+  const Query = `
+    UPDATE ${tableNames.LIVECHAT}
+    SET assigned_admin_id = ?
+    WHERE tenant_id = ? AND contact_id = ?
+  `;
+
+  try {
+    const [result] = await db.sequelize.query(Query, {
+      replacements: [agent_id, tenant_id, contact_id],
+    });
+    return result;
+  } catch (err) {
+    throw err;
+  }
+};
+
+/**
+ * Admin assigns a specific agent to a live chat
+ */
+export const assignAgentToLiveChatService = async (tenant_id, contact_id, agent_id) => {
+  const Query = `
+    UPDATE ${tableNames.LIVECHAT}
+    SET assigned_admin_id = ?
+    WHERE tenant_id = ? AND contact_id = ?
+  `;
+
+  try {
+    const [result] = await db.sequelize.query(Query, {
+      replacements: [agent_id, tenant_id, contact_id],
+    });
+    return result;
+  } catch (err) {
+    throw err;
+  }
+};
+
+/**
+ * Get all active users (agents/staff/doctors/admins) for the assign dropdown
+ */
+export const getAgentListService = async (tenant_id) => {
+  const Query = `
+    SELECT tenant_user_id, username, role, profile
+    FROM ${tableNames.TENANT_USERS}
+    WHERE tenant_id = ?
+      AND role IN ('agent', 'staff', 'doctor', 'tenant_admin')
+      AND is_deleted = false
+      AND status = 'active'
+    ORDER BY username ASC
+  `;
+
+  try {
+    const [rows] = await db.sequelize.query(Query, {
+      replacements: [tenant_id],
+    });
+    return rows;
   } catch (err) {
     throw err;
   }
