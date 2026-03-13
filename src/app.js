@@ -31,12 +31,22 @@ import SpecializationRouter from "./models/SpecializationModel/specialization.ro
 import AppointmentRouter from "./models/AppointmentModel/appointment.routes.js";
 import DashboardRouter from "./models/DashboardModel/dashboard.routes.js";
 import { startAppointmentSchedulerService } from "./models/AppointmentModel/appointment.service.js";
+import PlaygroundRouter from "./models/Playground/playground.routes.js";
 
 dns.setDefaultResultOrder("ipv4first");
 
 const app = express();
 
-app.use(cors());
+app.use(cors({
+  origin: "*",
+  methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "x-meta-token", "ngrok-skip-browser-warning"],
+  credentials: false,
+}));
+
+// Handle preflight requests explicitly
+app.options("*", cors());
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -78,6 +88,7 @@ app.use(
   DoctorRouter,
   SpecializationRouter,
   AppointmentRouter,
+  PlaygroundRouter,
   DashboardRouter
 );
 

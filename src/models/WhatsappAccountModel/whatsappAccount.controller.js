@@ -3,9 +3,10 @@ import {
   createOrUpdateWhatsappAccountService,
   getWhatsappAccountByTenantService,
   updateWhatsappAccountStatusService,
+  updateAccessTokenService,
   softDeleteWhatsappAccountService,
   permanentDeleteWhatsappAccountService,
-  syncWabaMetaInfoService
+  syncWabaMetaInfoService,
 } from "./whatsappAccount.service.js";
 import { missingFieldsChecker } from "../../utils/helpers/missingFields.js";
 
@@ -160,13 +161,15 @@ export const testWhatsappAccountController = async (req, res) => {
     await updateWhatsappAccountStatusService(account.id, "verified", null);
 
     return res.status(200).send({
-      message: "WhatsApp connection verified successfully! You can now activate your account.",
-      status: "verified"
+      message:
+        "WhatsApp connection verified successfully! You can now activate your account.",
+      status: "verified",
     });
   } catch (err) {
     const isNetworkError = err.code === "ENOTFOUND";
 
-    const metaError = err.response?.data?.error?.message || err.response?.data || err.message;
+    const metaError =
+      err.response?.data?.error?.message || err.response?.data || err.message;
 
     await updateWhatsappAccountStatusService(
       account.id,
@@ -238,6 +241,33 @@ export const testWhatsappAccountController = async (req, res) => {
 //   }
 // };
 
+export const updateAccessTokenController = async (req, res) => {
+  try {
+    const tenant_id = req.user.tenant_id;
+    const { access_token } = req.body;
+
+    if (!access_token || access_token.length < 50) {
+      return res
+        .status(400)
+        .send({ message: "A valid access token is required." });
+    }
+
+    const account = await getWhatsappAccountByTenantService(tenant_id);
+    if (!account) {
+      return res.status(404).send({ message: "WhatsApp account not found" });
+    }
+
+    await updateAccessTokenService(tenant_id, access_token);
+
+    return res.status(200).send({
+      message:
+        "Access token updated successfully. Please test connection to verify.",
+    });
+  } catch (err) {
+    return res.status(500).send({ message: err.message });
+  }
+};
+
 export const activateWhatsappAccountController = async (req, res) => {
   try {
     const tenant_id = req.user.tenant_id;
@@ -261,13 +291,14 @@ export const activateWhatsappAccountController = async (req, res) => {
       message = "WhatsApp account activated successfully";
     } else if (account.status === "pending" || account.status === "failed") {
       return res.status(400).send({
-        message: "Your WhatsApp account is not yet verified. Please perform the 'Test Connection' process before activating.",
-        status: account.status
+        message:
+          "Your WhatsApp account is not yet verified. Please perform the 'Test Connection' process before activating.",
+        status: account.status,
       });
     } else {
       return res.status(400).send({
         message: `Unable to activate account. Current status: ${account.status}. Please check your connection.`,
-        status: account.status
+        status: account.status,
       });
     }
 
@@ -275,8 +306,8 @@ export const activateWhatsappAccountController = async (req, res) => {
 
     // Sync quality & tier from Meta when account goes active
     if (newStatus === "active") {
-      syncWabaMetaInfoService(tenant_id).catch(e =>
-        console.error("[WABA Sync] Post-activate sync failed:", e.message)
+      syncWabaMetaInfoService(tenant_id).catch((e) =>
+        console.error("[WABA Sync] Post-activate sync failed:", e.message),
       );
     }
 
@@ -303,8 +334,8 @@ export const getWhatsappAccountController = async (req, res) => {
 
     // Non-blocking: refresh quality & tier from Meta in background
     // so next dashboard load always has up-to-date values
-    syncWabaMetaInfoService(tenant_id).catch(e =>
-      console.error("[WABA Sync] Background sync failed:", e.message)
+    syncWabaMetaInfoService(tenant_id).catch((e) =>
+      console.error("[WABA Sync] Background sync failed:", e.message),
     );
 
     return res.status(200).send({

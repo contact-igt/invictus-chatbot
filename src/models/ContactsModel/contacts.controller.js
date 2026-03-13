@@ -45,6 +45,20 @@ export const createContactController = async (req, res) => {
 
   phone = formatPhoneNumber(phone);
 
+  if (!phone) {
+    return res.status(400).json({
+      message: "Valid phone number with country code is required",
+    });
+  }
+
+  // Phone must include country code (> 10 digits)
+  if (phone.length <= 10) {
+    return res.status(400).json({
+      message:
+        "Country code is required. Phone number must include country code (e.g. 919876543210)",
+    });
+  }
+
   const requiredFields = {
     phone,
   };
@@ -144,7 +158,8 @@ export const updateContactController = async (req, res) => {
   // Security: Prevent phone number editing
   if (phone !== undefined) {
     return res.status(403).send({
-      message: "Phone number cannot be edited. Please delete and recreate the contact if needed."
+      message:
+        "Phone number cannot be edited. Please delete and recreate the contact if needed.",
     });
   }
 
@@ -155,7 +170,7 @@ export const updateContactController = async (req, res) => {
       name,
       email,
       profile_pic,
-      is_blocked
+      is_blocked,
     );
     return res.status(200).send({
       message: "Contact updated successfully",

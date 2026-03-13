@@ -28,14 +28,19 @@ import {
 import bcrypt from "bcrypt";
 import { generatePassword } from "../../utils/helpers/generatePassword.js";
 import crypto from "crypto";
-import { normalizeMobile, cleanCountryCode } from "../../utils/helpers/normalizeMobile.js";
+import {
+  normalizeMobile,
+  cleanCountryCode,
+} from "../../utils/helpers/normalizeMobile.js";
 
 export const getLoggedTenantUserController = async (req, res) => {
   try {
     const { unique_id } = req.user;
 
     if (!unique_id) {
-      return res.status(400).json({ message: "Tenant user ID not found in session" });
+      return res
+        .status(400)
+        .json({ message: "Tenant user ID not found in session" });
     }
 
     const user = await findTenantUserByIdService(unique_id);
@@ -63,9 +68,9 @@ export const getLoggedTenantUserController = async (req, res) => {
   }
 };
 
-
 export const createTenantUserController = async (req, res) => {
-  const { title, username, email, country_code, mobile, profile, role } = req.body;
+  const { title, username, email, country_code, mobile, profile, role } =
+    req.body;
 
   const tenant_id = req.user.tenant_id;
   const loginuser = req.user;
@@ -94,7 +99,8 @@ export const createTenantUserController = async (req, res) => {
 
   const trimmedEmail = email?.trim()?.toLowerCase();
 
-  const existingUserGlobally = await findTenantUserByEmailGloballyService(trimmedEmail);
+  const existingUserGlobally =
+    await findTenantUserByEmailGloballyService(trimmedEmail);
   if (existingUserGlobally) {
     return res.status(400).send({
       message: "This email is already registered with another organization.",
@@ -215,7 +221,9 @@ export const loginTenantUserController = async (req, res) => {
     }
 
     if (user.status !== "active") {
-      console.log(`[LOGIN-DEBUG] User ${trimmedEmail} is inactive. Status: ${user.status}`);
+      console.log(
+        `[LOGIN-DEBUG] User ${trimmedEmail} is inactive. Status: ${user.status}`,
+      );
       return res.status(403).send({
         message: "Account is inactive. Please contact administration.",
       });
@@ -288,7 +296,11 @@ export const getTenantUserByIdController = async (req, res) => {
 
     // 🔒 Security Check: Ensure the requested user belongs to the same tenant
     if (user.tenant_id !== loginUser.tenant_id) {
-      return res.status(403).send({ message: "Access denied: User belongs to a different organization" });
+      return res
+        .status(403)
+        .send({
+          message: "Access denied: User belongs to a different organization",
+        });
     }
 
     // Remove sensitive data
@@ -322,7 +334,11 @@ export const updateTenantUserByIdController = async (req, res) => {
 
     // 🔒 Security Check: Ensure the target user belongs to the same tenant
     if (user.tenant_id !== loginUser.tenant_id) {
-      return res.status(403).send({ message: "Access denied: User belongs to a different organization" });
+      return res
+        .status(403)
+        .send({
+          message: "Access denied: User belongs to a different organization",
+        });
     }
 
     // 🔒 Security Check: Only admins or the user themselves can update
@@ -331,12 +347,18 @@ export const updateTenantUserByIdController = async (req, res) => {
     }
 
     // role or status change only for tenant_admin
-    if (loginUser.role !== "tenant_admin" && (req.body.role || req.body.status)) {
+    if (
+      loginUser.role !== "tenant_admin" &&
+      (req.body.role || req.body.status)
+    ) {
       return res.status(403).send({
         message: "You do not have permission to change role or status",
       });
     }
 
+    if (req.body.country_code) {
+      req.body.country_code = cleanCountryCode(req.body.country_code);
+    }
     if (req.body.mobile && req.body.country_code) {
       req.body.mobile = normalizeMobile(req.body.country_code, req.body.mobile);
     }
@@ -364,7 +386,11 @@ export const softDeleteTenantUserController = async (req, res) => {
 
     // 🔒 Security Check: Ensure target user belongs to the same tenant
     if (user.tenant_id !== loginUser.tenant_id) {
-      return res.status(403).send({ message: "Access denied: User belongs to a different organization" });
+      return res
+        .status(403)
+        .send({
+          message: "Access denied: User belongs to a different organization",
+        });
     }
 
     if (loginUser.tenant_user_id === id) {
@@ -396,7 +422,11 @@ export const permanentDeleteTenantUserController = async (req, res) => {
 
     // 🔒 Security Check: Ensure target user belongs to the same tenant
     if (user.tenant_id !== loginUser.tenant_id) {
-      return res.status(403).send({ message: "Access denied: User belongs to a different organization" });
+      return res
+        .status(403)
+        .send({
+          message: "Access denied: User belongs to a different organization",
+        });
     }
 
     await permanentDeleteTenantUserService(id);
@@ -506,7 +536,10 @@ export const resetTenantPasswordController = async (req, res) => {
     const trimmedPassword = new_password?.trim();
 
     // Verify if OTP was verified recently
-    const isVerified = await checkOTPVerificationService(trimmedEmail, "tenant");
+    const isVerified = await checkOTPVerificationService(
+      trimmedEmail,
+      "tenant",
+    );
     if (!isVerified) {
       return res.status(400).send({
         message: "Please verify OTP first or OTP session expired",

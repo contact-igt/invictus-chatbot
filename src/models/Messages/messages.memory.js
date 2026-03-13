@@ -10,6 +10,7 @@ export const getConversationMemory = async (tenant_id, phone) => {
     FROM ${tableNames.MESSAGES}
     WHERE phone = ? AND tenant_id = ?
     ORDER BY created_at DESC
+    LIMIT 50
     `,
     {
       replacements: [phone, tenant_id],

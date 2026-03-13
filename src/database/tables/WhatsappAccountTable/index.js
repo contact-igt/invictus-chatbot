@@ -70,7 +70,7 @@ export const WhatsappAccountTable = (sequelize, Sequelize) => {
         type: Sequelize.ENUM("GREEN", "YELLOW", "RED"),
         allowNull: true,
         defaultValue: "GREEN",
-        comment: "Meta WABA quality rating"
+        comment: "Meta WABA quality rating",
       },
 
       // Deployment region (e.g. Global, India, US)
@@ -78,7 +78,7 @@ export const WhatsappAccountTable = (sequelize, Sequelize) => {
         type: Sequelize.STRING(50),
         allowNull: true,
         defaultValue: "Global",
-        comment: "Deployment region label"
+        comment: "Deployment region label",
       },
 
       // Messaging tier limit label (e.g. 1K MSG LIMIT, 10K MSG LIMIT)
@@ -86,7 +86,7 @@ export const WhatsappAccountTable = (sequelize, Sequelize) => {
         type: Sequelize.STRING(50),
         allowNull: true,
         defaultValue: "1K MSG LIMIT",
-        comment: "Meta WABA messaging tier"
+        comment: "Meta WABA messaging tier",
       },
 
       last_error: {
@@ -111,12 +111,10 @@ export const WhatsappAccountTable = (sequelize, Sequelize) => {
         type: Sequelize.BOOLEAN,
         allowNull: false,
         defaultValue: false,
-        field: "is_deleted",
       },
-      deletedAt: {
+      deleted_at: {
         type: Sequelize.DATE,
         allowNull: true,
-        field: "deleted_at",
       },
     },
     {

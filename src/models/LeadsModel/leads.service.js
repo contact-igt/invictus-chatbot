@@ -55,11 +55,13 @@ export const getLeadByLeadIdService = async (tenant_id, lead_id) => {
       cta.profile_pic,
       led.lead_stage,
       led.assigned_to,
+      agent.username AS assigned_agent_name,
       led.source,
       led.priority,
       led.internal_notes
     FROM ${tableNames?.LEADS} as led
     LEFT JOIN ${tableNames?.CONTACTS} as cta on (cta.contact_id = led.contact_id)
+    LEFT JOIN ${tableNames?.TENANT_USERS} as agent on (agent.tenant_user_id = led.assigned_to)
     WHERE led.tenant_id = ? AND led.lead_id = ? AND led.is_deleted = false
     LIMIT 1`;
 
@@ -139,11 +141,13 @@ export const getLeadListService = async (tenant_id) => {
     cta.profile_pic,
     led.lead_stage,
     led.assigned_to,
+    agent.username AS assigned_agent_name,
     led.source,
     led.priority,
     led.internal_notes
   FROM ${tableNames?.LEADS} as led
   LEFT JOIN ${tableNames?.CONTACTS} as cta on (cta.contact_id = led.contact_id)
+  LEFT JOIN ${tableNames?.TENANT_USERS} as agent on (agent.tenant_user_id = led.assigned_to)
   WHERE led.tenant_id = ? AND led.is_deleted = false
   ORDER BY led.last_user_message_at DESC`;
 
@@ -562,6 +566,18 @@ export const updateLeadStatusService = async (
     const [result] = await db.sequelize.query(Query, {
       replacements,
     });
+
+    // ─── SYNC WITH LIVECHAT ──────────────────────────────────────────────────
+    if (assigned_to !== null) {
+      const lead = await getLeadByLeadIdService(tenant_id, lead_id);
+      if (lead?.contact_id) {
+        const syncQuery = `UPDATE ${tableNames.LIVECHAT} SET assigned_admin_id = ? WHERE tenant_id = ? AND contact_id = ?`;
+        await db.sequelize.query(syncQuery, {
+          replacements: [assigned_to, tenant_id, lead.contact_id],
+        });
+      }
+    }
+
     return result;
   } catch (err) {
     throw err;
@@ -617,12 +633,14 @@ export const getDeletedLeadListService = async (tenant_id) => {
     cta.profile_pic,
     led.lead_stage,
     led.assigned_to,
+    agent.username AS assigned_agent_name,
     led.source,
     led.priority,
     led.internal_notes,
     led.deleted_at
   FROM ${tableNames?.LEADS} as led
   LEFT JOIN ${tableNames?.CONTACTS} as cta on (cta.contact_id = led.contact_id)
+  LEFT JOIN ${tableNames?.TENANT_USERS} as agent on (agent.tenant_user_id = led.assigned_to)
   WHERE led.tenant_id = ? AND led.is_deleted = true
   ORDER BY led.deleted_at DESC`;
 

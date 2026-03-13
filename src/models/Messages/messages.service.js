@@ -72,8 +72,16 @@ export const getChatListService = async (tenant_id) => {
     c.name,
     m.message,
     m.message_type,
-    m.seen,
-    m.created_at AS last_message_at
+    m.created_at AS last_message_at,
+    (
+      SELECT COUNT(*)
+      FROM ${tableNames.MESSAGES} um
+      WHERE um.contact_id = m.contact_id
+        AND um.tenant_id = ?
+        AND um.seen = false
+        AND um.sender = 'user'
+        AND um.is_deleted = false
+    ) AS unread_count
   FROM messages m
   INNER JOIN (
     SELECT
@@ -97,7 +105,7 @@ export const getChatListService = async (tenant_id) => {
 
   try {
     const [rows] = await db.sequelize.query(dataQuery, {
-      replacements: [tenant_id, tenant_id, tenant_id],
+      replacements: [tenant_id, tenant_id, tenant_id, tenant_id],
     });
 
     return rows;
@@ -119,7 +127,7 @@ export const getChatByPhoneService = async (phone, tenant_id) => {
     }
 
     const Query = `
-    SELECT id, contact_id, sender, message, message_type, media_url, media_mime_type, seen, created_at
+    SELECT id, contact_id, sender, message, message_type, media_url, media_mime_type, seen, status, created_at
     FROM ${tableNames?.MESSAGES}
     WHERE ${whereClause}
     ORDER BY created_at ASC
@@ -137,15 +145,15 @@ export const markSeenMessageService = async (tenant_id, phone) => {
   try {
     const contact = await getContactByPhoneAndTenantIdService(tenant_id, phone);
 
-    let whereClause = "phone = ? AND tenant_id = ?";
-    let replacements = [true, phone, false, tenant_id];
+    let whereClause = "phone = ?";
+    let replacements = [phone, tenant_id];
 
     if (contact) {
-      whereClause = "contact_id = ? AND tenant_id = ?";
-      replacements = [true, contact.contact_id, false, tenant_id];
+      whereClause = "contact_id = ?";
+      replacements = [contact.contact_id, tenant_id];
     }
 
-    const Query = `UPDATE ${tableNames?.MESSAGES} SET seen = ? WHERE ${whereClause} AND seen = ? AND tenant_id = ?`;
+    const Query = `UPDATE ${tableNames?.MESSAGES} SET seen = true WHERE ${whereClause} AND tenant_id = ? AND seen = false AND sender = 'user'`;
     const [result] = await db.sequelize.query(Query, {
       replacements: replacements,
     });
@@ -162,7 +170,10 @@ export const suggestReplyService = async (tenant_id, phone) => {
     let contact_id = null;
 
     try {
-      const contact = await getContactByPhoneAndTenantIdService(tenant_id, phone);
+      const contact = await getContactByPhoneAndTenantIdService(
+        tenant_id,
+        phone,
+      );
       if (contact) {
         contact_id = contact.contact_id;
 
@@ -197,7 +208,10 @@ Rules:
         }
 
         // 2. Appointment History Detection
-        const lastAppointment = await getLastAppointmentService(tenant_id, contact_id);
+        const lastAppointment = await getLastAppointmentService(
+          tenant_id,
+          contact_id,
+        );
         if (lastAppointment) {
           const status = lastAppointment.status;
           const date = lastAppointment.appointment_date;
@@ -214,10 +228,10 @@ Latest Appointment Info:
 - Time: ${time}
 
 Guidelines for your response:
-${status === "Completed" ? '- They had a good experience last time. Acknowledge their return and ask if they need a new booking.' : ""}
-${status === "Noshow" ? '- They missed their last appointment. Be polite but note that they missed it if they try to book again.' : ""}
+${status === "Completed" ? "- They had a good experience last time. Acknowledge their return and ask if they need a new booking." : ""}
+${status === "Noshow" ? "- They missed their last appointment. Be polite but note that they missed it if they try to book again." : ""}
 ${status === "Confirmed" ? `- They already have an upcoming appointment on ${date} at ${time}. If they try to book again, remind them of this existing one.` : ""}
-${status === "Cancelled" ? '- They cancelled their previous booking. Ask if they want to reschedule now.' : ""}
+${status === "Cancelled" ? "- They cancelled their previous booking. Ask if they want to reschedule now." : ""}
 `;
         } else {
           appointmentHistoryPrompt = `
@@ -230,7 +244,10 @@ Naturally guide them towards booking if they show interest.
         }
       }
     } catch (err) {
-      console.error("[APPOINTMENT-HISTORY] Error in suggestReply initial lookup:", err.message);
+      console.error(
+        "[APPOINTMENT-HISTORY] Error in suggestReply initial lookup:",
+        err.message,
+      );
     }
 
     const ADMIN_SYSTEM_PROMPT = `
@@ -335,20 +352,29 @@ Write a professional reply to the last customer message.
       userMessage: lastUserMessage,
       contact_id,
       phone,
-      name: contact?.name
+      name: contact?.name,
     });
 
     const cleanReply = processed.message;
 
     // Step 2: Dual-AI Classification (Standardized single logging)
     try {
-      const classification = await classifyResponse(lastUserMessage, cleanReply);
+      const classification = await classifyResponse(
+        lastUserMessage,
+        cleanReply,
+      );
 
       // If the primary AI explicitly tagged missing knowledge or out of scope, use that as a "hint"
-      if (processed.tagDetected === "MISSING_KNOWLEDGE" && classification.category !== "MISSING_KNOWLEDGE") {
+      if (
+        processed.tagDetected === "MISSING_KNOWLEDGE" &&
+        classification.category !== "MISSING_KNOWLEDGE"
+      ) {
         classification.category = "MISSING_KNOWLEDGE";
         classification.reason = processed.tagPayload || classification.reason;
-      } else if (processed.tagDetected === "OUT_OF_SCOPE" && classification.category !== "OUT_OF_SCOPE") {
+      } else if (
+        processed.tagDetected === "OUT_OF_SCOPE" &&
+        classification.category !== "OUT_OF_SCOPE"
+      ) {
         classification.category = "OUT_OF_SCOPE";
         classification.reason = processed.tagPayload || classification.reason;
       }

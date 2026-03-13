@@ -2,7 +2,11 @@ import { tableNames } from "../../database/tableName.js";
 import db from "../../database/index.js";
 import cron from "node-cron";
 
-export const createLiveChatService = async (tenant_id, contact_id, status = "active") => {
+export const createLiveChatService = async (
+  tenant_id,
+  contact_id,
+  status = "active",
+) => {
   const Query = ` INSERT INTO ${tableNames?.LIVECHAT} (tenant_id, contact_id, status, last_message_at) VALUES (?,?,?,NOW())`;
 
   const Values = [tenant_id, contact_id, status];
@@ -69,10 +73,18 @@ export const getLiveChatListService = async (tenant_id) => {
       c.name,
       m.message,
       m.message_type,
-      m.seen,
       m.created_at AS last_message_at,
       lc.assigned_admin_id,
-      agent.username AS assigned_agent_name
+      agent.username AS assigned_agent_name,
+      (
+        SELECT COUNT(*)
+        FROM ${tableNames.MESSAGES} um
+        WHERE um.contact_id = m.contact_id
+          AND um.tenant_id = ?
+          AND um.seen = false
+          AND um.sender = 'user'
+          AND um.is_deleted = false
+      ) AS unread_count
     FROM messages m
     INNER JOIN (
       SELECT
@@ -98,7 +110,7 @@ export const getLiveChatListService = async (tenant_id) => {
 
   try {
     const [rows] = await db.sequelize.query(dataQuery, {
-      replacements: [tenant_id, tenant_id, tenant_id],
+      replacements: [tenant_id, tenant_id, tenant_id, tenant_id],
     });
 
     return rows;
@@ -114,7 +126,16 @@ export const getHistoryChatListService = async (tenant_id) => {
       c.phone,
       c.name,
       m.message,
-      m.created_at AS last_message_at
+      m.created_at AS last_message_at,
+      (
+        SELECT COUNT(*)
+        FROM ${tableNames.MESSAGES} um
+        WHERE um.contact_id = c.contact_id
+          AND um.tenant_id = ?
+          AND um.seen = false
+          AND um.sender = 'user'
+          AND um.is_deleted = false
+      ) AS unread_count
     FROM messages m
     INNER JOIN (
       SELECT
@@ -138,7 +159,7 @@ export const getHistoryChatListService = async (tenant_id) => {
 
   try {
     const [rows] = await db.sequelize.query(dataQuery, {
-      replacements: [tenant_id, tenant_id, tenant_id],
+      replacements: [tenant_id, tenant_id, tenant_id, tenant_id],
     });
 
     return {
@@ -165,6 +186,13 @@ export const claimLiveChatService = async (tenant_id, contact_id, agent_id) => {
     const [result] = await db.sequelize.query(Query, {
       replacements: [agent_id, tenant_id, contact_id],
     });
+
+    // ─── SYNC WITH LEADS ─────────────────────────────────────────────────────
+    const syncQuery = `UPDATE ${tableNames.LEADS} SET assigned_to = ? WHERE tenant_id = ? AND contact_id = ? AND is_deleted = false`;
+    await db.sequelize.query(syncQuery, {
+      replacements: [agent_id, tenant_id, contact_id],
+    });
+
     return result;
   } catch (err) {
     throw err;
@@ -174,7 +202,11 @@ export const claimLiveChatService = async (tenant_id, contact_id, agent_id) => {
 /**
  * Admin assigns a specific agent to a live chat
  */
-export const assignAgentToLiveChatService = async (tenant_id, contact_id, agent_id) => {
+export const assignAgentToLiveChatService = async (
+  tenant_id,
+  contact_id,
+  agent_id,
+) => {
   const Query = `
     UPDATE ${tableNames.LIVECHAT}
     SET assigned_admin_id = ?
@@ -185,6 +217,13 @@ export const assignAgentToLiveChatService = async (tenant_id, contact_id, agent_
     const [result] = await db.sequelize.query(Query, {
       replacements: [agent_id, tenant_id, contact_id],
     });
+
+    // ─── SYNC WITH LEADS ─────────────────────────────────────────────────────
+    const syncQuery = `UPDATE ${tableNames.LEADS} SET assigned_to = ? WHERE tenant_id = ? AND contact_id = ? AND is_deleted = false`;
+    await db.sequelize.query(syncQuery, {
+      replacements: [agent_id, tenant_id, contact_id],
+    });
+
     return result;
   } catch (err) {
     throw err;

@@ -51,7 +51,17 @@ export const MessagesTable = (sequelize, Sequelize) => {
       },
 
       message_type: {
-        type: Sequelize.ENUM("text", "image", "video", "document", "audio", "sticker", "location", "contact", "template"),
+        type: Sequelize.ENUM(
+          "text",
+          "image",
+          "video",
+          "document",
+          "audio",
+          "sticker",
+          "location",
+          "contact",
+          "template",
+        ),
         allowNull: false,
         defaultValue: "text",
       },
@@ -82,6 +92,17 @@ export const MessagesTable = (sequelize, Sequelize) => {
       seen: {
         type: Sequelize.BOOLEAN,
         defaultValue: false,
+      },
+
+      is_deleted: {
+        type: Sequelize.BOOLEAN,
+        allowNull: false,
+        defaultValue: false,
+      },
+
+      deleted_at: {
+        type: Sequelize.DATE,
+        allowNull: true,
       },
 
       createdAt: {
@@ -120,7 +141,11 @@ export const MessagesTable = (sequelize, Sequelize) => {
           name: "idx_msg_created_at",
           fields: ["created_at"],
         },
+        {
+          name: "idx_msg_deleted",
+          fields: ["is_deleted"],
+        },
       ],
-    }
+    },
   );
 };

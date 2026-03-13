@@ -14,8 +14,6 @@ export const LeadsTable = (sequelize, Sequelize) => {
         allowNull: false,
       },
 
-
-
       contact_id: {
         type: Sequelize.STRING,
         allowNull: false,
@@ -66,7 +64,14 @@ export const LeadsTable = (sequelize, Sequelize) => {
       },
 
       lead_stage: {
-        type: Sequelize.ENUM("New", "Contacted", "Qualified", "Negotiation", "Lost", "Won"),
+        type: Sequelize.ENUM(
+          "New",
+          "Contacted",
+          "Qualified",
+          "Negotiation",
+          "Lost",
+          "Won",
+        ),
         allowNull: false,
         defaultValue: "New",
         field: "lead_stage",
@@ -91,7 +96,7 @@ export const LeadsTable = (sequelize, Sequelize) => {
           "twitter",
           "campaign",
           "post",
-          "other"
+          "other",
         ),
         allowNull: false,
         defaultValue: "none",
@@ -155,9 +160,8 @@ export const LeadsTable = (sequelize, Sequelize) => {
           fields: ["tenant_id", "heat_state", "is_deleted"],
         },
         {
-          name: "unique_lead_contact_active",
-          unique: true,
-          fields: ["contact_id", "is_deleted"],
+          name: "idx_lead_contact_active",
+          fields: ["tenant_id", "contact_id", "is_deleted"],
         },
         {
           name: "idx_lead_last_message",
@@ -168,6 +172,6 @@ export const LeadsTable = (sequelize, Sequelize) => {
           fields: ["is_deleted"],
         },
       ],
-    }
+    },
   );
 };

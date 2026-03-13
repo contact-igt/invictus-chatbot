@@ -4,6 +4,7 @@ import {
   whatsappOAuthCallbackController,
   testWhatsappAccountController,
   activateWhatsappAccountController,
+  updateAccessTokenController,
   getWhatsappAccountController,
   softDeleteWhatsappAccountController,
   permanentDeleteWhatsappAccountController,
@@ -40,6 +41,13 @@ router.post(
   authenticate,
   authorize({ user_type: "tenant", roles: ["tenant_admin"] }),
   testWhatsappAccountController,
+);
+
+router.put(
+  "/whatsapp-account/token",
+  authenticate,
+  authorize({ user_type: "tenant", roles: ["tenant_admin"] }),
+  updateAccessTokenController,
 );
 
 router.post(

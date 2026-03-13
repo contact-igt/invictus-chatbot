@@ -56,7 +56,13 @@ export const WhatsappTemplateComponentTable = (sequelize, Sequelize) => {
       underscored: true,
       indexes: [
         {
+          name: "idx_component_template",
           fields: ["template_id"],
+        },
+        {
+          name: "unique_template_component_type",
+          unique: true,
+          fields: ["template_id", "component_type"],
         },
       ],
     },

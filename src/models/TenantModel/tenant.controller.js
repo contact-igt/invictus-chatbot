@@ -1,3 +1,4 @@
+
 import { tableNames } from "../../database/tableName.js";
 import { generateReadableIdFromLast } from "../../utils/helpers/generateReadableIdFromLast.js";
 import { missingFieldsChecker } from "../../utils/helpers/missingFields.js";
@@ -14,11 +15,12 @@ import {
   getDeletedTenantListService,
   restoreTenantService,
 } from "./tenant.service.js";
-import { normalizeMobile, cleanCountryCode } from "../../utils/helpers/normalizeMobile.js";
-
 import {
-  sendTenantInvitationService,
-} from "../TenantInvitationModel/tenantinvitation.service.js";
+  normalizeMobile,
+  cleanCountryCode,
+} from "../../utils/helpers/normalizeMobile.js";
+
+import { sendTenantInvitationService } from "../TenantInvitationModel/tenantinvitation.service.js";
 import {
   createTenantUserService,
   findTenantUserByIdService,
@@ -69,7 +71,10 @@ export const createTenantController = async (req, res) => {
     const trimmedEmail = owner_email?.trim()?.toLowerCase();
 
     // Check for existing user in Tenants
-    const existingTu = await findTenantUserByEmailOrMobileGloballyService(trimmedEmail, normalizedMobile);
+    const existingTu = await findTenantUserByEmailOrMobileGloballyService(
+      trimmedEmail,
+      normalizedMobile,
+    );
 
     if (existingTu) {
       const field = existingTu.email === trimmedEmail ? "Email" : "Mobile";
@@ -184,8 +189,12 @@ export const updateTenantController = async (req, res) => {
       return res.status(404).json({ message: "Tenant details not found" });
     }
 
-    const cleanedCC = owner_country_code ? cleanCountryCode(owner_country_code) : null;
-    const normalizedMobile = owner_mobile ? normalizeMobile(cleanedCC, owner_mobile) : null;
+    const cleanedCC = owner_country_code
+      ? cleanCountryCode(owner_country_code)
+      : null;
+    const normalizedMobile = owner_mobile
+      ? normalizeMobile(cleanedCC, owner_mobile)
+      : null;
 
     await updateTenantService(
       company_name,
@@ -211,7 +220,9 @@ export const updateTenantController = async (req, res) => {
     });
   } catch (err) {
     if (err.original?.code === "ER_DUP_ENTRY") {
-      return res.status(400).json({ message: "Email or mobile already exists" });
+      return res
+        .status(400)
+        .json({ message: "Email or mobile already exists" });
     }
 
     return res.status(500).json({
@@ -372,7 +383,12 @@ export const getTenantWebhookStatusController = async (req, res) => {
 
     // 🔒 Security Check: A tenant user can only check their OWN webhook status
     if (loginUser.user_type === "tenant" && loginUser.tenant_id !== id) {
-      return res.status(403).json({ message: "Access denied: You can only check your own organization's status" });
+      return res
+        .status(403)
+        .json({
+          message:
+            "Access denied: You can only check your own organization's status",
+        });
     }
 
     const tenant = await findTenantByIdService(id);
@@ -389,5 +405,37 @@ export const getTenantWebhookStatusController = async (req, res) => {
     });
   } catch (err) {
     return res.status(500).json({ error: err.message });
+  }
+};
+
+
+
+export const getTenantInvitationListController = async (req, res) => {
+  try {
+    const query = `
+      SELECT t.tenant_id, t.company_name, t.owner_name, t.owner_email, ti.status as invitation_status, ti.invited_at
+      FROM ${tableNames.TENANTS} t
+      LEFT JOIN ${tableNames.TENANT_INVITATIONS} ti ON t.tenant_id = ti.tenant_id AND t.owner_email = ti.email
+      WHERE ti.status IN ('pending', 'accepted', 'completed', 'expired', 'revoked') AND t.is_deleted = 0
+      ORDER BY ti.invited_at DESC`;
+    const [rows] = await req.db.sequelize.query(query);
+    return res.status(200).json({ data: rows });
+  } catch (err) {
+    return res.status(500).json({ message: err.message });
+  }
+};
+
+// Controller for onboarded tenant list
+export const getOnboardedTenantListController = async (req, res) => {
+  try {
+    const query = `
+      SELECT t.tenant_id, t.company_name, t.owner_name, t.owner_email, t.status as tenant_status, t.subscription_start_date, t.subscription_end_date
+      FROM ${tableNames.TENANTS} t
+      WHERE t.status IN ('active', 'trial', 'expired') AND t.is_deleted = 0
+      ORDER BY t.created_at DESC`;
+    const [rows] = await req.db.sequelize.query(query);
+    return res.status(200).json({ data: rows });
+  } catch (err) {
+    return res.status(500).json({ message: err.message });
   }
 };

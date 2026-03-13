@@ -84,23 +84,32 @@ export const sendAdminMessage = async (req, res) => {
 
     if (!activeChat) {
       return res.status(403).send({
-        message: "24-hour window expired. Please send a template message to initiate chat.",
+        message:
+          "24-hour window expired. Please send a template message to initiate chat.",
       });
     }
 
     const formattedPhone = formatPhoneNumber(phone);
-    const msgResponse = await sendWhatsAppMessage(tenant_id, formattedPhone, message);
+    const msgResponse = await sendWhatsAppMessage(
+      tenant_id,
+      formattedPhone,
+      message,
+    );
 
     const savedMsg = await createUserMessageService(
       tenant_id,
       contact_id,
       msgResponse.phone_number_id,
       formattedPhone,
-      null,
+      msgResponse.wamid,
       name,
       "admin",
       null,
       message,
+      "text",
+      null,
+      null,
+      "sent",
     );
 
     await updateAdminLeadService(tenant_id, contact_id);
@@ -219,8 +228,10 @@ export const sendTemplateMessageController = async (req, res) => {
     );
 
     if (variables.length > 0) {
-      const bodyParams = components?.find((c) => c.type === "body")?.parameters || [];
-      const headerParams = components?.find((c) => c.type === "header")?.parameters || [];
+      const bodyParams =
+        components?.find((c) => c.type === "body")?.parameters || [];
+      const headerParams =
+        components?.find((c) => c.type === "header")?.parameters || [];
       const totalParamsSent = bodyParams.length + headerParams.length;
 
       if (totalParamsSent < variables.length) {
@@ -235,10 +246,14 @@ export const sendTemplateMessageController = async (req, res) => {
     // 1. Handle Header
     if (headerComponent && headerComponent.text_content) {
       let headerText = headerComponent.text_content;
-      const headerParams = components?.find((c) => c.type === "header")?.parameters || [];
+      const headerParams =
+        components?.find((c) => c.type === "header")?.parameters || [];
       headerParams.forEach((param, index) => {
         if (param.type === "text") {
-          headerText = headerText.replace(new RegExp(`\\{\\{${index + 1}\\}\\}`, "g"), param.text);
+          headerText = headerText.replace(
+            new RegExp(`\\{\\{${index + 1}\\}\\}`, "g"),
+            param.text,
+          );
         }
       });
       messageContent += headerText + "\n";
@@ -247,10 +262,14 @@ export const sendTemplateMessageController = async (req, res) => {
     // 2. Handle Body
     if (bodyComponent && bodyComponent.text_content) {
       let bodyText = bodyComponent.text_content;
-      const bodyParams = components?.find((c) => c.type === "body")?.parameters || [];
+      const bodyParams =
+        components?.find((c) => c.type === "body")?.parameters || [];
       bodyParams.forEach((param, index) => {
         if (param.type === "text") {
-          bodyText = bodyText.replace(new RegExp(`\\{\\{${index + 1}\\}\\}`, "g"), param.text);
+          bodyText = bodyText.replace(
+            new RegExp(`\\{\\{${index + 1}\\}\\}`, "g"),
+            param.text,
+          );
         }
       });
       messageContent += bodyText;
@@ -288,7 +307,7 @@ export const sendTemplateMessageController = async (req, res) => {
       "template",
       null,
       null,
-      "sent"
+      "sent",
     );
 
     await updateAdminLeadService(tenant_id, contact_id);
@@ -312,7 +331,7 @@ export const sendTemplateMessageController = async (req, res) => {
       message: messageContent,
       sender: "admin",
       message_type: "template",
-      created_at: new Date()
+      created_at: new Date(),
     });
 
     io.to(`tenant-${tenant_id}`).emit("session-activated", {
@@ -359,26 +378,60 @@ export const sendTestMessageController = async (req, res) => {
         return res.status(400).send({ message: "Message text is required" });
       }
 
-      const msgResponse = await sendWhatsAppMessage(tenant_id, formattedPhone, message);
+      const msgResponse = await sendWhatsAppMessage(
+        tenant_id,
+        formattedPhone,
+        message,
+      );
 
       // Contact & Chat management
-      let contact = await getContactByPhoneAndTenantIdService(tenant_id, formattedPhone);
+      let contact = await getContactByPhoneAndTenantIdService(
+        tenant_id,
+        formattedPhone,
+      );
       if (!contact) {
-        await createContactService(tenant_id, formattedPhone, formattedPhone, null);
-        contact = await getContactByPhoneAndTenantIdService(tenant_id, formattedPhone);
+        await createContactService(
+          tenant_id,
+          formattedPhone,
+          formattedPhone,
+          null,
+        );
+        contact = await getContactByPhoneAndTenantIdService(
+          tenant_id,
+          formattedPhone,
+        );
       }
-      
-      const livelist = await getLivechatByIdService(tenant_id, contact?.contact_id);
-      if (!livelist) await createLiveChatService(tenant_id, contact?.contact_id);
+
+      const livelist = await getLivechatByIdService(
+        tenant_id,
+        contact?.contact_id,
+      );
+      if (!livelist)
+        await createLiveChatService(tenant_id, contact?.contact_id);
       else await updateLiveChatTimestampService(tenant_id, contact?.contact_id);
 
       const savedMsg = await createUserMessageService(
-        tenant_id, contact?.contact_id, msgResponse.phone_number_id, formattedPhone, null, contact?.name || formattedPhone, "admin", null, message
+        tenant_id,
+        contact?.contact_id,
+        msgResponse.phone_number_id,
+        formattedPhone,
+        null,
+        contact?.name || formattedPhone,
+        "admin",
+        null,
+        message,
       );
 
       const io = getIO();
       io.to(`tenant-${tenant_id}`).emit("new-message", {
-        tenant_id, phone: formattedPhone, id: savedMsg?.id, contact_id: contact?.contact_id, name: contact?.name || formattedPhone, message, sender: "admin", created_at: new Date()
+        tenant_id,
+        phone: formattedPhone,
+        id: savedMsg?.id,
+        contact_id: contact?.contact_id,
+        name: contact?.name || formattedPhone,
+        message,
+        sender: "admin",
+        created_at: new Date(),
       });
 
       return res.status(200).send({
@@ -389,7 +442,9 @@ export const sendTestMessageController = async (req, res) => {
     // ── Template Message ──
     if (message_type === "template") {
       if (!template_id) {
-        return res.status(400).send({ message: "template_id is required for template messages" });
+        return res
+          .status(400)
+          .send({ message: "template_id is required for template messages" });
       }
 
       const [[template]] = await db.sequelize.query(
@@ -417,24 +472,59 @@ export const sendTestMessageController = async (req, res) => {
       );
 
       // Contact & Chat management
-      let contact = await getContactByPhoneAndTenantIdService(tenant_id, formattedPhone);
+      let contact = await getContactByPhoneAndTenantIdService(
+        tenant_id,
+        formattedPhone,
+      );
       if (!contact) {
-        await createContactService(tenant_id, formattedPhone, formattedPhone, null);
-        contact = await getContactByPhoneAndTenantIdService(tenant_id, formattedPhone);
+        await createContactService(
+          tenant_id,
+          formattedPhone,
+          formattedPhone,
+          null,
+        );
+        contact = await getContactByPhoneAndTenantIdService(
+          tenant_id,
+          formattedPhone,
+        );
       }
-      
-      const livelist = await getLivechatByIdService(tenant_id, contact?.contact_id);
-      if (!livelist) await createLiveChatService(tenant_id, contact?.contact_id);
+
+      const livelist = await getLivechatByIdService(
+        tenant_id,
+        contact?.contact_id,
+      );
+      if (!livelist)
+        await createLiveChatService(tenant_id, contact?.contact_id);
       else await updateLiveChatTimestampService(tenant_id, contact?.contact_id);
 
       const messageContent = `Template: ${template.template_name} (Test)`;
       const savedMsg = await createUserMessageService(
-        tenant_id, contact?.contact_id, metaResponse.phone_number_id, formattedPhone, metaResponse.meta_message_id, contact?.name || formattedPhone, "admin", null, messageContent, "template", null, null, "sent"
+        tenant_id,
+        contact?.contact_id,
+        metaResponse.phone_number_id,
+        formattedPhone,
+        metaResponse.meta_message_id,
+        contact?.name || formattedPhone,
+        "admin",
+        null,
+        messageContent,
+        "template",
+        null,
+        null,
+        "sent",
       );
 
       const io = getIO();
       io.to(`tenant-${tenant_id}`).emit("new-message", {
-        tenant_id, phone: formattedPhone, id: savedMsg?.id, contact_id: contact?.contact_id, name: contact?.name || formattedPhone, message: messageContent, sender: "admin", message_type: "template", created_at: new Date()
+        tenant_id,
+        phone: formattedPhone,
+        id: savedMsg?.id,
+        contact_id: contact?.contact_id,
+        name: contact?.name || formattedPhone,
+        message: messageContent,
+        sender: "admin",
+        message_type: "template",
+        created_at: new Date(),
       });
 
       return res.status(200).send({

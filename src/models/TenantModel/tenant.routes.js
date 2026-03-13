@@ -11,6 +11,8 @@ import {
   getTenantWebhookStatusController,
   getDeletedTenantListController,
   restoreTenantController,
+  getTenantInvitationListController,
+  getOnboardedTenantListController,
 } from "./tenant.controller.js";
 import {
   authenticate,
@@ -127,6 +129,26 @@ Router.get(
     roles: ["tenant_admin", "doctor", "staff", "agent"],
   }),
   getTenantWebhookStatusController,
+);
+
+Router.get(
+  "/invitations",
+  authenticate,
+  authorize({
+    user_type: "management",
+    roles: ["platform_admin", "super_admin"],
+  }),
+  getTenantInvitationListController,
+);
+
+Router.get(
+  "/onboarded",
+  authenticate,
+  authorize({
+    user_type: "management",
+    roles: ["platform_admin", "super_admin"],
+  }),
+  getOnboardedTenantListController,
 );
 
 export default Router;
