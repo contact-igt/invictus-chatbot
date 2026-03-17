@@ -54,7 +54,7 @@ Router.put(
 Router.get(
   "/live-chats/agents",
   authenticate,
-  authorize({ user_type: "tenant", roles: ["tenant_admin"] }),
+  authorize({ user_type: "tenant", roles: tenantRoles }),
   getAgentListController,
 );
 

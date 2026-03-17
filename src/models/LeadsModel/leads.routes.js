@@ -9,6 +9,7 @@ import {
   restoreLeadController,
   getBulkLeadSummaryController,
   getLeadByIdController,
+  bulkUpdateLeadsController,
 } from "./leads.controller.js";
 import {
   authenticate,
@@ -41,6 +42,13 @@ Router.put(
   authenticate,
   authorize({ user_type: "tenant", roles: tenantRoles }),
   updateLeadController,
+);
+
+Router.put(
+  "/leads/bulk-update",
+  authenticate,
+  authorize({ user_type: "tenant", roles: tenantRoles }),
+  bulkUpdateLeadsController,
 );
 
 Router.get(

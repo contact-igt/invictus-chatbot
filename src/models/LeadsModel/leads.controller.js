@@ -10,6 +10,7 @@ import {
   restoreLeadService,
   getLeadByLeadIdService,
   getBulkLeadSummaryService,
+  bulkUpdateLeadsService,
 } from "./leads.service.js";
 
 
@@ -247,6 +248,29 @@ export const permanentDeleteLeadController = async (req, res) => {
   } catch (err) {
     return res.status(500).send({
       message: err?.message,
+    });
+  }
+};
+
+export const bulkUpdateLeadsController = async (req, res) => {
+  const { lead_ids, updates } = req.body;
+  const tenant_id = req.user.tenant_id;
+
+  if (!tenant_id || !lead_ids || !Array.isArray(lead_ids)) {
+    return res.status(400).send({
+      message: "Tenant id or lead ids missing",
+    });
+  }
+
+  try {
+    const result = await bulkUpdateLeadsService(tenant_id, lead_ids, updates);
+    return res.status(200).send({
+      message: "Leads updated successfully",
+      data: result,
+    });
+  } catch (err) {
+    return res.status(500).send({
+      message: err?.message || err,
     });
   }
 };

@@ -3,6 +3,8 @@ import { tableNames } from "../../database/tableName.js";
 import axios from "axios";
 import { getWhatsappAccountByTenantService } from "../WhatsappAccountModel/whatsappAccount.service.js";
 import { generateReadableIdFromLast } from "../../utils/helpers/generateReadableIdFromLast.js";
+import { getTemplateCopywriterPrompt } from "../../utils/ai/prompts/template.js";
+import { AiService } from "../../utils/ai/coreAi.js";
 
 const STATUS_MAP = {
   IN_REVIEW: "pending",
@@ -143,6 +145,16 @@ export const createWhatsappTemplateService = async (
     }
 
     if (components.buttons && Array.isArray(components.buttons) && components.buttons.length > 0) {
+      // Validate phone numbers before saving
+      for (const btn of components.buttons) {
+        if (btn.type === 'PHONE_NUMBER') {
+          const phone = (btn.value || "").replace(/\s+/g, "");
+          if (!/^\+[1-9]\d{10,14}$/.test(phone)) {
+            throw new Error(`Invalid phone number for button "${btn.text}": Include + country code and 10 to 14 digits`);
+          }
+        }
+      }
+
       await db.sequelize.query(
         `
         INSERT INTO ${tableNames.WHATSAPP_TEMPLATE_COMPONENTS}
@@ -165,7 +177,7 @@ export const createWhatsappTemplateService = async (
         VALUES (?, ?, ?)
         `,
         {
-          replacements: [template_id, varKey, variable.sample],
+          replacements: [template_id, varKey, variable.sample || variable.value],
           transaction,
         },
       );
@@ -367,7 +379,15 @@ export const submitWhatsappTemplateService = async ({
                 b.text = btn.text || btn.label || (btn.type === 'URL' ? 'Visit Website' : 'Call');
               }
 
-              if (btn.type === "PHONE_NUMBER") b.phone_number = btn.phone_number || btn.value;
+              if (btn.type === "PHONE_NUMBER") {
+                const rawPhone = (btn.phone_number || btn.value || "").trim();
+                const phone = rawPhone.replace(/\s+/g, "");
+                // Match frontend: Must start with +, follow by 11-15 digits total.
+                if (!/^\+[1-9]\d{10,14}$/.test(phone)) {
+                  throw new Error(`Invalid phone number for button "${btn.text}": Include + country code and 10 to 14 digits`);
+                }
+                b.phone_number = phone.substring(1); // Meta expects digits only in the final payload
+              }
               if (btn.type === "URL") {
                 b.url = btn.url || btn.value;
                 // Handle dynamic URL if {{1}} is present
@@ -670,15 +690,15 @@ export const getTemplateListService = async (tenant_id) => {
       const components = allComponents.filter(
         (c) => c.template_id === t.template_id,
       );
-      const variables = allVariables.filter(
-        (v) => v.template_id === t.template_id,
-      );
+      const variables = allVariables
+        .filter((v) => v.template_id === t.template_id)
+        .map(v => ({ ...v, key: v.variable_key, value: v.sample_value }));
 
       return {
         ...t,
         is_submitted: !!t.meta_template_id,
-        can_edit: ["draft", "rejected"].includes(t.status),
-        can_submit: t.status === "draft",
+        can_edit: ["draft", "rejected", "paused", "approved"].includes(t.status),
+        can_submit: ["draft", "rejected", "paused", "approved"].includes(t.status),
         display_status: t.status.charAt(0).toUpperCase() + t.status.slice(1),
         components,
         variables,
@@ -721,12 +741,12 @@ export const getTemplateByIdService = async (template_id, tenant_id) => {
     return {
       ...template,
       is_submitted: !!template.meta_template_id,
-      can_edit: ["draft", "rejected"].includes(template.status),
-      can_submit: template.status === "draft",
+      can_edit: ["draft", "rejected", "paused", "approved"].includes(template.status),
+      can_submit: ["draft", "rejected", "paused", "approved"].includes(template.status),
       display_status:
         template.status.charAt(0).toUpperCase() + template.status.slice(1),
       components,
-      variables,
+      variables: variables.map(v => ({ ...v, key: v.variable_key, value: v.sample_value })),
       logs,
     };
   } catch (err) {
@@ -1024,10 +1044,10 @@ export const updateWhatsappTemplateService = async (
       throw new Error("Template not found");
     }
 
-    // Only allow editing draft, rejected, paused
-    if (!["draft", "rejected", "paused"].includes(template.status)) {
+    // Only allow editing draft, rejected, paused, approved
+    if (!["draft", "rejected", "paused", "approved"].includes(template.status)) {
       throw new Error(
-        `Cannot edit template with status: ${template.status}. Only draft, rejected, or paused templates can be edited.`,
+        `Cannot edit template with status: ${template.status}. Only draft, rejected, paused, or approved templates can be edited.`,
       );
     }
 
@@ -1170,7 +1190,7 @@ export const updateWhatsappTemplateService = async (
     if (variables && Array.isArray(variables)) {
       for (const variable of variables) {
         const varKey = variable.key.replace(/[{}]/g, ""); // Clean up key
-        extractedVariables.set(varKey, variable.sample);
+        extractedVariables.set(varKey, variable.sample || variable.value);
       }
     }
 

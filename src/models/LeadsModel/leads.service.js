@@ -59,7 +59,8 @@ export const getLeadByLeadIdService = async (tenant_id, lead_id) => {
       agent.username AS assigned_agent_name,
       led.source,
       led.priority,
-      led.internal_notes
+      led.internal_notes,
+      agent.username AS assigned_agent_name
     FROM ${tableNames?.LEADS} as led
     LEFT JOIN ${tableNames?.CONTACTS} as cta on (cta.contact_id = led.contact_id)
     LEFT JOIN ${tableNames?.TENANT_USERS} as agent on (agent.tenant_user_id = led.assigned_to)
@@ -145,7 +146,8 @@ export const getLeadListService = async (tenant_id) => {
     agent.username AS assigned_agent_name,
     led.source,
     led.priority,
-    led.internal_notes
+    led.internal_notes,
+    agent.username AS assigned_agent_name
   FROM ${tableNames?.LEADS} as led
   LEFT JOIN ${tableNames?.CONTACTS} as cta on (cta.contact_id = led.contact_id)
   LEFT JOIN ${tableNames?.TENANT_USERS} as agent on (agent.tenant_user_id = led.assigned_to)
@@ -251,7 +253,7 @@ export const startLeadHeatDecayCronService = () => {
             WHEN TIMESTAMPDIFF(HOUR, last_user_message_at, NOW()) <= 4 THEN 'hot'
             WHEN TIMESTAMPDIFF(HOUR, last_user_message_at, NOW()) <= 24 THEN 'warm'
             WHEN TIMESTAMPDIFF(HOUR, last_user_message_at, NOW()) <= 72 THEN 'cold'
-            ELSE 'super_cold'
+            ELSE 'supercold'
           END,
            score = CASE
             WHEN TIMESTAMPDIFF(HOUR, last_user_message_at, NOW()) <= 4 THEN 90
@@ -514,24 +516,24 @@ export const updateLeadStatusService = async (
   lead_id,
   status,
   heat_state,
-  lead_stage = null,
-  assigned_to = null,
-  priority = null,
-  source = null,
-  internal_notes = null,
-  summary_status = null
+  lead_stage = undefined,
+  assigned_to = undefined,
+  priority = undefined,
+  source = undefined,
+  internal_notes = undefined,
+  summary_status = undefined
 ) => {
   const updates = [];
   const replacements = [];
 
-  if (status) { updates.push("status = ?"); replacements.push(status); }
-  if (heat_state) { updates.push("heat_state = ?"); replacements.push(heat_state); }
-  if (lead_stage) { updates.push("lead_stage = ?"); replacements.push(lead_stage); }
-  if (assigned_to !== null) { updates.push("assigned_to = ?"); replacements.push(assigned_to); }
-  if (priority) { updates.push("priority = ?"); replacements.push(priority); }
-  if (source) { updates.push("source = ?"); replacements.push(source); }
-  if (internal_notes !== null) { updates.push("internal_notes = ?"); replacements.push(internal_notes); }
-  if (summary_status) { updates.push("summary_status = ?"); replacements.push(summary_status); }
+  if (status !== undefined) { updates.push("status = ?"); replacements.push(status); }
+  if (heat_state !== undefined) { updates.push("heat_state = ?"); replacements.push(heat_state); }
+  if (lead_stage !== undefined) { updates.push("lead_stage = ?"); replacements.push(lead_stage); }
+  if (assigned_to !== undefined) { updates.push("assigned_to = ?"); replacements.push(assigned_to); }
+  if (priority !== undefined) { updates.push("priority = ?"); replacements.push(priority); }
+  if (source !== undefined) { updates.push("source = ?"); replacements.push(source); }
+  if (internal_notes !== undefined) { updates.push("internal_notes = ?"); replacements.push(internal_notes); }
+  if (summary_status !== undefined) { updates.push("summary_status = ?"); replacements.push(summary_status); }
 
   if (updates.length === 0) return null;
 
@@ -544,7 +546,7 @@ export const updateLeadStatusService = async (
     });
 
     // ─── SYNC WITH LIVECHAT ──────────────────────────────────────────────────
-    if (assigned_to !== null) {
+    if (assigned_to !== undefined) {
       const lead = await getLeadByLeadIdService(tenant_id, lead_id);
       if (lead?.contact_id) {
         const syncQuery = `UPDATE ${tableNames.LIVECHAT} SET assigned_admin_id = ? WHERE tenant_id = ? AND contact_id = ?`;
@@ -613,7 +615,8 @@ export const getDeletedLeadListService = async (tenant_id) => {
     led.source,
     led.priority,
     led.internal_notes,
-    led.deleted_at
+    led.deleted_at,
+    agent.username AS assigned_agent_name
   FROM ${tableNames?.LEADS} as led
   LEFT JOIN ${tableNames?.CONTACTS} as cta on (cta.contact_id = led.contact_id)
   LEFT JOIN ${tableNames?.TENANT_USERS} as agent on (agent.tenant_user_id = led.assigned_to)
@@ -683,6 +686,52 @@ export const restoreLeadService = async (lead_id, tenant_id) => {
     }
 
     return { message: "Lead restored successfully" };
+  } catch (err) {
+    throw err;
+  }
+};
+
+export const bulkUpdateLeadsService = async (tenant_id, lead_ids, updates) => {
+  if (!lead_ids || !Array.isArray(lead_ids) || lead_ids.length === 0) return null;
+
+  const setClauses = [];
+  const replacements = [];
+
+  if (updates.status) { setClauses.push("status = ?"); replacements.push(updates.status); }
+  if (updates.heat_state) { setClauses.push("heat_state = ?"); replacements.push(updates.heat_state); }
+  if (updates.lead_stage) { setClauses.push("lead_stage = ?"); replacements.push(updates.lead_stage); }
+  if (updates.assigned_to !== undefined) { setClauses.push("assigned_to = ?"); replacements.push(updates.assigned_to); }
+  if (updates.priority) { setClauses.push("priority = ?"); replacements.push(updates.priority); }
+  if (updates.source) { setClauses.push("source = ?"); replacements.push(updates.source); }
+
+  if (setClauses.length === 0) return null;
+
+  const Query = `
+    UPDATE ${tableNames.LEADS} 
+    SET ${setClauses.join(", ")}, updated_at = NOW()
+    WHERE tenant_id = ? AND lead_id IN (?) AND is_deleted = false
+  `;
+  
+  replacements.push(tenant_id, lead_ids);
+
+  try {
+    const [result] = await db.sequelize.query(Query, {
+      replacements,
+    });
+
+    // ─── SYNC WITH LIVECHAT ──────────────────────────────────────────────────
+    if (updates.assigned_to !== undefined) {
+      const leadsQuery = `SELECT contact_id FROM ${tableNames.LEADS} WHERE tenant_id = ? AND lead_id IN (?)`;
+      const [leads] = await db.sequelize.query(leadsQuery, { replacements: [tenant_id, lead_ids] });
+      const contactIds = leads.map(l => l.contact_id).filter(Boolean);
+
+      if (contactIds.length > 0) {
+        const syncQuery = `UPDATE ${tableNames.LIVECHAT} SET assigned_admin_id = ? WHERE tenant_id = ? AND contact_id IN (?)`;
+        await db.sequelize.query(syncQuery, { replacements: [updates.assigned_to, tenant_id, contactIds] });
+      }
+    }
+
+    return result;
   } catch (err) {
     throw err;
   }

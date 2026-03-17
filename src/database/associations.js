@@ -231,13 +231,13 @@ export const defineAssociations = (db) => {
   // Contacts → Leads (One-to-One)
   db.Contacts.hasOne(db.Leads, {
     foreignKey: "contact_id",
-    sourceKey: "id",
+    sourceKey: "contact_id",
     as: "lead",
     constraints: false,
   });
   db.Leads.belongsTo(db.Contacts, {
     foreignKey: "contact_id",
-    targetKey: "id",
+    targetKey: "contact_id",
     as: "contact",
     constraints: false,
   });
@@ -245,13 +245,13 @@ export const defineAssociations = (db) => {
   // Contacts → Messages (One-to-Many)
   db.Contacts.hasMany(db.Messages, {
     foreignKey: "contact_id",
-    sourceKey: "id",
+    sourceKey: "contact_id",
     as: "messages",
     constraints: false,
   });
   db.Messages.belongsTo(db.Contacts, {
     foreignKey: "contact_id",
-    targetKey: "id",
+    targetKey: "contact_id",
     as: "contact",
     constraints: false,
   });
@@ -259,13 +259,13 @@ export const defineAssociations = (db) => {
   // Contacts → LiveChat (One-to-One)
   db.Contacts.hasOne(db.LiveChat, {
     foreignKey: "contact_id",
-    sourceKey: "id",
+    sourceKey: "contact_id",
     as: "liveChat",
     constraints: false,
   });
   db.LiveChat.belongsTo(db.Contacts, {
     foreignKey: "contact_id",
-    targetKey: "id",
+    targetKey: "contact_id",
     as: "contact",
     constraints: false,
   });

@@ -403,10 +403,10 @@ export const resubmitWhatsappTemplateController = async (req, res) => {
       return res.status(404).json({ message: "Template not found" });
     }
 
-    // Only allow resubmit for draft, rejected, paused
-    if (!["draft", "rejected", "paused"].includes(template.status)) {
+    // Only allow resubmit for draft, rejected, paused, approved
+    if (!["draft", "rejected", "paused", "approved"].includes(template.status)) {
       return res.status(400).json({
-        message: `Cannot resubmit template with status: ${template.status}. Only draft, rejected, or paused templates can be resubmitted.`,
+        message: `Cannot resubmit template with status: ${template.status}. Only draft, rejected, paused, or approved templates can be resubmitted.`,
       });
     }
 
