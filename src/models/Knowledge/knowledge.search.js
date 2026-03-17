@@ -1,6 +1,7 @@
 import OpenAI from "openai";
 import db from "../../database/index.js";
 import { tableNames } from "../../database/tableName.js";
+import { SEARCH_REFINE_PROMPT } from "../../utils/ai/prompts/index.js";
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -11,16 +12,7 @@ const openai = new OpenAI({
  */
 export const analyzeQuestionForSearch = async (question) => {
   try {
-    const prompt = `
-    Analyze the following customer question and provide a space-separated list of 3-5 key search terms.
-    Focus on:
-    - Main topic (e.g., pricing, symptoms, location)
-    - Synonyms (e.g., if they ask for "cost", include "pricing", "fees")
-    - Intent (e.g., "appointment", "emergency")
-
-    Question: "${question}"
-
-    Keywords:`;
+    const prompt = SEARCH_REFINE_PROMPT.replace("{QUESTION}", question);
 
     const response = await openai.chat.completions.create({
       model: "gpt-4o-mini",

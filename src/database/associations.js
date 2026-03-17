@@ -476,5 +476,51 @@ export const defineAssociations = (db) => {
     constraints: false,
   });
 
+  // ========================================
+  // BILLING MODULE RELATIONSHIPS
+  // ========================================
+
+  // Tenant → MessageUsage (One-to-Many)
+  db.Tenants.hasMany(db.MessageUsage, {
+    foreignKey: "tenant_id",
+    sourceKey: "tenant_id",
+    as: "messageUsages",
+    constraints: false,
+  });
+  db.MessageUsage.belongsTo(db.Tenants, {
+    foreignKey: "tenant_id",
+    targetKey: "tenant_id",
+    as: "tenant",
+    constraints: false,
+  });
+
+  // Tenant → BillingLedger (One-to-Many)
+  db.Tenants.hasMany(db.BillingLedger, {
+    foreignKey: "tenant_id",
+    sourceKey: "tenant_id",
+    as: "billingLedgers",
+    constraints: false,
+  });
+  db.BillingLedger.belongsTo(db.Tenants, {
+    foreignKey: "tenant_id",
+    targetKey: "tenant_id",
+    as: "tenant",
+    constraints: false,
+  });
+
+  // MessageUsage → BillingLedger (One-to-One)
+  db.MessageUsage.hasOne(db.BillingLedger, {
+    foreignKey: "message_usage_id",
+    sourceKey: "id",
+    as: "billingLedger",
+    constraints: false,
+  });
+  db.BillingLedger.belongsTo(db.MessageUsage, {
+    foreignKey: "message_usage_id",
+    targetKey: "id",
+    as: "messageUsage",
+    constraints: false,
+  });
+
   return db;
 };

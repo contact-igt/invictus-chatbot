@@ -1,7 +1,7 @@
 import db from "../../database/index.js";
 import { Op, fn, col, where as seqWhere } from "sequelize";
 import { generateReadableIdFromLast } from "../../utils/helpers/generateReadableIdFromLast.js";
-import { formatTimeToAMPM } from "../../utils/helpers/formatTime.js";
+import { formatTimeToAMPM, timeToMinutes } from "../../utils/helpers/formatTime.js";
 import { tableNames } from "../../database/tableName.js";
 import { formatPhoneNumber } from "../../utils/helpers/formatPhoneNumber.js";
 import {
@@ -38,8 +38,10 @@ export const createAppointmentService = async (data) => {
     patient_name,
     contact_number,
     appointment_date,
+    age,
     status = "Pending",
     notes,
+    email,
   } = data;
 
   let { appointment_time } = data;
@@ -146,16 +148,28 @@ export const createAppointmentService = async (data) => {
     }
 
     // 3. Generate Unique Appointment ID and Token Number (inside transaction for consistency)
+    // Lock the doctor record to serialize bookings for this specific doctor and prevent race conditions
+    if (doctor_id) {
+      await db.Doctors.findOne({
+        where: { doctor_id, tenant_id },
+        transaction,
+        lock: transaction.LOCK.UPDATE,
+      });
+    }
+
     const appointment_id = await generateReadableIdFromLast(
       tableNames.APPOINTMENTS,
       "appointment_id",
       "AP",
+      3,
+      transaction,
     );
 
     const count = await db.Appointments.count({
       where: {
         tenant_id,
         doctor_id,
+        is_deleted: false,
         [Op.and]: [
           seqWhere(fn("DATE", col("appointment_date")), appointment_date),
         ],
@@ -174,19 +188,30 @@ export const createAppointmentService = async (data) => {
         contact_number,
         appointment_date,
         appointment_time,
+        age,
         status,
         token_number,
         notes: notes || null,
+        email,
       },
       { transaction },
     );
 
+    // 4. Increment doctor's appointment count
+    if (doctor_id) {
+      await db.Doctors.increment("appointment_count", {
+        by: 1,
+        where: { doctor_id, tenant_id },
+        transaction,
+      });
+    }
+
     await transaction.commit();
 
     // 4. Send Confirmation Email (Async, outside transaction)
-    if (data.email) {
-      console.log(`[APPOINTMENT] Sending confirmation email to ${data.email}`);
-    }
+    sendAppointmentNotificationEmail(tenant_id, appointment_id, "Confirmed").catch(
+      (err) => console.error("[APPOINTMENT-EMAIL] Initial send failed:", err.message)
+    );
 
     return appointment;
   } catch (err) {
@@ -210,6 +235,53 @@ export const getActiveAppointmentsByContactService = async (
         is_deleted: false,
         status: { [Op.in]: ["Pending", "Confirmed"] },
         appointment_date: { [Op.gte]: today },
+      },
+      include: [
+        {
+          model: db.Doctors,
+          as: "doctor",
+          attributes: ["doctor_id", "name", "title"],
+        },
+      ],
+      order: [["appointment_date", "ASC"]],
+    });
+  } catch (err) {
+    throw err;
+  }
+};
+
+/**
+ * Fetches recent active and recently cancelled/deleted appointments 
+ * for AI context to prevent "memory vs reality" disparity.
+ */
+export const getRecentAppointmentsForAIService = async (tenant_id, contact_id) => {
+  try {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    // Also include appointments cancelled in the last 24 hours
+    const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
+
+    return await db.Appointments.findAll({
+      where: {
+        tenant_id,
+        contact_id,
+        [Op.or]: [
+          // Active appointments
+          {
+            is_deleted: false,
+            status: { [Op.in]: ["Pending", "Confirmed"] },
+            appointment_date: { [Op.gte]: today }
+          },
+          // Recently cancelled/deleted appointments
+          {
+            [Op.or]: [
+              { status: "Cancelled" },
+              { is_deleted: true }
+            ],
+            updated_at: { [Op.gte]: yesterday }
+          }
+        ]
       },
       include: [
         {
@@ -310,17 +382,34 @@ export const checkAvailabilityService = async (
 
     const formattedTime = normalizeTimeFormat(time);
 
-    const existing = await db.Appointments.findOne({
+    // Get doctor's consultation duration
+    const doctor = await db.Doctors.findOne({
+      where: { doctor_id, tenant_id, is_deleted: false },
+      attributes: ["consultation_duration"],
+    });
+    const duration = doctor?.consultation_duration || 30;
+    const requestedStart = timeToMinutes(formattedTime);
+    const requestedEnd = requestedStart + duration;
+
+    const existingAppointments = await db.Appointments.findAll({
       where: {
         tenant_id,
         doctor_id,
         is_deleted: false,
         [Op.and]: [seqWhere(fn("DATE", col("appointment_date")), date)],
-        appointment_time: formattedTime,
         status: { [Op.in]: ["Pending", "Confirmed"] },
       },
+      attributes: ["appointment_time"],
     });
-    return !existing;
+
+    const hasOverlap = existingAppointments.some((appt) => {
+      const apptStart = timeToMinutes(appt.appointment_time);
+      const apptEnd = apptStart + duration;
+      // Overlap occurs if (StartA < EndB) AND (EndA > StartB)
+      return requestedStart < apptEnd && requestedEnd > apptStart;
+    });
+
+    return !hasOverlap;
   } catch (err) {
     throw err;
   }
@@ -432,6 +521,8 @@ export const updateAppointmentService = async (
     if (data.status !== undefined) updateFields.status = data.status;
     if (data.doctor_id !== undefined) updateFields.doctor_id = data.doctor_id;
     if (data.notes !== undefined) updateFields.notes = data.notes;
+    if (data.age !== undefined) updateFields.age = data.age;
+    if (data.email !== undefined) updateFields.email = data.email;
 
     if (data.appointment_time !== undefined) {
       updateFields.appointment_time = normalizeTimeFormat(
@@ -449,16 +540,46 @@ export const updateAppointmentService = async (
       updateFields.contact_number = contact_number;
     }
 
-    // Check for doctor slot conflict if date, time, or doctor is being changed
+    // 1. Check for patient conflict (prevent same patient having two apps at same time)
     const newDate =
       updateFields.appointment_date || appointment.appointment_date;
     const newTime =
       updateFields.appointment_time || appointment.appointment_time;
     const newDoctorId = updateFields.doctor_id || appointment.doctor_id;
-    const dateChanged = data.appointment_date !== undefined;
-    const timeChanged = data.appointment_time !== undefined;
-    const doctorChanged = data.doctor_id !== undefined;
+    const dateChanged = updateFields.appointment_date !== undefined;
+    const timeChanged = updateFields.appointment_time !== undefined;
+    const doctorChanged = updateFields.doctor_id !== undefined;
 
+    if (dateChanged || timeChanged) {
+      let checkDate;
+      if (typeof newDate === "string") {
+        checkDate = newDate;
+      } else if (newDate instanceof Date) {
+        checkDate = `${newDate.getFullYear()}-${String(newDate.getMonth() + 1).padStart(2, "0")}-${String(newDate.getDate()).padStart(2, "0")}`;
+      } else {
+        checkDate = newDate;
+      }
+
+      const patientConflict = await db.Appointments.findOne({
+        where: {
+          tenant_id,
+          contact_id: appointment.contact_id,
+          is_deleted: false,
+          id: { [Op.ne]: appointment.id },
+          [Op.and]: [seqWhere(fn("DATE", col("appointment_date")), checkDate)],
+          appointment_time: newTime,
+          status: { [Op.not]: "Cancelled" },
+        },
+        transaction,
+        lock: transaction.LOCK.UPDATE,
+      });
+
+      if (patientConflict) {
+        throw new Error("You already have another appointment booked for this time.");
+      }
+    }
+
+    // 2. Check for doctor slot conflict if date, time, or doctor is being changed
     if ((dateChanged || timeChanged || doctorChanged) && newDoctorId) {
       // Format date for comparison
       // Timezone-safe: avoid toISOString() which shifts to UTC
@@ -471,21 +592,35 @@ export const updateAppointmentService = async (
         checkDate = newDate;
       }
 
-      const slotConflict = await db.Appointments.findOne({
+      const doctor = await db.Doctors.findOne({
+        where: { doctor_id: newDoctorId, tenant_id, is_deleted: false },
+        attributes: ["consultation_duration"],
+        transaction,
+      });
+      const duration = doctor?.consultation_duration || 30;
+      const requestedStart = timeToMinutes(newTime);
+      const requestedEnd = requestedStart + duration;
+
+      const existingAppointments = await db.Appointments.findAll({
         where: {
           tenant_id,
           doctor_id: newDoctorId,
           is_deleted: false,
-          id: { [Op.ne]: appointment.id }, // Exclude the current appointment
+          id: { [Op.ne]: appointment.id },
           [Op.and]: [seqWhere(fn("DATE", col("appointment_date")), checkDate)],
-          appointment_time: newTime,
           status: { [Op.in]: ["Pending", "Confirmed"] },
         },
         transaction,
         lock: transaction.LOCK.UPDATE,
       });
 
-      if (slotConflict) {
+      const hasOverlap = existingAppointments.some((appt) => {
+        const apptStart = timeToMinutes(appt.appointment_time);
+        const apptEnd = apptStart + duration;
+        return requestedStart < apptEnd && requestedEnd > apptStart;
+      });
+
+      if (hasOverlap) {
         throw new Error(
           "This time slot is already booked for the selected doctor. Please choose another time.",
         );
@@ -496,6 +631,28 @@ export const updateAppointmentService = async (
       where: { appointment_id, tenant_id },
       transaction,
     });
+
+    // 3. Handle doctor appointment count synchronization if doctor changed
+    if (doctorChanged && updateFields.doctor_id !== undefined) {
+      const oldDoctorId = appointment.doctor_id;
+      const newDoctorId = data.doctor_id;
+
+      if (oldDoctorId) {
+        await db.Doctors.decrement("appointment_count", {
+          by: 1,
+          where: { doctor_id: oldDoctorId, tenant_id },
+          transaction,
+        });
+      }
+
+      if (newDoctorId) {
+        await db.Doctors.increment("appointment_count", {
+          by: 1,
+          where: { doctor_id: newDoctorId, tenant_id },
+          transaction,
+        });
+      }
+    }
 
     await transaction.commit();
 
@@ -541,11 +698,36 @@ export const deleteAppointmentService = async (tenant_id, appointment_id) => {
     if (!appointment) {
       throw new Error("Appointment not found");
     }
-    await db.Appointments.update(
-      { is_deleted: true, deleted_at: new Date() },
-      { where: { appointment_id, tenant_id } },
-    );
-    return { message: "Appointment deleted successfully" };
+    const transaction = await db.sequelize.transaction();
+    try {
+      await db.Appointments.update(
+        { is_deleted: true, deleted_at: new Date() },
+        { where: { appointment_id, tenant_id }, transaction },
+      );
+
+      // Decrement doctor's appointment count
+      if (appointment.doctor_id) {
+        await db.Doctors.decrement("appointment_count", {
+          by: 1,
+          where: { doctor_id: appointment.doctor_id, tenant_id },
+          transaction,
+        });
+      }
+
+      await transaction.commit();
+
+      // Send cancellation email notification (non-blocking)
+      sendAppointmentNotificationEmail(
+        tenant_id,
+        appointment_id,
+        "Cancelled",
+      ).catch(() => {});
+
+      return { message: "Appointment deleted successfully" };
+    } catch (dbErr) {
+      await transaction.rollback();
+      throw dbErr;
+    }
   } catch (err) {
     throw err;
   }
@@ -621,19 +803,26 @@ export const getAvailableSlotsService = async (tenant_id, doctor_id, date) => {
       },
       attributes: ["appointment_time"],
     });
-    const bookedTimes = new Set(
-      bookedAppointments.map((a) => a.appointment_time),
-    );
+    // 6. Filter out booked slots using range-based overlap logic
+    const freeSlots = allSlots.filter((slot) => {
+      const requestedStart = timeToMinutes(slot);
+      const requestedEnd = requestedStart + slotDuration;
 
-    // 6. Filter out booked slots
-    const freeSlots = allSlots.filter((slot) => !bookedTimes.has(slot));
+      const hasOverlap = bookedAppointments.some((appt) => {
+        const apptStart = timeToMinutes(appt.appointment_time);
+        const apptEnd = apptStart + slotDuration;
+        return requestedStart < apptEnd && requestedEnd > apptStart;
+      });
+
+      return !hasOverlap;
+    });
 
     return {
       available: freeSlots.length > 0,
       day: dayOfWeek,
       slots: freeSlots,
       totalSlots: allSlots.length,
-      bookedCount: bookedTimes.size,
+      bookedCount: bookedAppointments.length,
     };
   } catch (err) {
     throw err;

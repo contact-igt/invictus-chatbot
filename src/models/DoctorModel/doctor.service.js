@@ -4,11 +4,7 @@ import { generateReadableIdFromLast } from "../../utils/helpers/generateReadable
 import { generatePassword } from "../../utils/helpers/generatePassword.js";
 
 import bcrypt from "bcrypt";
-import fs from "fs";
-import path from "path";
-import handlebars from "handlebars";
-import { fileURLToPath } from "url";
-import { sendEmail } from "../../utils/email/emailService.js";
+import { getTemplate } from "../../utils/email/templateLoader.js";
 import {
   createTenantUserService,
   findTenantUserByEmailGloballyService,
@@ -138,21 +134,12 @@ export const createDoctorService = async (tenant_id, data) => {
 
     // Send welcome email with login credentials (AFTER commit)
     try {
-      const __filename = fileURLToPath(import.meta.url);
-      const __dirname = path.dirname(__filename);
-
-      const templatePath = path.join(
-        __dirname,
-        "../../../public/html/tenantUserWelcome/index.html",
-      );
+      const template = getTemplate("tenantUserWelcome");
 
       const tenantData = await db.Tenants.findOne({
         where: { tenant_id },
         attributes: ["company_name"],
       });
-
-      const source = fs.readFileSync(templatePath, "utf8");
-      const template = handlebars.compile(source);
 
       const emailHtml = template({
         name: data.name,

@@ -10,7 +10,7 @@ const VALID_STATUSES = [
 
 export const createAppointment = async (req, res) => {
   try {
-    const { patient_name, contact_number, appointment_date, appointment_time } =
+    const { patient_name, age, contact_number, appointment_date, appointment_time } =
       req.body;
 
     // Validate required fields

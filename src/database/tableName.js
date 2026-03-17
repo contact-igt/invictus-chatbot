@@ -29,4 +29,7 @@ export const tableNames = {
   SPECIALIZATIONS: "specializations",
   DOCTOR_SPECIALIZATIONS: "doctor_specializations",
   APPOINTMENTS: "appointments",
+  MESSAGE_USAGE: "message_usage",
+  PRICING_TABLE: "pricing_table",
+  BILLING_LEDGER: "billing_ledger",
 };

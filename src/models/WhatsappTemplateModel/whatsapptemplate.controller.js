@@ -12,7 +12,7 @@ import {
   syncAllPendingTemplatesService,
   syncWhatsappTemplateStatusService,
   updateWhatsappTemplateService,
-  generateAiTemplateService,
+  generateTemplateContentService,
   getDeletedTemplateListService,
   restoreTemplateService,
 } from "./whatsapptemplate.service.js";
@@ -478,7 +478,7 @@ export const generateAiTemplateController = async (req, res) => {
       });
     }
 
-    const aiContent = await generateAiTemplateService({
+    const aiContent = await generateTemplateContentService({
       prompt,
       focus,
       style,

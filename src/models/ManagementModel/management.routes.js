@@ -13,6 +13,10 @@ import {
   resetManagementPasswordController,
   getDeletedManagementListController,
   restoreManagementController,
+  getPricingRulesController,
+  createPricingRuleController,
+  updatePricingRuleController,
+  deletePricingRuleController,
 } from "./management.controller.js";
 import {
   authenticate,
@@ -51,6 +55,48 @@ Router.get(
     roles: ["platform_admin", "super_admin"],
   }),
   getManagementController,
+);
+
+// ─── Pricing Table CRUD Routes (Super Admin Only) ────────────
+
+Router.get(
+  "/pricing",
+  authenticate,
+  authorize({
+    user_type: "management",
+    roles: ["super_admin", "platform_admin"],
+  }),
+  getPricingRulesController,
+);
+
+Router.post(
+  "/pricing",
+  authenticate,
+  authorize({
+    user_type: "management",
+    roles: ["super_admin", "platform_admin"],
+  }),
+  createPricingRuleController,
+);
+
+Router.put(
+  "/pricing/:id",
+  authenticate,
+  authorize({
+    user_type: "management",
+    roles: ["super_admin", "platform_admin"],
+  }),
+  updatePricingRuleController,
+);
+
+Router.delete(
+  "/pricing/:id",
+  authenticate,
+  authorize({
+    user_type: "management",
+    roles: ["super_admin", "platform_admin"],
+  }),
+  deletePricingRuleController,
 );
 
 Router.get(

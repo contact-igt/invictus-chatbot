@@ -3,13 +3,7 @@
  * Supports: Confirmed, Updated, Cancelled, Completed, Noshow, Pending
  */
 
-import fs from "fs";
-import path from "path";
-import handlebars from "handlebars";
-import { fileURLToPath } from "url";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+import { getTemplate } from "./templateLoader.js";
 
 // Template folder mapping for each status type
 const TEMPLATE_FOLDERS = {
@@ -20,17 +14,6 @@ const TEMPLATE_FOLDERS = {
   Noshow: "appointmentNoshow",
   Pending: "appointmentPending",
 };
-
-// Pre-compile all templates at startup
-const compiledTemplates = {};
-for (const [type, folder] of Object.entries(TEMPLATE_FOLDERS)) {
-  const templatePath = path.join(
-    __dirname,
-    `../../../public/html/${folder}/index.html`,
-  );
-  const source = fs.readFileSync(templatePath, "utf8");
-  compiledTemplates[type] = handlebars.compile(source);
-}
 
 /**
  * Generate appointment email HTML from Handlebars template.
@@ -58,7 +41,8 @@ export const buildAppointmentEmailHtml = ({
   reason,
   changes,
 }) => {
-  const template = compiledTemplates[type] || compiledTemplates.Confirmed;
+  const folderName = TEMPLATE_FOLDERS[type] || TEMPLATE_FOLDERS.Confirmed;
+  const template = getTemplate(folderName);
 
   // Build changes HTML for the Updated template
   let changes_html = "";

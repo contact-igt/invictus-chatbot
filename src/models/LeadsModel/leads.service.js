@@ -5,6 +5,7 @@ import { calculateHeatState } from "../../utils/helpers/calculateHeatState.js";
 import cron from "node-cron";
 import { getConversationMemory } from "../Messages/messages.memory.js";
 import { AiService } from "../../utils/ai/coreAi.js";
+import { getLeadSummarizePrompt, getLeadSummaryModeInstruction } from "../../utils/ai/prompts/index.js";
 import { generateReadableIdFromLast } from "../../utils/helpers/generateReadableIdFromLast.js";
 
 export const createLeadService = async (tenant_id, contact_id, source = "none") => {
@@ -454,39 +455,14 @@ export const getLeadSummaryService = async (
         return { summary: `No interaction found ${rangeInfo}.`, has_data: false };
       }
 
-      promptInstruction = startDate === endDate
-        ? `Summarize what happened on ${startDate} in 3-4 simple sentences. Explain what the client wanted and the result. Max 5 lines.`
-        : `Summarize interactions between ${startDate} and ${endDate} in 4-5 simple sentences. Explain the main topic and status. Max 5 lines.`;
-
-    } else if (cleanMode === "detailed") {
-      promptInstruction = `Provide a chronological daily log. For each date, give 1 simple sentence. 
-      Format: **YYYY-MM-DD**: [1-sentence summary]`;
+      promptInstruction = getLeadSummaryModeInstruction(cleanMode, startDate, endDate);
     } else {
-      // Default / Overall mode prompt
+      // Default / Overall mode logic
       filteredMemory = memory.slice(-20);
-      promptInstruction = `Provide a simple 4-5 line "Status Report."
-      - Who is the client and why did they reach out?
-      - What are the key details?
-      - What is the current status and next steps?
-      Keep it simple and easy to read. Max 3 lines.`;
+      promptInstruction = getLeadSummaryModeInstruction(cleanMode, null, null);
     }
 
-    const SUMMARIZE_PROMPT = `
-    You are an AI assistant helping a Business Admin. 
-    Task: ${promptInstruction}
-
-    Rules:
-    - **Use simple, everyday English.**
-    - **Avoid complex words or corporate jargon.**
-    - **Keep it short: Maximum 3 lines of text.**
-    - **DO NOT mention the date, day, or year (e.g., "On February 13..." or "Today...").**
-    - Focus on THE MEANING.
-    - DO NOT use labels like "User:", "Bot:", or "Admin:". 
-    - No preamble. Start directly with the summary.
-
-    Conversation History (JSON):
-    ${JSON.stringify(filteredMemory, null, 2)}
-    `;
+    const SUMMARIZE_PROMPT = getLeadSummarizePrompt(promptInstruction, JSON.stringify(filteredMemory, null, 2));
 
     // 6. Generate Summary
     const aiSummary = await AiService("system", SUMMARIZE_PROMPT);

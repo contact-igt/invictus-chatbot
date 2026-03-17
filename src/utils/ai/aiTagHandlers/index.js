@@ -2,12 +2,14 @@ import * as leadSource from "./leadSource.js";
 import * as appointmentTag from "./appointmentTag.js";
 import * as checkAvailabilityTag from "./checkAvailabilityTag.js";
 import * as updateAppointmentTag from "./updateAppointmentTag.js";
+import * as cancelAppointmentTag from "./cancelAppointmentTag.js";
 
 const handlers = {
   LEAD_SOURCE: leadSource,
   BOOK_APPOINTMENT: appointmentTag,
   CHECK_AVAILABILITY: checkAvailabilityTag,
   UPDATE_APPOINTMENT: updateAppointmentTag,
+  CANCEL_APPOINTMENT: cancelAppointmentTag,
 };
 
 // Extract tag payload by finding the matching closing bracket,

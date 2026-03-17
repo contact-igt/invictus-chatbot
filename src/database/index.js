@@ -4,7 +4,7 @@ import ServerEnvironmentConfig from "../config/server.config.js";
 import { MessagesTable } from "./tables/MessagesTable/index.js";
 import { KnowledgeSourcesTable } from "./tables/KnowledgeSourceTable/index.js";
 import { KnowledgeChunksTable } from "./tables/KnowledgeChunksTable/index.js";
-import { AiPromptTable } from "./tables/AiPropmtTable/index.js";
+import { AiPromptTable } from "./tables/AiPromptTable/index.js";
 import { ManagementTable } from "./tables/ManagementTable/index.js";
 import { ProcessedMessagesTable } from "./tables/ProcessedMessagesTable/index.js";
 import { ChatLocksTable } from "./tables/ChatLocksTable/index.js";
@@ -31,6 +31,9 @@ import { DoctorAvailabilityTable } from "./tables/DoctorAvailabilityTable/index.
 import { SpecializationsTable } from "./tables/SpecializationsTable/index.js";
 import { DoctorSpecializationsTable } from "./tables/DoctorSpecializationsTable/index.js";
 import { AppointmentTable } from "./tables/AppointmentTable/index.js";
+import { PricingTable } from "./tables/PricingTableTable/index.js";
+import { MessageUsageTable } from "./tables/MessageUsageTable/index.js";
+import { BillingLedgerTable } from "./tables/BillingLedgerTable/index.js";
 
 const dbconfig =
   ServerEnvironmentConfig?.server?.line === "production"
@@ -110,6 +113,9 @@ db.DoctorAvailability = DoctorAvailabilityTable(sequelize, Sequelize);
 db.Specializations = SpecializationsTable(sequelize, Sequelize);
 db.DoctorSpecializations = DoctorSpecializationsTable(sequelize, Sequelize);
 db.Appointments = AppointmentTable(sequelize, Sequelize);
+db.PricingTable = PricingTable(sequelize, Sequelize);
+db.MessageUsage = MessageUsageTable(sequelize, Sequelize);
+db.BillingLedger = BillingLedgerTable(sequelize, Sequelize);
 
 // ========================================
 // IMPORT AND DEFINE ASSOCIATIONS

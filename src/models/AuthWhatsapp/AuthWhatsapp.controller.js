@@ -12,6 +12,8 @@ import {
   unlockChat,
 } from "./AuthWhatsapp.service.js";
 
+import { processBillingFromWebhook } from "../BillingModel/billing.service.js";
+
 import { getTenantByPhoneNumberIdService } from "../WhatsappAccountModel/whatsappAccount.service.js";
 import { getIO } from "../../middlewares/socket/socket.js";
 import {
@@ -74,6 +76,67 @@ export const receiveMessage = async (req, res) => {
       const messageId = statusUpdate.id;
       const status = statusUpdate.status;
       let campaignUpdatePayload = null;
+
+      // Normally Meta webhook statuses don't always give tenantId directly, we find it from wamid
+      let webhook_tenant_id = null;
+      try {
+        const [msgSearch] = await db.sequelize.query(
+          `SELECT tenant_id FROM messages WHERE wamid = ? LIMIT 1`,
+          { replacements: [messageId] }
+        );
+        if (msgSearch.length > 0) {
+          webhook_tenant_id = msgSearch[0].tenant_id;
+        } else {
+          // Fallback 1: Check if this was a Campaign Message broadcast
+          const [campaignSearch] = await db.sequelize.query(
+            `SELECT c.tenant_id FROM whatsapp_campaign_recipients r 
+             JOIN whatsapp_campaigns c ON r.campaign_id = c.campaign_id 
+             WHERE r.meta_message_id = ? LIMIT 1`,
+            { replacements: [messageId] }
+          );
+          if (campaignSearch.length > 0) {
+            webhook_tenant_id = campaignSearch[0].tenant_id;
+          } else {
+            // Fallback 2: Direct lookup from phone_number_id (covers Postman/Direct API calls)
+            const phoneId = value?.metadata?.phone_number_id;
+            if (phoneId) {
+              const [accountSearch] = await db.sequelize.query(
+                `SELECT tenant_id FROM whatsapp_accounts WHERE phone_number_id = ? LIMIT 1`,
+                { replacements: [phoneId] }
+              );
+              if (accountSearch.length > 0) {
+                webhook_tenant_id = accountSearch[0].tenant_id;
+              }
+            }
+          }
+        }
+
+        // Fallback 3: Direct lookup from WABA ID (Very reliable for Meta UI messages)
+        if (!webhook_tenant_id) {
+          const wabaId = req.body?.entry?.[0]?.id;
+          if (wabaId) {
+            const [wabaSearch] = await db.sequelize.query(
+              `SELECT tenant_id FROM whatsapp_accounts WHERE waba_id = ? LIMIT 1`,
+              { replacements: [wabaId] }
+            );
+            if (wabaSearch.length > 0) {
+              webhook_tenant_id = wabaSearch[0].tenant_id;
+            }
+          }
+        }
+      } catch (e) {
+        console.error("Error finding tenant_id for webhook:", e);
+      }
+
+      if (webhook_tenant_id) {
+        console.log(`[WEBHOOK] Identified tenant ${webhook_tenant_id} for status update: ${messageId}`);
+        // Fire and forget billing cost calculation
+        setImmediate(() => {
+          processBillingFromWebhook(webhook_tenant_id, statusUpdate);
+        });
+      } else {
+        console.warn(`[WEBHOOK] Could not identify tenant for status update: ${messageId}. Payload:`, JSON.stringify(value?.metadata));
+      }
 
       await db.sequelize.transaction(async (t) => {
         const recipient = await db.WhatsappCampaignRecipients.findOne({
@@ -417,8 +480,9 @@ export const receiveMessage = async (req, res) => {
         );
 
         const finalReply = aiResult?.message;
-        const fallback =
-          "Our team will review your message and contact you shortly.";
+        const fallback = aiResult?.tagDetected 
+          ? "" 
+          : "Our team will review your message and contact you shortly.";
         const messageToSend =
           finalReply && finalReply.trim() ? finalReply.trim() : fallback;
 

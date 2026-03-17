@@ -1,7 +1,6 @@
 import db from "../../database/index.js";
 import { tableNames } from "../../database/tableName.js";
 import axios from "axios";
-import { AiService } from "../../utils/ai/coreAi.js";
 import { getWhatsappAccountByTenantService } from "../WhatsappAccountModel/whatsappAccount.service.js";
 import { generateReadableIdFromLast } from "../../utils/helpers/generateReadableIdFromLast.js";
 
@@ -138,6 +137,20 @@ export const createWhatsappTemplateService = async (
         `,
         {
           replacements: [template_id, components.footer.text],
+          transaction,
+        },
+      );
+    }
+
+    if (components.buttons && Array.isArray(components.buttons) && components.buttons.length > 0) {
+      await db.sequelize.query(
+        `
+        INSERT INTO ${tableNames.WHATSAPP_TEMPLATE_COMPONENTS}
+        (template_id, component_type, text_content)
+        VALUES (?, 'buttons', ?)
+        `,
+        {
+          replacements: [template_id, JSON.stringify(components.buttons)],
           transaction,
         },
       );
@@ -334,6 +347,48 @@ export const submitWhatsappTemplateService = async ({
         type: "FOOTER",
         text: footer.text_content,
       });
+    }
+
+    // BUTTONS (optional)
+    const buttonsComp = components.find((c) => c.component_type === "buttons");
+    if (buttonsComp && buttonsComp.text_content) {
+      try {
+        const buttons = JSON.parse(buttonsComp.text_content);
+        if (buttons.length > 0) {
+          metaComponents.push({
+            type: "BUTTONS",
+            buttons: buttons.map((btn) => {
+              const b = {
+                type: btn.type,
+              };
+              
+              // Text is only allowed/required for certain types
+              if (btn.type !== "CATALOG" && btn.type !== "COPY_CODE") {
+                b.text = btn.text || btn.label || (btn.type === 'URL' ? 'Visit Website' : 'Call');
+              }
+
+              if (btn.type === "PHONE_NUMBER") b.phone_number = btn.phone_number || btn.value;
+              if (btn.type === "URL") {
+                b.url = btn.url || btn.value;
+                // Handle dynamic URL if {{1}} is present
+                if (b.url && b.url.includes("{{1}}")) {
+                  const urlVar = variables.find(v => v.variable_key === "url_1" || v.variable_key === "1");
+                  if (urlVar) {
+                    b.example = [urlVar.sample_value];
+                  }
+                }
+              }
+              if (btn.type === "COPY_CODE") {
+                 b.example = btn.example || btn.value || "CODE123";
+              }
+              // CATALOG and MPM don't need extra fields in the basic creation usually
+              return b;
+            }),
+          });
+        }
+      } catch (e) {
+        console.error("Error parsing buttons for Meta payload:", e);
+      }
     }
 
     // ─────────────────────────────────────────
@@ -764,13 +819,18 @@ export const pullTemplatesFromMetaService = async (tenant_id) => {
           let format = comp.format ? comp.format.toLowerCase() : null;
           let type = comp.type.toLowerCase();
 
-          if (type === "body" || type === "footer" || type === "header") {
+          if (type === "body" || type === "footer" || type === "header" || type === "buttons") {
+            let contentValue = text;
+            if (type === "buttons") {
+              contentValue = JSON.stringify(comp.buttons);
+            }
+
             await db.sequelize.query(
               `INSERT INTO ${tableNames.WHATSAPP_TEMPLATE_COMPONENTS}
                 (template_id, component_type, header_format, text_content)
                 VALUES (?, ?, ?, ?)`,
               {
-                replacements: [template_id, type, format, text],
+                replacements: [template_id, type, format, contentValue],
                 transaction,
               },
             );
@@ -1056,6 +1116,21 @@ export const updateWhatsappTemplateService = async (
       );
     }
 
+    // Insert buttons if provided
+    if (components.buttons && Array.isArray(components.buttons) && components.buttons.length > 0) {
+      await db.sequelize.query(
+        `
+        INSERT INTO ${tableNames.WHATSAPP_TEMPLATE_COMPONENTS}
+        (template_id, component_type, text_content)
+        VALUES (?, 'buttons', ?)
+        `,
+        {
+          replacements: [template_id, JSON.stringify(components.buttons)],
+          transaction,
+        },
+      );
+    }
+
     // Delete and recreate variables
     await db.sequelize.query(
       `DELETE FROM ${tableNames.WHATSAPP_TEMPLATE_VARIABLES} WHERE template_id = ?`,
@@ -1143,35 +1218,24 @@ export const updateWhatsappTemplateService = async (
   }
 };
 
-export const generateAiTemplateService = async ({
-  prompt,
+/**
+ * Uses AI to help user generate or fix a template's content
+ */
+export const generateTemplateContentService = async ({
   focus,
   style,
   optimization,
+  prompt,
   previous_content = null,
   rejection_reason = null,
 }) => {
-  const systemPrompt = `You are an expert WhatsApp Marketing Copywriter. 
-  Your goal is to generate or FIX high-converting WhatsApp message body content based on user instructions.
-  
-  RULES:
-  1. Use {{1}}, {{2}}, etc. for dynamic variables (e.g., Name, Order ID, Date).
-  2. The message must be professional yet engaging.
-  3. Category: ${focus} (Marketing, Utility, or Authentication).
-  4. Style: ${style} (Normal, Poetic, Exciting, or Funny).
-  5. Optimize for: ${optimization} (Click Rate or Reply Rate).
-  6. Output ONLY the message body text. No headers, no footers, no explanations.
-  7. IMPORTANT (for Marketing/Utility): Meta requires at least 15 words total, OR 5 words per variable. Ensure the text is descriptive.
-  8. IMPORTANT (for Authentication): These usually contain a verification code and should be concise. e.g. "Your verification code is {{1}}."
-  
-  ${previous_content
-      ? `FIX MODE: 
-  The previous version was: "${previous_content}"
-  Reason for failure/rejection: "${rejection_reason || "Unknown"}"
-  Please analyze the previous version, avoid the mistakes mentioned in the rejection reason, and ensure the new content strictly follows Meta category guidelines (e.g., Utility must NOT contain marketing language).`
-      : ""
-    }
-  `;
+  const systemPrompt = getTemplateCopywriterPrompt({
+    focus,
+    style,
+    optimization,
+    previousContent: previous_content,
+    rejectionReason: rejection_reason
+  });
 
   const userPrompt = `User Request: ${prompt}`;
 

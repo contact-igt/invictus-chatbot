@@ -9,6 +9,7 @@ import {
     restoreCampaignService,
 } from "./whatsappcampaign.service.js";
 import { missingFieldsChecker } from "../../utils/helpers/missingFields.js";
+import { uploadToCloudinary } from "../../middlewares/cloudinary/cloudinaryUpload.js";
 
 // ... existing code ...
 
@@ -146,6 +147,32 @@ export const permanentDeleteCampaignController = async (req, res) => {
         if (err.message === "Campaign not found") {
             return res.status(404).send({ message: err.message });
         }
+        return res.status(500).send({ message: err.message });
+    }
+};
+
+export const uploadCampaignMediaController = async (req, res) => {
+    try {
+        if (!req.files || !req.files.media) {
+            return res.status(400).send({ message: "No media file uploaded" });
+        }
+
+        const file = req.files.media;
+        const type = req.body.type || "image"; // image, video, document
+
+        // Resource type for Cloudinary
+        let resourceType = "image";
+        if (type === "video") resourceType = "video";
+        if (type === "document") resourceType = "raw";
+
+        const imageUrl = await uploadToCloudinary(file, resourceType, "public", "campaigns");
+
+        return res.status(200).send({
+            message: "Media uploaded successfully",
+            url: imageUrl,
+        });
+    } catch (err) {
+        console.error("Upload error:", err);
         return res.status(500).send({ message: err.message });
     }
 };

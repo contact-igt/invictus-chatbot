@@ -1,13 +1,7 @@
 import db from "../../database/index.js";
 import { tableNames } from "../../database/tableName.js";
-import fs from "fs";
-import path from "path";
-import handlebars from "handlebars";
-import { fileURLToPath } from "url";
+import { getTemplate } from "../../utils/email/templateLoader.js";
 import { sendEmail } from "../../utils/email/emailService.js";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 // Generate a 6-digit OTP
 export const generateOTPCode = () => {
@@ -35,13 +29,7 @@ export const generateOTPService = async (email, user_type) => {
         });
 
         // Send OTP email
-        const templatePath = path.join(
-            __dirname,
-            "../../../public/html/passwordResetOTP/index.html"
-        );
-
-        const source = fs.readFileSync(templatePath, "utf8");
-        const template = handlebars.compile(source);
+        const template = getTemplate("passwordResetOTP");
 
         const emailHtml = template({ email, otp });
 

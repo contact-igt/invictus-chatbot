@@ -17,7 +17,7 @@ export const WhatsappTemplateComponentTable = (sequelize, Sequelize) => {
       },
 
       component_type: {
-        type: Sequelize.ENUM("header", "body", "footer"),
+        type: Sequelize.ENUM("header", "body", "footer", "buttons"),
         allowNull: false,
       },
 

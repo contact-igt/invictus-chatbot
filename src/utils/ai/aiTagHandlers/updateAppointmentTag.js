@@ -83,6 +83,7 @@ export const execute = async (payload, context) => {
     if (data.date) updateFields.appointment_date = data.date;
     if (data.time) updateFields.appointment_time = data.time;
     if (data.doctor_id) updateFields.doctor_id = data.doctor_id;
+    if (data.age) updateFields.age = data.age;
 
     // Fetch existing appointment to fill in missing values for availability check
     let existingAppt = null;

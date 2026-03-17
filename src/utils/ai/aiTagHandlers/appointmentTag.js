@@ -7,6 +7,7 @@ import {
   formatAppointmentDate,
 } from "../../email/appointmentEmailTemplate.js";
 import { createUserMessageService } from "../../../models/Messages/messages.service.js";
+import db from "../../../database/index.js";
 
 export const execute = async (payload, context, cleanMessage) => {
   try {
@@ -17,14 +18,14 @@ export const execute = async (payload, context, cleanMessage) => {
     try {
       data = JSON.parse(payload);
     } catch (parseErr) {
+      const parseErrMsg =
+        "❌ Could not process the booking details. Please confirm your appointment details again and I'll book it for you.";
       console.error(
         "[TAG-HANDLER-APPOINTMENT] Invalid JSON payload:",
         parseErr.message,
         "\nRaw payload:",
         payload?.substring(0, 200),
       );
-      const parseErrMsg =
-        "❌ Could not process the booking details. Please confirm your appointment details again and I'll book it for you.";
       await sendWhatsAppMessage(tenant_id, phone, parseErrMsg).catch(() => {});
       try {
         await createUserMessageService(
@@ -39,16 +40,42 @@ export const execute = async (payload, context, cleanMessage) => {
           parseErrMsg,
         );
       } catch (_) {}
-      return;
+      // Explicitly throw error so caller can handle it
+      throw new Error(parseErrMsg);
     }
 
-    // Validate required fields before proceeding
-    if (!data.date || !data.time || !data.patient_name) {
+    // Strictly validate all required fields before proceeding
+    const requiredFields = [
+      { key: "patient_name", label: "full name" },
+      { key: "contact_number", label: "contact number" },
+      { key: "email", label: "email address" },
+      { key: "age", label: "age" },
+      { key: "date", label: "preferred date" },
+      { key: "time", label: "preferred time" },
+      { key: "doctor_id", label: "doctor selection" },
+      { key: "problem", label: "reason for visit" },
+    ];
+    // Fix: If contact_number is missing or a placeholder, use phone from context if available
+    if (
+      (!data.contact_number ||
+        data.contact_number === "NUM" ||
+        data.contact_number === "" ||
+        data.contact_number === undefined) &&
+      phone
+    ) {
+      data.contact_number = phone;
+    }
+
+    const missingFields = requiredFields.filter(
+      (f) => !data[f.key] || data[f.key] === "",
+    );
+    if (missingFields.length > 0) {
+      const missingLabels = missingFields.map((f) => f.label).join(", ");
+      const errorMsg = `❌ I'm missing the following information to complete your booking: ${missingLabels}.
+Please provide these details.`;
       console.error(
-        "[TAG-HANDLER-APPOINTMENT] Missing required fields (date, time, or patient_name)",
+        `[TAG-HANDLER-APPOINTMENT] Missing required fields: ${missingLabels}`,
       );
-      const errorMsg =
-        "❌ Could not book appointment — some required details (date, time, or patient name) are missing. Please provide all details.";
       await sendWhatsAppMessage(tenant_id, phone, errorMsg).catch((err) =>
         console.error(
           "[TAG-HANDLER-APPOINTMENT] WhatsApp send failed:",
@@ -68,7 +95,8 @@ export const execute = async (payload, context, cleanMessage) => {
           errorMsg,
         );
       } catch (_) {}
-      return;
+      // Explicitly throw error so caller can handle it
+      throw new Error(errorMsg);
     }
 
     // ─── Pre-Booking Validation: Check DB for existing appointments ───
@@ -253,6 +281,7 @@ export const execute = async (payload, context, cleanMessage) => {
       contact_number: data.contact_number || phone,
       appointment_date: data.date,
       appointment_time: data.time,
+      age: data.age || null,
       doctor_id: data.doctor_id || null,
       status: "Confirmed",
       email: data.email || null,
@@ -263,17 +292,51 @@ export const execute = async (payload, context, cleanMessage) => {
       `[TAG-HANDLER-APPOINTMENT] Executing for tenant ${tenant_id}, contact ${contact_id}`,
     );
 
-    const appointment =
-      await AppointmentService.createAppointmentService(appointmentData);
+    let appointment;
+    try {
+      appointment =
+        await AppointmentService.createAppointmentService(appointmentData);
+    } catch (err) {
+      // Log and rethrow so the caller (playground or chat) can show the error
+      console.error("[TAG-HANDLER-APPOINTMENT] DB error:", err.message);
+      throw err;
+    }
 
     console.log(
       `[TAG-HANDLER-APPOINTMENT] Successfully booked. ID: ${appointment.appointment_id}, Token: ${appointment.token_number}`,
     );
 
     // Send email confirmation
-    if (data.email) {
-      try {
-        const doctorName = appointment.doctor?.name || data.doctor_name || null;
+    try {
+      const contact = await db.Contacts.findOne({
+        where: { contact_id, tenant_id },
+        attributes: ["email"],
+      });
+
+      const emailTo = data.email || contact?.email;
+      if (emailTo) {
+        let doctorName = null;
+        if (appointment.doctor_id) {
+          // Fetch doctor name from DB
+          try {
+            const doctor = await db.Doctors.findOne({
+              where: { doctor_id: appointment.doctor_id, tenant_id },
+              attributes: ["name", "title"],
+            });
+            if (doctor) {
+              doctorName = doctor.title
+                ? `${doctor.title} ${doctor.name}`
+                : doctor.name;
+            }
+          } catch (err) {
+            console.error(
+              "[TAG-HANDLER-APPOINTMENT] Could not fetch doctor name for email:",
+              err.message,
+            );
+          }
+        }
+        // fallback to data.doctor_name or null
+        if (!doctorName) doctorName = data.doctor_name || null;
         const formattedDate = formatAppointmentDate(data.date);
 
         const emailHtml = buildAppointmentEmailHtml({
@@ -295,16 +358,16 @@ export const execute = async (payload, context, cleanMessage) => {
           time: data.time,
         });
 
-        await sendEmail({ to: data.email, subject, html: emailHtml });
+        await sendEmail({ to: emailTo, subject, html: emailHtml });
         console.log(
-          `[TAG-HANDLER-APPOINTMENT] Confirmation email sent to ${data.email}`,
-        );
-      } catch (emailErr) {
-        console.error(
-          "[TAG-HANDLER-APPOINTMENT] Email send error:",
-          emailErr.message,
+          `[TAG-HANDLER-APPOINTMENT] Confirmation email sent to ${emailTo}`,
         );
       }
+    } catch (emailErr) {
+      console.error(
+        "[TAG-HANDLER-APPOINTMENT] Email send error:",
+        emailErr.message,
+      );
     }
 
     // Send WhatsApp confirmation message
@@ -317,6 +380,7 @@ export const execute = async (payload, context, cleanMessage) => {
           `👤 Patient: ${appointmentData.patient_name}\n` +
           `📅 Date: ${data.date}\n` +
           `🕐 Time: ${data.time}\n` +
+          `${data.age ? `🔢 Age: ${data.age}\n` : ""}` +
           `🎟️ Token: *#${appointment.token_number}*` +
           `${problemNote}\n\n` +
           `Please arrive 10 minutes before your scheduled time. See you soon! 😊`;
@@ -356,17 +420,18 @@ export const execute = async (payload, context, cleanMessage) => {
 
       if (err.message.includes("already have an appointment")) {
         errorMsg =
-          "⚠️ " +
+          "⚠️ *Duplicate Booking Found*\n\n" +
           err.message +
-          "\n\nWould you like to choose a different date or time?";
+          "\n\nWould you like to manage your existing appointment or pick a different time?";
       } else if (err.message.includes("time slot is already booked")) {
         errorMsg =
-          "⚠️ " +
-          err.message +
-          "\n\nPlease pick another time from the available slots.";
+          "⚠️ *Slot Unavailable*\n\n" +
+          "It looks like that time slot was just taken. " +
+          "Please pick another time from the list above and I'll book it for you immediately.";
       } else {
         errorMsg =
-          '❌ Sorry, something went wrong while booking your appointment. Please try again or type "book appointment" to restart.';
+          "❌ *Booking Failed*\n\n" +
+          'I encountered a technical issue while booking your appointment. Please try again or type "agent" to speak with our staff.';
       }
 
       await sendWhatsAppMessage(tenant_id, phone, errorMsg).catch(() => {});

@@ -42,6 +42,15 @@ export const AppointmentTable = (sequelize, Sequelize) => {
         type: Sequelize.STRING,
         allowNull: false,
       },
+      age: {
+        type: Sequelize.INTEGER,
+        allowNull: true,
+      },
+      email: {
+        type: Sequelize.STRING,
+        allowNull: true,
+        validate: { isEmail: true },
+      },
 
       appointment_date: {
         type: Sequelize.DATEONLY,

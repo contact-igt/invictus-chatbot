@@ -33,7 +33,7 @@ export const execute = async (payload, context, cleanMessage) => {
       } catch (_) {}
       return;
     }
-    const { doctor_id, date, doctor_name } = data;
+    const { doctor_id, date, doctor_name, preferred_time } = data;
 
     if (!doctor_id || !date) {
       console.error(
@@ -84,13 +84,27 @@ export const execute = async (payload, context, cleanMessage) => {
     } else {
       // Show available slots
       const slotList = result.slots.map((s) => `  🕐 ${s}`).join("\n");
-      message =
-        `📅 *Available Slots*\n\n` +
-        `${doctor_name ? `Doctor: ${doctor_name}\n` : ""}` +
-        `Date: ${date} (${result.day})\n` +
-        `Available: ${result.slots.length} of ${result.totalSlots} slots\n\n` +
-        `${slotList}\n\n` +
-        `Please choose a time from the available slots above.`;
+      
+      if (preferred_time && result.slots.includes(preferred_time)) {
+        message =
+          `📅 *Time Available!*\n\n` +
+          `I've checked, and *${preferred_time}* is available with ${doctor_name || "the doctor"} on ${date}.\n\n` +
+          `Shall I go ahead and book this for you?`;
+      } else if (preferred_time) {
+        message =
+          `📅 *Slot Unavailable*\n\n` +
+          `I'm sorry, but *${preferred_time}* is not available on ${date}.\n\n` +
+          `*Available Slots:*\n${slotList}\n\n` +
+          `Please choose a different time from the list above.`;
+      } else {
+        message =
+          `📅 *Available Slots*\n\n` +
+          `${doctor_name ? `Doctor: ${doctor_name}\n` : ""}` +
+          `Date: ${date} (${result.day})\n` +
+          `Available: ${result.slots.length} of ${result.totalSlots} slots\n\n` +
+          `${slotList}\n\n` +
+          `Please choose a time from the available slots above.`;
+      }
     }
 
     await sendWhatsAppMessage(tenant_id, phone, message).catch((err) =>

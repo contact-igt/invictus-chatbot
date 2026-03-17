@@ -8,6 +8,12 @@ import { handleClassification } from "../../utils/ai/classificationHandler.js";
 import { getContactByPhoneAndTenantIdService } from "../ContactsModel/contacts.service.js";
 import { getLeadByContactIdService } from "../LeadsModel/leads.service.js";
 import { getLastAppointmentService } from "../AppointmentModel/appointment.service.js";
+import { 
+  getAdminSystemPrompt, 
+  getAdminSuggestedReplyPrompt, 
+  getAdminLeadSourcePrompt, 
+  getAdminAppointmentHistoryPrompt 
+} from "../../utils/ai/prompts/index.js";
 
 export const createUserMessageService = async (
   tenant_id,
@@ -23,6 +29,7 @@ export const createUserMessageService = async (
   media_url = null,
   media_mime_type = null,
   status = null,
+  template_name = null,
 ) => {
   const Query = `INSERT INTO ${tableNames?.MESSAGES} (  
   tenant_id,
@@ -37,8 +44,9 @@ export const createUserMessageService = async (
   message_type,
   media_url,
   media_mime_type,
-  status )
-   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) `;
+  status,
+  template_name )
+   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?) `;
 
   try {
     const values = [
@@ -55,6 +63,7 @@ export const createUserMessageService = async (
       media_url,
       media_mime_type,
       status,
+      template_name,
     ];
 
     const [result] = await db.sequelize.query(Query, { replacements: values });
@@ -180,31 +189,7 @@ export const suggestReplyService = async (tenant_id, phone) => {
         // 1. Lead Source Detection
         const lead = await getLeadByContactIdService(tenant_id, contact_id);
         if (lead && lead.source === "none") {
-          leadSourcePrompt = `
-────────────────────────────────
-LEAD SOURCE DETECTION (INTERNAL)
-────────────────────────────────
-The source of this lead is currently UNKNOWN.
-
-During the FIRST conversation, after greeting the user, naturally and politely ask:
-"How did you hear about us?" or "Where did you find us?"
-
-When the user responds, identify the source and add ONE of these tags at the END of your reply:
-- [LEAD_SOURCE: meta] — if they mention Meta, Facebook ads
-- [LEAD_SOURCE: google] — if they mention Google, Google ads, search
-- [LEAD_SOURCE: website] — if they mention website, online
-- [LEAD_SOURCE: instagram] — if they mention Instagram
-- [LEAD_SOURCE: facebook] — if they mention Facebook page/post (not ads)
-- [LEAD_SOURCE: twitter] — if they mention Twitter, X
-- [LEAD_SOURCE: referral] — if they mention friend, family, someone told them
-- [LEAD_SOURCE: other] — if the source doesn't match any above
-
-Rules:
-- Ask about the source ONLY ONCE. If already asked in previous messages, do NOT ask again.
-- The tag is INTERNAL. The user must NEVER see it.
-- Add the tag ONLY when the user gives a clear answer about their source.
-- Do NOT guess. If the user's answer is unclear, do NOT add the tag.
-`;
+          leadSourcePrompt = getAdminLeadSourcePrompt();
         }
 
         // 2. Appointment History Detection
@@ -212,36 +197,7 @@ Rules:
           tenant_id,
           contact_id,
         );
-        if (lastAppointment) {
-          const status = lastAppointment.status;
-          const date = lastAppointment.appointment_date;
-          const time = lastAppointment.appointment_time;
-
-          appointmentHistoryPrompt = `
-────────────────────────────────
-APPOINTMENT HISTORY (INTERNAL)
-────────────────────────────────
-This person HAS booked with us before.
-Latest Appointment Info:
-- Status: ${status}
-- Date: ${date}
-- Time: ${time}
-
-Guidelines for your response:
-${status === "Completed" ? "- They had a good experience last time. Acknowledge their return and ask if they need a new booking." : ""}
-${status === "Noshow" ? "- They missed their last appointment. Be polite but note that they missed it if they try to book again." : ""}
-${status === "Confirmed" ? `- They already have an upcoming appointment on ${date} at ${time}. If they try to book again, remind them of this existing one.` : ""}
-${status === "Cancelled" ? "- They cancelled their previous booking. Ask if they want to reschedule now." : ""}
-`;
-        } else {
-          appointmentHistoryPrompt = `
-────────────────────────────────
-NEW VISITOR (INTERNAL)
-────────────────────────────────
-This person has NO previous appointment history.
-Naturally guide them towards booking if they show interest.
-`;
-        }
+        appointmentHistoryPrompt = getAdminAppointmentHistoryPrompt(lastAppointment);
       }
     } catch (err) {
       console.error(
@@ -250,30 +206,7 @@ Naturally guide them towards booking if they show interest.
       );
     }
 
-    const ADMIN_SYSTEM_PROMPT = `
-You are a professional customer support executive.
-
-Rules:
-1. Relevance Check:
-   - If "Relevant knowledge" contains a "[Previous Question]" and "[Admin Resolution]", you MUST verify if it applies to the CURRENT question.
-   - If the previous question is about a different topic (e.g., Question A is about "refunds", current question is about "shipping"), do NOT use that resolution.
-2. Missing Knowledge:
-   - If the information is NOT found or NOT relevant:
-   - You MUST end your response with: [MISSING_KNOWLEDGE: brief reason]
-   - Example: I'm sorry, I don't have information about the pricing at the moment. [MISSING_KNOWLEDGE: pricing not found]
-
-3. Appointment Booking:
-   - If the user wants to book, collect: Name, Date (YYYY-MM-DD), Time (HH:mm), and Doctor (optional).
-   - Once confirmed, output: [BOOK_APPOINTMENT: {"date": "YYYY-MM-DD", "time": "HH:mm", "patient_name": "...", "doctor_id": "..."}]
-   - ONLY output the tag when the user has explicitly agreed to the final details.
-
-4. Professional English only.
-5. No emojis or symbols.
-6. Be clear and helpful.
-
-${leadSourcePrompt}
-${appointmentHistoryPrompt}
-`;
+    const ADMIN_SYSTEM_PROMPT = getAdminSystemPrompt(leadSourcePrompt, appointmentHistoryPrompt);
 
     let msgWhere = "phone = ? AND tenant_id = ?";
     let msgReplacements = [phone, tenant_id];
@@ -324,23 +257,12 @@ ${appointmentHistoryPrompt}
         : "No relevant knowledge found.";
 
     /* 4️⃣ AI prompt */
-    const prompt = `
-${ADMIN_SYSTEM_PROMPT}
-
-Conversation history:
-${chatHistory}
-
-Last customer message:
-${lastUserMessage}
-
-Relevant knowledge:
-${knowledgeText}
-
-Task:
-Write a professional reply to the last customer message.
-
-  Reply:
-`;
+    const prompt = getAdminSuggestedReplyPrompt({
+      adminSystemPrompt: ADMIN_SYSTEM_PROMPT,
+      chatHistory,
+      lastUserMessage,
+      knowledgeText,
+    });
 
     const rawReply = await AiService("system", prompt);
 

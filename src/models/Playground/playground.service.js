@@ -3,6 +3,13 @@ import db from "../../database/index.js";
 import { tableNames } from "../../database/tableName.js";
 import { searchKnowledgeChunks } from "../Knowledge/knowledge.search.js";
 import { getActivePromptService } from "../AiPrompt/aiprompt.service.js";
+import {
+  getCommonBasePrompt,
+  getAppointmentBookingPrompt,
+  getLeadSourcePrompt,
+  getPlaygroundSystemPrompt,
+  DEFAULT_PLAYGROUND_PROMPT,
+} from "../../utils/ai/prompts/index.js";
 import { processResponse } from "../../utils/ai/aiTagHandlers/index.js";
 import { classifyResponse } from "../../utils/ai/responseClassifier.js";
 
@@ -117,8 +124,13 @@ export const playgroundChatService = async (
   tenant_id,
   message,
   conversationHistory = [],
+  contact_id = null,
 ) => {
   try {
+    // Always define sources and chunks to avoid reference errors
+    let sources = [];
+    let chunks = [];
+    let resolvedContext = "";
     const now = new Date();
 
     const currentDateFormatted = now.toLocaleDateString("en-IN", {
@@ -137,24 +149,65 @@ export const playgroundChatService = async (
       hour12: true,
     });
 
-    // Get active prompt for this tenant
-    const hospitalPrompt =
-      (await getActivePromptService(tenant_id)) ||
-      "You are a professional customer support assistant.";
+    // --- 1. Fetch Contextual Sections (Doctors, Appointments, Profile, CRM) ---
+    let doctorsSection = "No doctors found.";
+    let existingAppointmentsSection = "No active appointments found.";
+    let patientProfileSection = "No profile details found for this contact.";
+    let leadSourcePrompt = "";
 
-    // Search knowledge base WITH source tracking
-    const { chunks, sources } = await searchKnowledgeChunksWithSources(
-      tenant_id,
-      message,
-    );
+    try {
+      const { getDoctorListService } = await import("../DoctorModel/doctor.service.js");
+      const doctors = await getDoctorListService(tenant_id);
+      if (doctors && doctors.length > 0) {
+        doctorsSection = doctors
+          .map(
+            (d) =>
+              `${d.title ? d.title + " " : ""}${d.name}${d.specializations && d.specializations.length > 0 ? " (" + d.specializations.map((s) => s.name).join(", ") + ")" : ""}`,
+          )
+          .join(", ");
+      }
+    } catch (err) {
+      console.error("[PLAYGROUND] Failed to fetch doctors:", err.message);
+    }
+
+    if (contact_id) {
+      try {
+        const { getRecentAppointmentsForAIService } = await import("../AppointmentModel/appointment.service.js");
+        const appts = await getRecentAppointmentsForAIService(tenant_id, contact_id);
+        if (appts && appts.length > 0) {
+          existingAppointmentsSection = appts
+            .map((a) => {
+              const date = a.appointment_date ? a.appointment_date.toISOString().split("T")[0] : "";
+              const time = a.appointment_time || "";
+              const doctor = a.doctor ? (a.doctor.title ? a.doctor.title + " " : "") + a.doctor.name : "";
+              return `• ${date} at ${time} with ${doctor} (Status: ${a.status})`;
+            })
+            .join("\n");
+        }
+      } catch (err) {
+        console.error("[PLAYGROUND] Failed to fetch appointments:", err.message);
+      }
+      try {
+        const { getContactByContactIdAndTenantIdService } = await import("../ContactsModel/contacts.service.js");
+        const profile = await getContactByContactIdAndTenantIdService(contact_id, tenant_id);
+        if (profile) {
+          patientProfileSection = `Name: ${profile.name || ""}\nPhone: ${profile.phone || ""}\nEmail: ${profile.email || ""}`;
+        }
+      } catch (err) {
+        console.error("[PLAYGROUND] Failed to fetch patient profile:", err.message);
+      }
+    }
+
+    // --- 2. Knowledge Base Search ---
+    const knowledgeResult = await searchKnowledgeChunksWithSources(tenant_id, message);
+    chunks = knowledgeResult.chunks;
+    sources = knowledgeResult.sources;
 
     const knowledgeContext =
-      chunks && chunks.length > 0
-        ? chunks.join("\n\n")
-        : "No relevant uploaded documents.";
+      chunks && chunks.length > 0 ? chunks.join("\n\n") : "No relevant uploaded documents.";
 
-    // Search resolved AI logs for additional context
-    let resolvedContext = "";
+    // --- 3. Resolved Logs Search ---
+    resolvedContext = "";
     try {
       const logKeywords = message
         .toLowerCase()
@@ -163,9 +216,7 @@ export const playgroundChatService = async (
         .filter((w) => w.length > 2);
 
       if (logKeywords.length > 0) {
-        const logConditions = logKeywords
-          .map(() => "(user_message LIKE ? OR resolution LIKE ?)")
-          .join(" OR ");
+        const logConditions = logKeywords.map(() => "(user_message LIKE ? OR resolution LIKE ?)").join(" OR ");
         const logValues = [];
         logKeywords.forEach((k) => {
           logValues.push(`%${k}%`);
@@ -173,14 +224,14 @@ export const playgroundChatService = async (
         });
 
         const logQuery = `
-          SELECT user_message, resolution
-          FROM ${tableNames.AI_ANALYSIS_LOGS}
-          WHERE tenant_id IN (?)
-            AND status = 'resolved'
-            AND (${logConditions})
-          ORDER BY created_at DESC
-          LIMIT 5
-        `;
+            SELECT user_message, resolution
+            FROM ${tableNames.AI_ANALYSIS_LOGS}
+            WHERE tenant_id IN (?)
+              AND status = 'resolved'
+              AND (${logConditions})
+            ORDER BY created_at DESC
+            LIMIT 5
+          `;
 
         const [logRows] = await db.sequelize.query(logQuery, {
           replacements: [tenant_id, ...logValues],
@@ -188,10 +239,7 @@ export const playgroundChatService = async (
 
         if (logRows.length > 0) {
           resolvedContext = logRows
-            .map(
-              (log) =>
-                `[Previous Question]: ${log.user_message}\n[Admin Resolution]: ${log.resolution}`,
-            )
+            .map((log) => `[Previous Question]: ${log.user_message}\n[Admin Resolution]: ${log.resolution}`)
             .join("\n\n");
         }
       }
@@ -216,44 +264,32 @@ ${resolvedContext}
 }
 `;
 
+    // --- 4. Language & Style Generation (Simulated for Playground) ---
+    const languageInfo = {
+      language: "detected English",
+      style: "helpful and professional",
+      label: "playground_sim",
+    };
+
+    // --- 5. Assemble Production-Parity System Prompt ---
+    const hospitalPrompt = (await getActivePromptService(tenant_id)) || DEFAULT_PLAYGROUND_PROMPT;
+    const commonBasePrompt = getCommonBasePrompt(languageInfo);
+    const appointmentBookingPrompt = getAppointmentBookingPrompt(
+      doctorsSection,
+      existingAppointmentsSection,
+      patientProfileSection,
+    );
+    
+    // In playground, we can show lead source ask if contact_id is provided but source unknown
+    // (For simulation, we'll just skip it for now or include it conditionally)
+    leadSourcePrompt = contact_id ? getLeadSourcePrompt(contact_id) : "";
+
     const systemPrompt = `
-You are a WhatsApp front-desk reception assistant in a playground/testing environment.
+${leadSourcePrompt}
 
-Your role:
-- Act like a real human support or front-desk executive
-- Be polite, calm, respectful, and supportive
-- Use simple, easy-to-understand words
-- Sound natural and professional (not robotic, not an AI)
+${appointmentBookingPrompt}
 
-────────────────────────────────
-GLOBAL BEHAVIOUR RULES
-────────────────────────────────
-- Always read the FULL conversation history before replying.
-- Understand the user's intent from all recent messages.
-- Never repeat questions that were already asked or answered.
-- Ask ONLY one question at a time, and only if necessary.
-- Do NOT make assumptions.
-- Do NOT hallucinate or invent information.
-
-────────────────────────────────
-KNOWLEDGE DEPENDENCY RULE
-────────────────────────────────
-All factual information MUST come ONLY from UPLOADED KNOWLEDGE.
-
-1. If UPLOADED KNOWLEDGE contains relevant information:
-   - Answer clearly using ONLY that information.
-
-2. If UPLOADED KNOWLEDGE is EMPTY, INACTIVE, DELETED, or has NO relevant data:
-   - You MUST end your response with: [MISSING_KNOWLEDGE: brief reason]
-   - Politely inform the user you don't have that information.
-   - Do NOT guess.
-
-────────────────────────────────
-RELEVANCE CHECK
-────────────────────────────────
-If "UPLOADED KNOWLEDGE" contains a "[Previous Question]" and "[Admin Resolution]":
-- Verify if the previous question is on the SAME TOPIC as the current question.
-- If different topics, IGNORE the resolution.
+${commonBasePrompt}
 
 ${hospitalPrompt}
 
@@ -301,34 +337,53 @@ ${combinedKnowledge}
       userMessage: message,
     });
 
-    const finalReply = processed.message;
+    let finalReply = processed.message;
+    let tagExecutionLog = [];
 
-    // Classify response (but don't persist logs for playground)
+    // If tags detected, simulate execution log (without actually persisting)
+    if (processed.tagDetected) {
+      tagExecutionLog.push(`Detected tag: [${processed.tagDetected}${processed.tagPayload ? ': ' + processed.tagPayload : ''}]`);
+      
+      if (processed.tagDetected === "BOOK_APPOINTMENT" && processed.tagPayload) {
+        tagExecutionLog.push("Simulating Appointment Booking Handler...");
+        // If the AI's reply is empty after removing the tag, show a default confirmation
+        if (!finalReply || !finalReply.trim()) {
+          finalReply = "✅ [SIMULATED] Your appointment has been booked! (Data not saved to DB)";
+        }
+      }
+    }
+
+    // Classify response
     let classification = null;
     try {
       classification = await classifyResponse(message, finalReply);
+      tagExecutionLog.push(`Classification: ${classification.category} (${classification.reason})`);
     } catch (err) {
       console.error("[PLAYGROUND-CLASSIFIER] Error:", err.message);
     }
 
     return {
       reply: finalReply,
+      technicalLogs: {
+        systemPrompt: systemPrompt,
+        userMessage: message,
+        rawAIResponse: rawReply,
+        knowledgeChunksUsed: chunks || [],
+        resolvedLogsUsed: resolvedContext || "",
+        detectedTags: processed.tagDetected ? {
+          tag: processed.tagDetected,
+          payload: processed.tagPayload
+        } : null,
+        tagExecutionHistory: tagExecutionLog,
+        classification,
+      },
       knowledgeSources: sources,
-      knowledgeChunksUsed: chunks || [],
-      resolvedLogsUsed: resolvedContext || "",
-      responseOrigin:
-        chunks && chunks.length > 0 ? "knowledge_base" : "ai_generated",
+      responseOrigin: chunks && chunks.length > 0 ? "knowledge_base" : "ai_generated",
       tokenUsage: {
         prompt_tokens: tokenUsage.prompt_tokens || 0,
         completion_tokens: tokenUsage.completion_tokens || 0,
         total_tokens: tokenUsage.total_tokens || 0,
-      },
-      classification: classification
-        ? {
-            category: classification.category,
-            reason: classification.reason,
-          }
-        : null,
+      }
     };
   } catch (err) {
     console.error("[PLAYGROUND] Error:", err.message);

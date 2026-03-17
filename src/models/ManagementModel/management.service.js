@@ -288,3 +288,80 @@ export const updateManagementPasswordService = async (
     throw err;
   }
 };
+
+// ─── Pricing Table CRUD Services ─────────────────────────────
+
+export const getPricingRulesService = async () => {
+  try {
+    const [rows] = await db.sequelize.query(
+      `SELECT * FROM ${tableNames.PRICING_TABLE}`
+    );
+    return rows;
+  } catch (err) {
+    throw err;
+  }
+};
+
+export const createPricingRuleService = async (category, country, rate, markup_percent = 0) => {
+  try {
+    const [existing] = await db.sequelize.query(
+      `SELECT id FROM ${tableNames.PRICING_TABLE} WHERE category = ? AND country = ? LIMIT 1`,
+      { replacements: [category, country] }
+    );
+    if (existing.length > 0) {
+      throw new Error(`Pricing rule already exists for ${category} / ${country}`);
+    }
+
+    const [result] = await db.sequelize.query(
+      `INSERT INTO ${tableNames.PRICING_TABLE} (category, country, rate, markup_percent, created_at, updated_at)
+       VALUES (?, ?, ?, ?, NOW(), NOW())`,
+      { replacements: [category, country, rate, markup_percent] }
+    );
+    return result;
+  } catch (err) {
+    throw err;
+  }
+};
+
+export const updatePricingRuleService = async (id, rate, markup_percent) => {
+  try {
+    const updateFields = [];
+    const values = [];
+
+    if (rate !== undefined && rate !== null) {
+      updateFields.push("rate = ?");
+      values.push(rate);
+    }
+    if (markup_percent !== undefined && markup_percent !== null) {
+      updateFields.push("markup_percent = ?");
+      values.push(markup_percent);
+    }
+
+    if (updateFields.length === 0) {
+      throw new Error("No fields to update");
+    }
+
+    updateFields.push("updated_at = NOW()");
+    values.push(id);
+
+    const [result] = await db.sequelize.query(
+      `UPDATE ${tableNames.PRICING_TABLE} SET ${updateFields.join(", ")} WHERE id = ?`,
+      { replacements: values }
+    );
+    return result;
+  } catch (err) {
+    throw err;
+  }
+};
+
+export const deletePricingRuleService = async (id) => {
+  try {
+    const [result] = await db.sequelize.query(
+      `DELETE FROM ${tableNames.PRICING_TABLE} WHERE id = ?`,
+      { replacements: [id] }
+    );
+    return result;
+  } catch (err) {
+    throw err;
+  }
+};

@@ -7,27 +7,7 @@ const openai = new OpenAI({
     apiKey: process.env.OPENAI_API_KEY,
 });
 
-const CLASSIFIER_PROMPT = `
-You are a Response Classifier. Your job is to analyze an AI response to a user's question and determine the category of the response.
-
-CATEGORIES:
-1. MISSING_KNOWLEDGE: The AI explicitly states it does not have the answer/access to info.
-2. OUT_OF_SCOPE: The user asked something unrelated to the hospital/business (e.g. cooking, coding).
-3. URGENT: The user is reporting an emergency, a critical problem, or severe dissatisfaction.
-4. NEGATIVE_SENTIMENT: The user seems frustrated, angry, or upset.
-5. NORMAL: A standard helpful response.
-
-IMPORTANT: 
-- Return your answer as a JSON object with two fields: "category" and "reason".
-- "reason" should be a very brief (3-5 words) explanation of why you chose that category.
-- If multiple categories apply, pick the most significant (URGENT > MISSING_KNOWLEDGE > OUT_OF_SCOPE).
-
-USER QUESTION: "{USER_QUESTION}"
-AI RESPONSE: "{AI_RESPONSE}"
-
-Example Result: {"category": "MISSING_KNOWLEDGE", "reason": "No info on cataract pricing"}
-
-RESULT:`;
+import { CLASSIFIER_PROMPT } from "./prompts/index.js";
 
 /**
  * Classifies an AI response into a specific category with reasoning.

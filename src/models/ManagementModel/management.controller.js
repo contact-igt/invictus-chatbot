@@ -19,16 +19,24 @@ import {
   getManagementByIdService,
   getDeletedManagementListService,
   restoreManagementService,
+  getPricingRulesService,
+  createPricingRuleService,
+  updatePricingRuleService,
+  deletePricingRuleService,
 } from "./management.service.js";
 import db from "../../database/index.js";
 import { tableNames } from "../../database/tableName.js";
 import { generatePassword } from "../../utils/helpers/generatePassword.js";
-import fs from "fs";
-import path from "path";
-import handlebars from "handlebars";
-import { fileURLToPath } from "url";
+import { getTemplate } from "../../utils/email/templateLoader.js";
 import { sendEmail } from "../../utils/email/emailService.js";
 import { normalizeMobile, cleanCountryCode } from "../../utils/helpers/normalizeMobile.js";
+import {
+  generateOTPService,
+  verifyOTPService,
+  checkOTPVerificationService,
+} from "../OtpVerificationModel/otpverification.service.js";
+
+
 
 export const registerManagementController = async (req, res) => {
   try {
@@ -86,16 +94,7 @@ export const registerManagementController = async (req, res) => {
       role,
     );
 
-    const __filename = fileURLToPath(import.meta.url);
-    const __dirname = path.dirname(__filename);
-
-    const templatePath = path.join(
-      __dirname,
-      "../../../public/html/managementInvite/index.html",
-    );
-
-    const source = fs.readFileSync(templatePath, "utf8");
-    const template = handlebars.compile(source);
+    const template = getTemplate("managementInvite");
 
     const emailHtml = template({
       admin_name: username,
@@ -387,13 +386,7 @@ export const deleteManagmentByIdController = async (req, res) => {
   }
 };
 
-// --- Password Reset Controllers ---
 
-import {
-  generateOTPService,
-  verifyOTPService,
-  checkOTPVerificationService,
-} from "../OtpVerificationModel/otpverification.service.js";
 
 export const forgotManagementPasswordController = async (req, res) => {
   try {
@@ -481,5 +474,50 @@ export const resetManagementPasswordController = async (req, res) => {
     });
   } catch (err) {
     return res.status(500).send({ message: err.message });
+  }
+};
+
+// ─── Pricing Table CRUD Controllers ─────────────────────────────
+
+export const getPricingRulesController = async (req, res) => {
+  try {
+    const rules = await getPricingRulesService();
+    return res.status(200).json({ success: true, data: rules });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+export const createPricingRuleController = async (req, res) => {
+  try {
+    const { category, country, rate, markup_percent } = req.body;
+    if (!category || !country || rate === undefined) {
+      return res.status(400).json({ success: false, message: "category, country, and rate are required" });
+    }
+    await createPricingRuleService(category, country, rate, markup_percent || 0);
+    return res.status(201).json({ success: true, message: "Pricing rule created" });
+  } catch (err) {
+    return res.status(400).json({ success: false, message: err.message });
+  }
+};
+
+export const updatePricingRuleController = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { rate, markup_percent } = req.body;
+    await updatePricingRuleService(id, rate, markup_percent);
+    return res.status(200).json({ success: true, message: "Pricing rule updated" });
+  } catch (err) {
+    return res.status(400).json({ success: false, message: err.message });
+  }
+};
+
+export const deletePricingRuleController = async (req, res) => {
+  try {
+    const { id } = req.params;
+    await deletePricingRuleService(id);
+    return res.status(200).json({ success: true, message: "Pricing rule deleted" });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
   }
 };

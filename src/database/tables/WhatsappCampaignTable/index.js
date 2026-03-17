@@ -67,6 +67,11 @@ export const WhatsappCampaignTable = (sequelize, Sequelize) => {
                 allowNull: true,
             },
 
+            header_media_url: {
+                type: Sequelize.TEXT,
+                allowNull: true,
+            },
+
             is_deleted: {
                 type: Sequelize.BOOLEAN,
                 defaultValue: false,

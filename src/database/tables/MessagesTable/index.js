@@ -82,6 +82,12 @@ export const MessagesTable = (sequelize, Sequelize) => {
         allowNull: true,
       },
 
+      template_name: {
+        type: Sequelize.STRING,
+        allowNull: true,
+        comment: "Stores the name of the template if message_type is template",
+      },
+
       status: {
         type: Sequelize.ENUM("sent", "delivered", "read", "failed"),
         allowNull: true,

@@ -308,6 +308,7 @@ export const sendTemplateMessageController = async (req, res) => {
       null,
       null,
       "sent",
+      template.template_name,
     );
 
     await updateAdminLeadService(tenant_id, contact_id);
@@ -512,6 +513,7 @@ export const sendTestMessageController = async (req, res) => {
         null,
         null,
         "sent",
+        template.template_name,
       );
 
       const io = getIO();

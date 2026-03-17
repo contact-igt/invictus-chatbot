@@ -10,7 +10,7 @@ import { initSocket } from "./middlewares/socket/socket.js";
 import AuthWhatsappRouter from "./models/AuthWhatsapp/AuthWhatsapp.routes.js";
 import WhatsappMessageRouter from "./models/Messages/messages.routes.js";
 import KnowledgeRouter from "./models/Knowledge/knowledge.routes.js";
-import AiPropmtRouter from "./models/AiPrompt/aiprompt.routes.js";
+import AiPromptRouter from "./models/AiPrompt/aiprompt.routes.js";
 import ManagementRouter from "./models/ManagementModel/management.routes.js";
 import TenantRouter from "./models/TenantModel/tenant.routes.js";
 import WhatsappAccountRouter from "./models/WhatsappAccountModel/whatsappAccount.routes.js";
@@ -32,6 +32,8 @@ import AppointmentRouter from "./models/AppointmentModel/appointment.routes.js";
 import DashboardRouter from "./models/DashboardModel/dashboard.routes.js";
 import { startAppointmentSchedulerService } from "./models/AppointmentModel/appointment.service.js";
 import PlaygroundRouter from "./models/Playground/playground.routes.js";
+import BillingRouter from "./models/BillingModel/billing.routes.js";
+import { startDailyMetaBillingSyncCronService } from "./models/BillingModel/billing.service.js";
 
 dns.setDefaultResultOrder("ipv4first");
 
@@ -76,7 +78,7 @@ app.use(
   AuthWhatsappRouter,
   WhatsappMessageRouter,
   KnowledgeRouter,
-  AiPropmtRouter,
+  AiPromptRouter,
   WhatsappAccountRouter,
   ContactRouter,
   LeadRouter,
@@ -89,7 +91,8 @@ app.use(
   SpecializationRouter,
   AppointmentRouter,
   PlaygroundRouter,
-  DashboardRouter
+  DashboardRouter,
+  BillingRouter
 );
 
 
@@ -105,6 +108,7 @@ startLeadHeatDecayCronService();
 startLiveChatCleanupService();
 startCampaignSchedulerService();
 startAppointmentSchedulerService();
+startDailyMetaBillingSyncCronService();
 
 const PORT = process.env.PORT || 8000;
 const server = http.createServer(app);

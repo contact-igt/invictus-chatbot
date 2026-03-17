@@ -26,7 +26,8 @@ export const createCampaignService = async (tenant_id, data, created_by) => {
             template_id,
             audience_type, // "manual" | "group" | "csv"
             audience_data, // Array of recipients OR group_id
-            scheduled_at
+            scheduled_at,
+            header_media_url
         } = data;
 
         // 0. Check for duplicate campaign name
@@ -55,16 +56,26 @@ export const createCampaignService = async (tenant_id, data, created_by) => {
             if (!Array.isArray(audience_data) || audience_data.length === 0) {
                 throw new Error("audience_data must be a non-empty array for manual/csv audience type");
             }
-            recipients = audience_data.map((item, index) => {
-                if (!item.mobile_number) {
-                    throw new Error(`Mobile number missing for recipient at index ${index}`);
-                }
-                return {
-                    mobile_number: formatPhoneNumber(item.mobile_number),
-                    contact_id: item.contact_id || null,
-                    dynamic_variables: item.dynamic_variables || null,
-                };
-            });
+
+            // Remove potential duplicates or empty entries by mobile_number
+            const seenNumbers = new Set();
+            recipients = audience_data
+                .filter(item => item.mobile_number)
+                .map((item) => {
+                    const formatted = formatPhoneNumber(item.mobile_number);
+                    if (seenNumbers.has(formatted)) return null;
+                    seenNumbers.add(formatted);
+                    return {
+                        mobile_number: formatted,
+                        contact_id: item.contact_id || null,
+                        dynamic_variables: item.dynamic_variables || null,
+                    };
+                })
+                .filter(Boolean);
+
+            if (recipients.length === 0) {
+                throw new Error("No valid recipients provided in audience data");
+            }
         } else if (audience_type === "group") {
             // Group: Fetch all members from the group
             const group_id = audience_data; // audience_data is just the group_id string
@@ -105,6 +116,7 @@ export const createCampaignService = async (tenant_id, data, created_by) => {
                 status: campaign_type === "scheduled" ? "scheduled" : "active", // Changed from "draft" to "active" for Send Now
                 total_audience: recipients.length,
                 scheduled_at,
+                header_media_url,
                 created_by,
             },
             { transaction }
@@ -213,12 +225,23 @@ export const executeCampaignBatchService = async (campaign_id, tenant_id, batchS
             limit: batchSize,
         });
 
-        // Fetch Template Body Text
-        const [[bodyComponent]] = await db.sequelize.query(
-            `SELECT text_content FROM ${tableNames.WHATSAPP_TEMPLATE_COMPONENTS} WHERE template_id = ? AND component_type = 'body' LIMIT 1`,
+        if (!campaign.template) {
+            console.error(`Campaign ${campaign_id} has no template details`);
+            await campaign.update({ status: "failed" });
+            return { finished: true };
+        }
+
+        // Fetch Template Components (Body and Header)
+        const [components_data] = await db.sequelize.query(
+            `SELECT component_type, text_content, header_format FROM ${tableNames.WHATSAPP_TEMPLATE_COMPONENTS} WHERE template_id = ? AND component_type IN ('body', 'header')`,
             { replacements: [campaign.template_id] },
         );
+
+        const bodyComponent = components_data.find(c => c.component_type === 'body');
+        const headerComponent = components_data.find(c => c.component_type === 'header');
+
         const templateBodyText = bodyComponent?.text_content || `Template: ${campaign.template.template_name}`;
+        const headerFormat = headerComponent?.header_format;
 
         if (recipients.length === 0) {
             // Mark campaign as completed if no more pending recipients
@@ -226,8 +249,8 @@ export const executeCampaignBatchService = async (campaign_id, tenant_id, batchS
             return { finished: true };
         }
 
-        // Update campaign status to active if it was scheduled
-        if (campaign.status === "scheduled") {
+        // Update campaign status to active if it was scheduled or draft
+        if (campaign.status === "scheduled" || campaign.status === "draft") {
             await campaign.update({ status: "active" });
         }
 
@@ -301,6 +324,7 @@ export const executeCampaignBatchService = async (campaign_id, tenant_id, batchS
                 await recipient.update({
                     status: "sent",
                     meta_message_id: result.meta_message_id || null,
+                    error_message: null, // Clear any previous error
                 });
 
                 // 3. Log to Message History and Activate Live Chat
@@ -326,7 +350,8 @@ export const executeCampaignBatchService = async (campaign_id, tenant_id, batchS
                         "template",
                         null,
                         null,
-                        "sent"
+                        "sent",
+                        campaign.template.template_name,
                     );
 
                     // 7. Activate Live Chat

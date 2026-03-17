@@ -1,16 +1,10 @@
 import db from "../../database/index.js";
 import { tableNames } from "../../database/tableName.js";
 import crypto from "crypto";
-import fs from "fs";
-import path from "path";
-import handlebars from "handlebars";
-import { fileURLToPath } from "url";
+import { getTemplate } from "../../utils/email/templateLoader.js";
 import { generateInviteToken } from "../../middlewares/auth/authMiddlewares.js";
 import { generateReadableIdFromLast } from "../../utils/helpers/generateReadableIdFromLast.js";
 import { sendEmail } from "../../utils/email/emailService.js";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 export const createTenantInvitationService = async (
   invitation_id,
@@ -142,13 +136,7 @@ export const sendTenantInvitationService = async (
 
     const inviteUrl = `${process.env.FRONTEND_URL}/account/activate?token=${inviteToken}`;
 
-    const templatePath = path.join(
-      __dirname,
-      "../../../public/html/tenantInvite/index.html",
-    );
-
-    const source = fs.readFileSync(templatePath, "utf8");
-    const template = handlebars.compile(source);
+    const template = getTemplate("tenantInvite");
 
     const emailHtml = template({
       name,
@@ -180,13 +168,7 @@ export const sendTenantPasswordSetSuccessEmailService = async (
     const webhookUrl = `${process.env.BACKEND_URL}/api/whatsapp/webhook/${tenant_id}`;
     const metaVerifyToken = verify_token || process.env.META_VERIFY_TOKEN;
     console.log("webhookUrl", webhookUrl)
-    const templatePath = path.join(
-      __dirname,
-      "../../../public/html/passwordSetSuccess/index.html",
-    );
-
-    const source = fs.readFileSync(templatePath, "utf8");
-    const template = handlebars.compile(source);
+    const template = getTemplate("passwordSetSuccess");
 
     const emailHtml = template({
       name,
@@ -218,13 +200,7 @@ export const sendTenantUserWelcomeEmailService = async (
   try {
     const loginUrl = `${process.env.FRONTEND_URL}/login`;
 
-    const templatePath = path.join(
-      __dirname,
-      "../../../public/html/tenantUserWelcome/index.html",
-    );
-
-    const source = fs.readFileSync(templatePath, "utf8");
-    const template = handlebars.compile(source);
+    const template = getTemplate("tenantUserWelcome");
 
     const emailHtml = template({
       name,
