@@ -17,12 +17,12 @@ export const WhatsappTemplateComponentTable = (sequelize, Sequelize) => {
       },
 
       component_type: {
-        type: Sequelize.ENUM("header", "body", "footer", "buttons"),
+        type: Sequelize.ENUM("header", "body", "footer", "buttons", "carousel"),
         allowNull: false,
       },
 
       header_format: {
-        type: Sequelize.ENUM("text", "image", "video", "document"),
+        type: Sequelize.ENUM("text", "image", "video", "document", "location"),
         allowNull: true, // only for header
       },
 

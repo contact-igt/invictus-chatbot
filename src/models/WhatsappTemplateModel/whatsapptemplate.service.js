@@ -56,6 +56,7 @@ export const createWhatsappTemplateService = async (
   tenant_id,
   template_name,
   category,
+  template_type,
   language,
   components,
   variables,
@@ -77,8 +78,8 @@ export const createWhatsappTemplateService = async (
     await db.sequelize.query(
       `
       INSERT INTO ${tableNames.WHATSAPP_TEMPLATE}
-      (template_id, tenant_id, template_name, category, language, created_by)
-      VALUES (?, ?, ?, ?, ?, ?)
+      (template_id, tenant_id, template_name, category, template_type, language, created_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
       `,
       {
         replacements: [
@@ -86,6 +87,7 @@ export const createWhatsappTemplateService = async (
           tenant_id,
           template_name,
           category,
+          template_type,
           language,
           created_by,
         ],
@@ -106,7 +108,8 @@ export const createWhatsappTemplateService = async (
     );
 
     if (components.header) {
-      const { type, text, media_url } = components.header;
+      const { type, format, text, media_url } = components.header;
+      const headerFormat = (format || type || "text").toLowerCase();
 
       if (!type) {
         throw new Error("Header type is required");
@@ -121,7 +124,7 @@ export const createWhatsappTemplateService = async (
         {
           replacements: [
             template_id,
-            type, // header_format
+            headerFormat, // header_format
             text ? text : null, // header text (only if type=text)
             media_url ? media_url : null, // media only for image/video/doc
           ],
@@ -163,6 +166,20 @@ export const createWhatsappTemplateService = async (
         `,
         {
           replacements: [template_id, JSON.stringify(components.buttons)],
+          transaction,
+        },
+      );
+    }
+
+    if (components.carousel) {
+      await db.sequelize.query(
+        `
+        INSERT INTO ${tableNames.WHATSAPP_TEMPLATE_COMPONENTS}
+        (template_id, component_type, text_content)
+        VALUES (?, 'carousel', ?)
+        `,
+        {
+          replacements: [template_id, JSON.stringify(components.carousel)],
           transaction,
         },
       );
@@ -210,7 +227,94 @@ export const submitWhatsappTemplateService = async ({
 
     let bodyText = body.text_content.trim();
 
-    // Meta rule: no leading/trailing variable
+    // ─────────────────────────────────────────
+    // AUTHENTICATION TEMPLATE — special Meta payload
+    // ─────────────────────────────────────────
+    if (template.category === 'authentication') {
+      // Authentication templates use exactly {{1}} for the OTP.
+      // Meta does NOT apply the normal word-density rules here.
+      // We build the payload directly and bypass the normal component builder.
+
+      const otpSampleValue = (variables && variables[0]?.sample_value) || "123456";
+
+      const authMetaComponents = [
+        {
+          type: "BODY",
+          text: bodyText,
+          add_security_recommendation: true,
+          example: { body_text: [[otpSampleValue]] },
+        },
+        {
+          type: "FOOTER",
+          text: "This code expires in 10 minutes.",
+        },
+        {
+          type: "BUTTONS",
+          buttons: [
+            {
+              type: "OTP",
+              otp_type: "COPY_CODE",
+              text: "Copy Code",
+            },
+          ],
+        },
+      ];
+
+      const authPayload = {
+        name: template.template_name,
+        language: template.language,
+        category: "AUTHENTICATION",
+        parameter_format: "positional",
+        components: authMetaComponents,
+      };
+
+      console.log("🔐 Auth Template Meta Payload:", JSON.stringify(authPayload, null, 2));
+
+      let authResponse;
+      try {
+        authResponse = await axios.post(
+          `https://graph.facebook.com/v24.0/${whatsappAccount.waba_id}/message_templates`,
+          authPayload,
+          {
+            headers: {
+              Authorization: `Bearer ${whatsappAccount.access_token}`,
+              "Content-Type": "application/json",
+            },
+          },
+        );
+      } catch (metaErr) {
+        console.error("❌ Meta Auth Template Error:", metaErr.response?.data);
+        throw metaErr;
+      }
+
+      const metaTemplateId = authResponse.data.id;
+      const metaStatus = authResponse.data.status || "IN_REVIEW";
+
+      await db.sequelize.query(
+        `UPDATE ${tableNames.WHATSAPP_TEMPLATE} SET meta_template_id = ?, status = 'pending' WHERE template_id = ? AND is_deleted = false`,
+        { replacements: [metaTemplateId, template.template_id], transaction },
+      );
+
+      await db.sequelize.query(
+        `INSERT INTO ${tableNames.WHATSAPP_TEMPLATE_SYNC_LOGS} (template_id, action, request_payload, response_payload, meta_status) VALUES (?, 'submit', ?, ?, ?)`,
+        {
+          replacements: [
+            template.template_id,
+            JSON.stringify(authPayload),
+            JSON.stringify(authResponse.data),
+            "pending",
+          ],
+          transaction,
+        },
+      );
+
+      await transaction.commit();
+      return { meta_template_id: metaTemplateId, meta_status: metaStatus };
+    }
+
+    // ─────────────────────────────────────────
+    // Meta rule: no leading/trailing variable (non-auth templates only)
+    // ─────────────────────────────────────────
     if (/^{{\d+}}/.test(bodyText)) {
       throw new Error("Template body cannot start with a variable");
     }
@@ -259,24 +363,39 @@ export const submitWhatsappTemplateService = async ({
     // HEADER (optional)
     const header = components.find((c) => c.component_type === "header");
     if (header) {
+      const format = (header.header_format || "text").toUpperCase();
       const headerObj = {
         type: "HEADER",
-        format: (header.header_format || "text").toUpperCase(),
-        text: header.text_content,
+        format: format,
       };
 
-      // If text header has variables, we need examples
-      if (
-        headerObj.format === "TEXT" &&
-        header.text_content?.includes("{{1}}")
-      ) {
-        const headerVar = variables.find(
-          (v) => v.variable_key === "1" || v.variable_key === "header_1",
-        );
-        if (headerVar) {
-          headerObj.example = { header_text: [headerVar.sample_value] };
+      if (format === "TEXT") {
+        headerObj.text = header.text_content;
+        if (header.text_content?.includes("{{1}}")) {
+          const headerVar = variables.find(
+            (v) => v.variable_key === "1" || v.variable_key === "header_1",
+          );
+          if (headerVar) {
+            headerObj.example = { header_text: [headerVar.sample_value] };
+          }
         }
+      } else if (["IMAGE", "VIDEO", "DOCUMENT"].includes(format)) {
+        // Media header - requires example (header_handle)
+        // Use a generic sample URL as fallback if media_url is missing
+        const defaultSamples = {
+          IMAGE: "https://www.facebook.com/images/fb_icon_325x325.png",
+          VIDEO: "https://www.w3schools.com/html/mov_bbb.mp4",
+          DOCUMENT: "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf"
+        };
+        const sampleUrl = header.media_url || defaultSamples[format];
+        if (sampleUrl) {
+          headerObj.example = { header_handle: [sampleUrl] };
+        }
+      } else if (format === "LOCATION") {
+        // Meta requires 'text' for Location header title
+        headerObj.text = "Location";
       }
+
       metaComponents.push(headerObj);
     }
 
@@ -361,6 +480,48 @@ export const submitWhatsappTemplateService = async ({
       });
     }
 
+    // CAROUSEL (optional)
+    const carouselComp = components.find((c) => c.component_type === "carousel");
+    if (carouselComp && carouselComp.text_content) {
+      try {
+        const carouselData = JSON.parse(carouselComp.text_content);
+        if (carouselData && Array.isArray(carouselData.cards)) {
+          metaComponents.push({
+            type: "CAROUSEL",
+            cards: carouselData.cards.map(card => {
+              const cardComponents = [
+                {
+                  type: "HEADER",
+                  format: carouselData.mediaType || "IMAGE",
+                  example: {
+                    header_handle: [card.media_url || "https://www.facebook.com/images/fb_icon_325x325.png"]
+                  }
+                },
+                {
+                  type: "BODY",
+                  text: card.bodyText || "Sample Card Body"
+                }
+              ];
+
+              if (card.buttons && Array.isArray(card.buttons) && card.buttons.length > 0) {
+                cardComponents.push({
+                  type: "BUTTONS",
+                  buttons: card.buttons.slice(0, 2).map(btn => ({
+                    type: "QUICK_REPLY",
+                    text: btn.text || "Quick Reply"
+                  }))
+                });
+              }
+
+              return { components: cardComponents };
+            })
+          });
+        }
+      } catch (e) {
+        console.error("Error parsing carousel component for Meta payload:", e);
+      }
+    }
+
     // BUTTONS (optional)
     const buttonsComp = components.find((c) => c.component_type === "buttons");
     if (buttonsComp && buttonsComp.text_content) {
@@ -373,7 +534,7 @@ export const submitWhatsappTemplateService = async ({
               const b = {
                 type: btn.type,
               };
-              
+
               // Text is only allowed/required for certain types
               if (btn.type !== "CATALOG" && btn.type !== "COPY_CODE") {
                 b.text = btn.text || btn.label || (btn.type === 'URL' ? 'Visit Website' : 'Call');
@@ -399,7 +560,7 @@ export const submitWhatsappTemplateService = async ({
                 }
               }
               if (btn.type === "COPY_CODE") {
-                 b.example = btn.example || btn.value || "CODE123";
+                b.example = btn.example || btn.value || "CODE123";
               }
               // CATALOG and MPM don't need extra fields in the basic creation usually
               return b;
@@ -1027,6 +1188,7 @@ export const updateWhatsappTemplateService = async (
   tenant_id,
   template_name,
   category,
+  template_type,
   language,
   components,
   variables,
@@ -1071,13 +1233,14 @@ export const updateWhatsappTemplateService = async (
     await db.sequelize.query(
       `
       UPDATE ${tableNames.WHATSAPP_TEMPLATE}
-      SET template_name = ?, category = ?, language = ?, updated_by = ?
+      SET template_name = ?, category = ?, template_type = ?, language = ?, updated_by = ?
       WHERE template_id = ? AND is_deleted = false
       `,
       {
         replacements: [
           template_name || template.template_name,
           category || template.category,
+          template_type || template.template_type,
           language || template.language,
           template.updated_by,
           template_id,
@@ -1107,14 +1270,15 @@ export const updateWhatsappTemplateService = async (
       await db.sequelize.query(
         `
         INSERT INTO ${tableNames.WHATSAPP_TEMPLATE_COMPONENTS}
-        (template_id, component_type, header_format, text_content)
-        VALUES (?, 'header', ?, ?)
+        (template_id, component_type, header_format, text_content, media_url)
+        VALUES (?, 'header', ?, ?, ?)
         `,
         {
           replacements: [
             template_id,
-            components.header.format || "text",
+            (components.header.format || components.header.type || "text").toLowerCase(),
             components.header.text || null,
+            components.header.media_url || null,
           ],
           transaction,
         },
@@ -1146,6 +1310,21 @@ export const updateWhatsappTemplateService = async (
         `,
         {
           replacements: [template_id, JSON.stringify(components.buttons)],
+          transaction,
+        },
+      );
+    }
+
+    // Insert carousel if provided
+    if (components.carousel) {
+      await db.sequelize.query(
+        `
+        INSERT INTO ${tableNames.WHATSAPP_TEMPLATE_COMPONENTS}
+        (template_id, component_type, text_content)
+        VALUES (?, 'carousel', ?)
+        `,
+        {
+          replacements: [template_id, JSON.stringify(components.carousel)],
           transaction,
         },
       );

@@ -38,7 +38,7 @@ export const WhatsappTemplateTable = (sequelize, Sequelize) => {
       },
 
       template_type: {
-        type: Sequelize.ENUM("text"),
+        type: Sequelize.ENUM("text", "image", "video", "document", "location", "carousel"),
         allowNull: false,
         defaultValue: "text",
       },

@@ -34,6 +34,7 @@ import { startAppointmentSchedulerService } from "./models/AppointmentModel/appo
 import PlaygroundRouter from "./models/Playground/playground.routes.js";
 import BillingRouter from "./models/BillingModel/billing.routes.js";
 import { startDailyMetaBillingSyncCronService } from "./models/BillingModel/billing.service.js";
+import WhatsappOtpRouter from "./models/OtpVerificationModel/otpverification.routes.js";
 
 dns.setDefaultResultOrder("ipv4first");
 
@@ -92,7 +93,8 @@ app.use(
   AppointmentRouter,
   PlaygroundRouter,
   DashboardRouter,
-  BillingRouter
+  BillingRouter,
+  WhatsappOtpRouter,
 );
 
 
