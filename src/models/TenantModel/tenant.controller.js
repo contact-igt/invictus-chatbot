@@ -1,4 +1,4 @@
-
+import db from "../../database/index.js";
 import { tableNames } from "../../database/tableName.js";
 import { generateReadableIdFromLast } from "../../utils/helpers/generateReadableIdFromLast.js";
 import { missingFieldsChecker } from "../../utils/helpers/missingFields.js";
@@ -14,7 +14,10 @@ import {
   updateTenantStatusService,
   getDeletedTenantListService,
   restoreTenantService,
+  getTenantInvitationListService,
+  getOnboardedTenantListService,
 } from "./tenant.service.js";
+
 import {
   normalizeMobile,
   cleanCountryCode,
@@ -22,10 +25,14 @@ import {
 
 import { sendTenantInvitationService } from "../TenantInvitationModel/tenantinvitation.service.js";
 import {
-  createTenantUserService,
-  findTenantUserByIdService,
-  updateTenantUserService,
+  createTenantUserService, // Retained from original
+  findTenantUserByIdService, // Retained from original
+  softDeleteTenantUserService,
+  softDeleteUsersByTenantIdService,
+  updateTenantUserByIdService,
   findTenantUserByEmailOrMobileGloballyService,
+  findTenantAdminService,
+  updateUsersStatusByTenantIdService,
 } from "../TenantUserModel/tenantuser.service.js";
 
 export const createTenantController = async (req, res) => {
@@ -39,8 +46,16 @@ export const createTenantController = async (req, res) => {
       owner_country_code,
       owner_mobile,
       type,
+      subscriptionStatus,
       subscription_start_date,
       subscription_end_date,
+      address,
+      city,
+      country,
+      state,
+      pincode,
+      maxUsers,
+      subscriptionPlan,
       profile,
     } = req.body;
 
@@ -91,8 +106,16 @@ export const createTenantController = async (req, res) => {
       cleanedCC,
       normalizedMobile,
       type,
+      subscriptionStatus || 'invited',
       subscription_start_date || null,
       subscription_end_date || null,
+      address || null,
+      city || null,
+      country || null,
+      state || null,
+      pincode || null,
+      maxUsers || 10,
+      subscriptionPlan || 'basic',
       profile || null,
     );
 
@@ -112,7 +135,8 @@ export const createTenantController = async (req, res) => {
       normalizedMobile,
       profile || null,
       "tenant_admin",
-      null, // Initial owners still use the invitation link flow
+      null,        // password_hash — null until invitation is accepted
+      "inactive",  // user_status — inactive until invitation is accepted
     );
 
     await sendTenantInvitationService(
@@ -181,6 +205,17 @@ export const updateTenantController = async (req, res) => {
       owner_country_code,
       owner_mobile,
       type,
+      subscriptionStatus,
+      subscription_start_date,
+      subscription_end_date,
+      address,
+      city,
+      country,
+      state,
+      pincode,
+      maxUsers,
+      subscriptionPlan,
+      profile,
     } = req.body;
 
     const tenant = await findTenantByIdService(id);
@@ -196,24 +231,68 @@ export const updateTenantController = async (req, res) => {
       ? normalizeMobile(cleanedCC, owner_mobile)
       : null;
 
+    const trimmedEmail = owner_email?.trim()?.toLowerCase();
+    console.log(`[UPDATE TENANT] ID: ${id}, New Email: ${trimmedEmail}, Old Email: ${tenant.owner_email}`);
+
+    // Check for duplicate email if it's changing
+    if (trimmedEmail && trimmedEmail !== tenant.owner_email) {
+      const existingUser = await findTenantUserByEmailOrMobileGloballyService(trimmedEmail, null);
+      if (existingUser) {
+        console.log(`[UPDATE TENANT] Duplicate email detected: ${trimmedEmail}`);
+        return res.status(400).json({ message: "Email already in use by another account" });
+      }
+    }
+
     await updateTenantService(
       company_name,
       owner_name,
-      owner_email,
+      trimmedEmail || owner_email,
       cleanedCC,
       normalizedMobile,
       type,
+      subscriptionStatus,
+      subscription_start_date,
+      subscription_end_date,
+      address,
+      city,
+      country,
+      state,
+      pincode,
+      maxUsers,
+      subscriptionPlan,
+      profile,
       id,
     );
 
     // Sync changes to the primary tenant admin user
-    await updateTenantUserService(
-      owner_name,
-      owner_email,
-      normalizedMobile,
-      cleanedCC,
-      tenant?.owner_email, // old email used as identifier
-    );
+    const tenantAdmin = await findTenantAdminService(id);
+    console.log(`[UPDATE TENANT] Admin Found: ${tenantAdmin ? tenantAdmin.tenant_user_id : "NO"}`);
+
+    if (tenantAdmin) {
+      await updateTenantUserByIdService(tenantAdmin.tenant_user_id, {
+        username: owner_name,
+        email: trimmedEmail || owner_email,
+        mobile: normalizedMobile,
+        country_code: cleanedCC,
+      });
+    }
+
+    // If email changed and user hasn't registered yet, send a new invitation
+    if (trimmedEmail && trimmedEmail !== tenant.owner_email) {
+      if (tenantAdmin && !tenantAdmin.password_hash) {
+        console.log(`[UPDATE TENANT] Sending new invitation to: ${trimmedEmail}`);
+        await sendTenantInvitationService(
+          id,
+          tenantAdmin.tenant_user_id,
+          trimmedEmail,
+          owner_name || tenantAdmin.username,
+          company_name || tenant.company_name,
+          req.user?.unique_id,
+        );
+      } else {
+        console.log(`[UPDATE TENANT] Skip invitation (User already has password or no admin found)`);
+      }
+    }
 
     return res.status(200).send({
       message: "Tenant updated successfully",
@@ -263,6 +342,13 @@ export const updateTenantStatusController = async (req, res) => {
 
     await updateTenantStatusService(status, id);
 
+    // Sync status to the tenant's users
+    let userStatus = "inactive";
+    if (["active", "trial", "grace_period"].includes(status)) {
+       userStatus = "active";
+    }
+    await updateUsersStatusByTenantIdService(id, userStatus);
+
     return res.status(200).send({
       message: "Tenant status updated successfully",
     });
@@ -282,8 +368,10 @@ export const softDeleteTenantController = async (req, res) => {
     }
 
     await softDeleteTenantService(id);
+    await softDeleteUsersByTenantIdService(id);
+
     return res.status(200).send({
-      message: "Tenant removed successfully",
+      message: "Tenant and all associated users removed successfully",
     });
   } catch (err) {
     res.status(500).send({ error: err.message });
@@ -346,6 +434,12 @@ export const resendTenantInvitationController = async (req, res) => {
       });
     }
 
+    if (tenantUser.password_hash) {
+      return res.status(400).send({
+        message: "User is already registered and has set their password.",
+      });
+    }
+
     const tenant = await findTenantByIdService(tenantUser.tenant_id);
     if (!tenant) {
       return res.status(404).send({
@@ -357,7 +451,7 @@ export const resendTenantInvitationController = async (req, res) => {
       tenantUser.tenant_id,
       tenant_user_id,
       tenantUser.email,
-      tenantUser.name,
+      tenantUser.username,
       tenant.company_name,
       loginUSer?.unique_id,
     );
@@ -412,14 +506,11 @@ export const getTenantWebhookStatusController = async (req, res) => {
 
 export const getTenantInvitationListController = async (req, res) => {
   try {
-    const query = `
-      SELECT t.tenant_id, t.company_name, t.owner_name, t.owner_email, ti.status as invitation_status, ti.invited_at
-      FROM ${tableNames.TENANTS} t
-      LEFT JOIN ${tableNames.TENANT_INVITATIONS} ti ON t.tenant_id = ti.tenant_id AND t.owner_email = ti.email
-      WHERE ti.status IN ('pending', 'accepted', 'completed', 'expired', 'revoked') AND t.is_deleted = 0
-      ORDER BY ti.invited_at DESC`;
-    const [rows] = await req.db.sequelize.query(query);
-    return res.status(200).json({ data: rows });
+    const data = await getTenantInvitationListService();
+    return res.status(200).json({
+      message: "success",
+      data: data || [],
+    });
   } catch (err) {
     return res.status(500).json({ message: err.message });
   }
@@ -428,14 +519,13 @@ export const getTenantInvitationListController = async (req, res) => {
 // Controller for onboarded tenant list
 export const getOnboardedTenantListController = async (req, res) => {
   try {
-    const query = `
-      SELECT t.tenant_id, t.company_name, t.owner_name, t.owner_email, t.status as tenant_status, t.subscription_start_date, t.subscription_end_date
-      FROM ${tableNames.TENANTS} t
-      WHERE t.status IN ('active', 'trial', 'expired') AND t.is_deleted = 0
-      ORDER BY t.created_at DESC`;
-    const [rows] = await req.db.sequelize.query(query);
-    return res.status(200).json({ data: rows });
+    const data = await getOnboardedTenantListService();
+    return res.status(200).json({
+      message: "success",
+      data: data || [],
+    });
   } catch (err) {
+    console.error("Error in getOnboardedTenantListController:", err);
     return res.status(500).json({ message: err.message });
   }
 };

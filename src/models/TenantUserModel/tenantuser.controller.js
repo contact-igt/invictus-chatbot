@@ -11,7 +11,7 @@ import {
   sendTenantInvitationService,
   sendTenantUserWelcomeEmailService,
 } from "../TenantInvitationModel/tenantinvitation.service.js";
-import { findTenantByIdService } from "../TenantModel/tenant.service.js";
+import { findTenantByIdService, updateTenantService } from "../TenantModel/tenant.service.js";
 import {
   createTenantUserService,
   findTenantUserByIdService,
@@ -52,19 +52,53 @@ export const getLoggedTenantUserController = async (req, res) => {
     // Remove sensitive data
     delete user.password_hash;
 
-    // Fetch tenant details for company name and webhook status
+    // Fetch full tenant details for organization profile
     const tenant = await findTenantByIdService(user.tenant_id);
-    if (tenant) {
-      user.company_name = tenant.company_name;
-      user.webhook_verified = !!tenant.webhook_verified;
-    }
+    const organization = tenant ? { ...tenant } : null;
 
     return res.status(200).send({
       message: "Logged-in tenant user profile fetched successfully",
-      data: { ...user, user_type: "tenant" },
+      data: { ...user, organization, user_type: "tenant" },
     });
   } catch (err) {
     res.status(500).send({ error: err.message });
+  }
+};
+
+export const updateLoggedTenantOrganizationController = async (req, res) => {
+  try {
+    const { tenant_id } = req.user;
+    const { company_name, type, address, city, state, country, pincode } = req.body;
+
+    if (!tenant_id) {
+      return res.status(400).json({ message: "Tenant ID required" });
+    }
+
+    // Call updateTenantService with ONLY the allowed fields
+    await updateTenantService(
+      company_name,
+      null, // owner_name (not allowed from here)
+      null, // owner_email (not allowed from here)
+      null, // owner_country_code
+      null, // owner_mobile
+      type,
+      null, // status (PROTECTED)
+      null, // sub_start
+      null, // sub_end
+      address,
+      city,
+      country,
+      state,
+      pincode,
+      null, // max_users (PROTECTED)
+      null, // sub_plan (PROTECTED)
+      null, // profile
+      tenant_id
+    );
+
+    return res.status(200).json({ message: "Organization updated successfully" });
+  } catch (err) {
+    return res.status(500).json({ message: err.message });
   }
 };
 
@@ -250,6 +284,20 @@ export const loginTenantUserController = async (req, res) => {
 
     // Fetch tenant details for company name and webhook status
     const tenant = await findTenantByIdService(user.tenant_id);
+    if (!tenant) {
+      console.log(`[LOGIN-DEBUG] Tenant not found for user: ${user.tenant_id}`);
+      return res.status(403).send({
+        message: "Organization details not found.",
+      });
+    }
+
+    if (["inactive", "suspended", "expired", "rejected"].includes(tenant.status)) {
+      console.log(`[LOGIN-DEBUG] Tenant ${tenant.tenant_id} is ${tenant.status}`);
+      return res.status(403).send({
+        message: `Your organization is ${tenant.status}. Please contact administration.`,
+      });
+    }
+
     if (tenant) {
       userDetails.company_name = tenant.company_name;
       userDetails.webhook_verified = !!tenant.webhook_verified;

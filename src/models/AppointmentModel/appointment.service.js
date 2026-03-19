@@ -36,6 +36,7 @@ export const createAppointmentService = async (data) => {
     contact_id,
     doctor_id,
     patient_name,
+    country_code,
     contact_number,
     appointment_date,
     age,
@@ -46,15 +47,24 @@ export const createAppointmentService = async (data) => {
 
   let { appointment_time } = data;
 
-  // Normalize contact_number: strip +, ensure digits only
-  if (contact_number) {
-    contact_number = formatPhoneNumber(contact_number);
-  }
+  // Auto-split phone
+  let phone = contact_number ? contact_number.toString().replace(/\D/g, "") : "";
+  let cc = country_code || "+91";
 
-  // Validate country code is present
-  if (contact_number && contact_number.length <= 10) {
+  if (!country_code && phone.length > 10) {
+      cc = `+${phone.slice(0, -10)}`;
+      phone = phone.slice(-10);
+  } else if (country_code && !cc.startsWith("+")) {
+      cc = `+${country_code.replace(/\D/g, "")}`;
+  }
+  
+  contact_number = phone;
+  country_code = cc;
+
+  // Validate mobile is exactly 10 digits
+  if (contact_number && contact_number.length !== 10) {
     throw new Error(
-      "Country code is required. Phone number must include country code (e.g. 919876543210)",
+      "Mobile number must be exactly 10 digits.",
     );
   }
 
@@ -185,6 +195,7 @@ export const createAppointmentService = async (data) => {
         doctor_id,
         contact_id,
         patient_name,
+        country_code,
         contact_number,
         appointment_date,
         appointment_time,
@@ -530,11 +541,16 @@ export const updateAppointmentService = async (
       );
     }
 
+    if (data.country_code !== undefined) {
+      let cc = data.country_code.toString().replace(/\D/g, "");
+      updateFields.country_code = `+${cc}`;
+    }
+
     if (data.contact_number !== undefined) {
-      let contact_number = formatPhoneNumber(data.contact_number);
-      if (contact_number && contact_number.length <= 10) {
+      let contact_number = data.contact_number.toString().replace(/\D/g, "");
+      if (contact_number && contact_number.length !== 10) {
         throw new Error(
-          "Country code is required. Phone number must include country code (e.g. 919876543210)",
+          "Mobile number must be exactly 10 digits.",
         );
       }
       updateFields.contact_number = contact_number;

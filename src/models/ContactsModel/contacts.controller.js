@@ -10,6 +10,7 @@ import {
   updateContactService,
   getDeletedContactListService,
   restoreContactService,
+  importContactsService,
 } from "./contacts.service.js";
 
 export const getDeletedContactListController = async (req, res) => {
@@ -41,25 +42,28 @@ export const restoreContactController = async (req, res) => {
 
 export const createContactController = async (req, res) => {
   const tenant_id = req.user.tenant_id; // Get from authenticated user
-  let { phone, name, profile_pic } = req.body;
+  let { country_code, phone, name, profile_pic } = req.body;
 
-  phone = formatPhoneNumber(phone);
-
-  if (!phone) {
+  if (!country_code || !phone) {
     return res.status(400).json({
-      message: "Valid phone number with country code is required",
+      message: "Both country code and 10-digit phone number are required",
     });
   }
 
-  // Phone must include country code (> 10 digits)
-  if (phone.length <= 10) {
+  // Clean and validate
+  phone = phone.toString().replace(/\D/g, "");
+  if (phone.length !== 10) {
     return res.status(400).json({
-      message:
-        "Country code is required. Phone number must include country code (e.g. 919876543210)",
+      message: "Phone number must be exactly 10 digits long",
     });
   }
+
+  // Clean country code (ensure starts with +)
+  let clean_cc = country_code.toString().replace(/\D/g, "");
+  country_code = `+${clean_cc}`;
 
   const requiredFields = {
+    country_code,
     phone,
   };
 
@@ -74,6 +78,7 @@ export const createContactController = async (req, res) => {
     const existingContact = await getContactByPhoneAndTenantIdService(
       tenant_id,
       phone,
+      country_code
     );
 
     if (existingContact) {
@@ -84,6 +89,7 @@ export const createContactController = async (req, res) => {
 
     await createContactService(
       tenant_id,
+      country_code,
       phone,
       name || null,
       profile_pic || null,
@@ -218,6 +224,92 @@ export const permanentDeleteContactController = async (req, res) => {
   } catch (err) {
     return res.status(500).send({
       message: err?.message,
+    });
+  }
+};
+
+export const importContactsController = async (req, res) => {
+  const tenant_id = req.user.tenant_id;
+
+  if (!req.files || !req.files.file) {
+    return res.status(400).send({ message: "No CSV file uploaded" });
+  }
+
+  const file = req.files.file;
+
+  // Check if it's a CSV
+  if (!file.name.endsWith('.csv')) {
+    return res.status(400).send({ message: "Please upload a valid CSV file" });
+  }
+
+  try {
+    const csvData = file.data.toString("utf8");
+    const lines = csvData.split(/\r?\n/).filter(line => line.trim() !== "");
+    
+    if (lines.length < 2) {
+      return res.status(400).send({ message: "CSV file is empty or missing data" });
+    }
+
+    // Parse headers
+    const headers = lines[0].split(",").map(h => h.trim().toLowerCase());
+    const nameIndex = headers.indexOf("name");
+    const phoneIndex = headers.indexOf("phone");
+    const emailIndex = headers.indexOf("email");
+
+    if (nameIndex === -1 || phoneIndex === -1) {
+      return res.status(400).send({ 
+        message: "CSV must contain 'name' and 'phone' columns" 
+      });
+    }
+
+    // Parse rows
+    const contactsToImport = [];
+    for (let i = 1; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line) continue;
+
+      const values = [];
+      let currentField = "";
+      let inQuotes = false;
+
+      for (let j = 0; j < line.length; j++) {
+        const char = line[j];
+        if (char === '"') {
+          inQuotes = !inQuotes;
+        } else if (char === ',' && !inQuotes) {
+          // Process field before pushing
+          let val = currentField.trim();
+          // Remove ="..." (Excel format) or "..." (Quoted format)
+          val = val.replace(/^="(.+)"$/, "$1").replace(/^"(.+)"$/, "$1");
+          values.push(val);
+          currentField = "";
+        } else {
+          currentField += char;
+        }
+      }
+      // Push last field
+      let lastVal = currentField.trim();
+      lastVal = lastVal.replace(/^="(.+)"$/, "$1").replace(/^"(.+)"$/, "$1");
+      values.push(lastVal);
+
+      if (values.length >= Math.max(nameIndex, phoneIndex, emailIndex) + 1) {
+        contactsToImport.push({
+          name: values[nameIndex],
+          phone: values[phoneIndex],
+          email: emailIndex !== -1 ? values[emailIndex] : null
+        });
+      }
+    }
+
+    const result = await importContactsService(tenant_id, contactsToImport);
+
+    return res.status(200).send({
+      message: `Import complete: ${result.success} succeeded, ${result.skipped} skipped/duplicate.`,
+      data: result
+    });
+  } catch (err) {
+    return res.status(500).send({
+      message: "An error occurred during CSV import: " + err.message
     });
   }
 };

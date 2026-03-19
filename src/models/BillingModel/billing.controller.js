@@ -7,8 +7,9 @@ import {
 export const getBillingKpiController = async (req, res) => {
   try {
     const { tenant_id } = req.user;
+    const { startDate, endDate } = req.query;
 
-    const kpiData = await getBillingKpiService(tenant_id);
+    const kpiData = await getBillingKpiService(tenant_id, startDate, endDate);
 
     return res.status(200).json({
       success: true,
@@ -28,9 +29,9 @@ export const getBillingKpiController = async (req, res) => {
 export const getBillingLedgerController = async (req, res) => {
   try {
     const { tenant_id } = req.user;
-    const { page = 1, limit = 50, category } = req.query;
+    const { page = 1, limit = 50, category, startDate, endDate } = req.query;
 
-    const ledgerData = await getBillingLedgerService(tenant_id, page, limit, category);
+    const ledgerData = await getBillingLedgerService(tenant_id, page, limit, category, startDate, endDate);
 
     return res.status(200).json({
       success: true,
@@ -49,8 +50,9 @@ export const getBillingLedgerController = async (req, res) => {
 export const getBillingSpendChartController = async (req, res) => {
   try {
     const { tenant_id } = req.user;
+    const { startDate, endDate } = req.query;
     
-    const spendChartData = await getBillingSpendChartService(tenant_id);
+    const spendChartData = await getBillingSpendChartService(tenant_id, startDate, endDate);
 
     return res.status(200).json({
       success: true,

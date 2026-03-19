@@ -8,6 +8,7 @@ import {
   updateContactController,
   getDeletedContactListController,
   restoreContactController,
+  importContactsController,
 } from "./contacts.controller.js";
 import { authenticate, authorize } from "../../middlewares/auth/authMiddlewares.js";
 
@@ -77,6 +78,13 @@ Router.get(
 );
 
 
+
+Router.post(
+  "/contact/import",
+  authenticate,
+  authorize({ user_type: "tenant", roles: ["tenant_admin", "staff"] }),
+  importContactsController,
+);
 
 export default Router;
 

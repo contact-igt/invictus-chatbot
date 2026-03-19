@@ -41,6 +41,11 @@ export const restoreContactGroupController = async (req, res) => {
 
 export const createContactGroupController = async (req, res) => {
     const tenant_id = req.user.tenant_id;
+    const { group_name } = req.body;
+
+    if (!group_name || !group_name.trim()) {
+        return res.status(400).send({ message: "Group name is required" });
+    }
 
     try {
         const group = await createContactGroupService(tenant_id, req.body);
@@ -87,6 +92,10 @@ export const addContactsToGroupController = async (req, res) => {
     const { group_id } = req.params;
     const { contact_ids } = req.body;
     const tenant_id = req.user.tenant_id;
+
+    if (!Array.isArray(contact_ids) || contact_ids.length === 0) {
+        return res.status(400).send({ message: "contact_ids must be a non-empty array" });
+    }
 
     try {
         const result = await addContactsToGroupService(group_id, tenant_id, contact_ids);
@@ -139,6 +148,10 @@ export const updateContactGroupController = async (req, res) => {
     const { group_id } = req.params;
     const tenant_id = req.user.tenant_id;
     const { group_name, description } = req.body;
+
+    if (group_name !== undefined && (!group_name || !group_name.trim())) {
+        return res.status(400).send({ message: "Group name cannot be empty" });
+    }
 
     try {
         const result = await updateContactGroupService(group_id, tenant_id, { group_name, description });

@@ -38,6 +38,12 @@ export const AppointmentTable = (sequelize, Sequelize) => {
         allowNull: false,
       },
 
+      country_code: {
+        type: Sequelize.STRING,
+        allowNull: false,
+        defaultValue: "+91",
+      },
+
       contact_number: {
         type: Sequelize.STRING,
         allowNull: false,

@@ -21,6 +21,36 @@ import {
 
 const Router = express.Router();
 
+Router.get(
+  "/invitations",
+  authenticate,
+  authorize({
+    user_type: "management",
+    roles: ["platform_admin", "super_admin"],
+  }),
+  getTenantInvitationListController,
+);
+
+Router.get(
+  "/onboarded",
+  authenticate,
+  authorize({
+    user_type: "management",
+    roles: ["platform_admin", "super_admin"],
+  }),
+  getOnboardedTenantListController,
+);
+
+Router.get(
+  "/deleted-list",
+  authenticate,
+  authorize({
+    user_type: "management",
+    roles: ["platform_admin", "super_admin"],
+  }),
+  getDeletedTenantListController,
+);
+
 Router.post(
   "/",
   authenticate,
@@ -31,6 +61,8 @@ Router.post(
   createTenantController,
 );
 
+
+
 Router.get(
   "/list",
   authenticate,
@@ -39,26 +71,6 @@ Router.get(
     roles: ["platform_admin", "super_admin"],
   }),
   getAllTenantController,
-);
-
-Router.get(
-  "/:id",
-  authenticate,
-  authorize({
-    user_type: "management",
-    roles: ["platform_admin", "super_admin"],
-  }),
-  getTenantByIdController,
-);
-
-Router.put(
-  "/:id",
-  authenticate,
-  authorize({
-    user_type: "management",
-    roles: ["platform_admin", "super_admin"],
-  }),
-  updateTenantController,
 );
 
 Router.put(
@@ -81,17 +93,7 @@ Router.delete(
   softDeleteTenantController,
 );
 
-Router.get(
-  "/deleted/list",
-  authenticate,
-  authorize({
-    user_type: "management",
-    roles: ["platform_admin", "super_admin"],
-  }),
-  getDeletedTenantListController,
-);
-
-Router.put(
+Router.post(
   "/:id/restore",
   authenticate,
   authorize({
@@ -132,23 +134,23 @@ Router.get(
 );
 
 Router.get(
-  "/invitations",
+  "/:id",
   authenticate,
   authorize({
     user_type: "management",
     roles: ["platform_admin", "super_admin"],
   }),
-  getTenantInvitationListController,
+  getTenantByIdController,
 );
 
-Router.get(
-  "/onboarded",
+Router.put(
+  "/:id",
   authenticate,
   authorize({
     user_type: "management",
     roles: ["platform_admin", "super_admin"],
   }),
-  getOnboardedTenantListController,
+  updateTenantController,
 );
 
 export default Router;

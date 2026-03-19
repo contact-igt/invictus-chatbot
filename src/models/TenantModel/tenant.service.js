@@ -9,8 +9,16 @@ export const createTenantService = async (
   owner_country_code,
   owner_mobile,
   type,
+  status,
   subscription_start_date,
   subscription_end_date,
+  address,
+  city,
+  country,
+  state,
+  pincode,
+  max_users,
+  subscription_plan,
   profile,
   verify_token = null,
 ) => {
@@ -22,11 +30,19 @@ export const createTenantService = async (
       owner_country_code,
       owner_mobile,
       type,
+      status,
       subscription_start_date,
       subscription_end_date,
+      address,
+      city,
+      country,
+      state,
+      pincode,
+      max_users,
+      subscription_plan,
       profile,
       verify_token
-  ) VALUES (?,?,?,?,?,?,?,?,?,?,?)`;
+  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`;
 
   try {
     const values = [
@@ -37,8 +53,16 @@ export const createTenantService = async (
       owner_country_code,
       owner_mobile,
       type,
+      status,
       subscription_start_date,
       subscription_end_date,
+      address,
+      city,
+      country,
+      state,
+      pincode,
+      max_users,
+      subscription_plan,
       profile,
       verify_token,
     ];
@@ -66,9 +90,9 @@ export const getAllTenantService = async () => {
     WHERE id IN (
       SELECT MAX(id)
       FROM ${tableNames.TENANT_INVITATIONS}
-      GROUP BY tenant_id, email
+      GROUP BY tenant_id
     )
-  ) ti ON t.tenant_id = ti.tenant_id AND t.owner_email = ti.email
+  ) ti ON t.tenant_id = ti.tenant_id
   WHERE t.is_deleted = ?
   ORDER BY t.created_at DESC`;
 
@@ -103,6 +127,17 @@ export const updateTenantService = async (
   owner_country_code,
   owner_mobile,
   type,
+  status,
+  subscription_start_date,
+  subscription_end_date,
+  address,
+  city,
+  country,
+  state,
+  pincode,
+  max_users,
+  subscription_plan,
+  profile,
   tenant_id,
 ) => {
   const updateFields = [];
@@ -136,6 +171,61 @@ export const updateTenantService = async (
   if (type !== undefined && type !== null) {
     updateFields.push("type = ?");
     updateValues.push(type);
+  }
+
+  if (status !== undefined && status !== null) {
+    updateFields.push("status = ?");
+    updateValues.push(status);
+  }
+
+  if (subscription_start_date !== undefined && subscription_start_date !== null) {
+    updateFields.push("subscription_start_date = ?");
+    updateValues.push(subscription_start_date);
+  }
+
+  if (subscription_end_date !== undefined && subscription_end_date !== null) {
+    updateFields.push("subscription_end_date = ?");
+    updateValues.push(subscription_end_date);
+  }
+
+  if (address !== undefined) {
+    updateFields.push("address = ?");
+    updateValues.push(address ?? null);
+  }
+
+  if (city !== undefined) {
+    updateFields.push("city = ?");
+    updateValues.push(city ?? null);
+  }
+
+  if (country !== undefined) {
+    updateFields.push("country = ?");
+    updateValues.push(country ?? null);
+  }
+
+  if (state !== undefined) {
+    updateFields.push("state = ?");
+    updateValues.push(state ?? null);
+  }
+
+  if (pincode !== undefined) {
+    updateFields.push("pincode = ?");
+    updateValues.push(pincode ?? null);
+  }
+
+  if (max_users !== undefined && max_users !== null) {
+    updateFields.push("max_users = ?");
+    updateValues.push(max_users);
+  }
+
+  if (subscription_plan !== undefined && subscription_plan !== null) {
+    updateFields.push("subscription_plan = ?");
+    updateValues.push(subscription_plan);
+  }
+
+  if (profile !== undefined) {
+    updateFields.push("profile = ?");
+    updateValues.push(profile ?? null);
   }
 
   if (updateFields.length === 0) return null;
@@ -174,17 +264,17 @@ export const updateTenantStatusService = async (status, tenant_id) => {
 };
 
 export const softDeleteTenantService = async (tenant_id) => {
-  const Query = `UPDATE ${tableNames?.TENANTS} SET is_deleted = ? , deleted_at = NOW() WHERE tenant_id = ? AND is_deleted = false`;
+  const Query = `UPDATE ${tableNames?.TENANTS} SET is_deleted = ? , deleted_at = NOW() WHERE tenant_id = ? AND is_deleted = 0`;
 
-  const Query2 = `UPDATE ${tableNames?.TENANT_USERS} SET is_deleted = ? , deleted_at = NOW() WHERE tenant_id IN(?) AND is_deleted = false`;
+  const Query2 = `UPDATE ${tableNames?.TENANT_USERS} SET is_deleted = ? , deleted_at = NOW() WHERE tenant_id IN(?) AND is_deleted = 0`;
 
   try {
     const [result] = await db.sequelize.query(Query, {
-      replacements: [true, tenant_id],
+      replacements: [1, tenant_id],
     });
 
     const [result2] = await db.sequelize.query(Query2, {
-      replacements: [true, tenant_id],
+      replacements: [1, tenant_id],
     });
 
     return [result, result2];
@@ -214,7 +304,7 @@ export const deleteTenantService = async (tenant_id) => {
 
 export const getDeletedTenantListService = async () => {
   const Query = `
-    SELECT * FROM ${tableNames.TENANTS}
+    SELECT *, status as tenant_status FROM ${tableNames.TENANTS}
     WHERE is_deleted = ?
     ORDER BY deleted_at DESC
   `;
@@ -234,13 +324,13 @@ export const getDeletedTenantListService = async () => {
 export const restoreTenantService = async (tenant_id) => {
   const Query = `
     UPDATE ${tableNames.TENANTS}
-    SET is_deleted = ?, deleted_at = NULL
+    SET is_deleted = ?, deleted_at = NULL, status = 'active'
     WHERE tenant_id = ?
   `;
 
   const Query2 = `
     UPDATE ${tableNames.TENANT_USERS}
-    SET is_deleted = ?, deleted_at = NULL
+    SET is_deleted = ?, deleted_at = NULL, status = 'active'
     WHERE tenant_id = ?
   `;
 
@@ -293,6 +383,47 @@ export const updateTenantWebhookStatusService = async (tenant_id, verified) => {
       replacements: [verified, tenant_id, 0],
     });
     return result;
+  } catch (err) {
+    throw err;
+  }
+};
+
+export const getTenantInvitationListService = async () => {
+  const query = `
+    SELECT t.tenant_id, t.company_name, tu.username as owner_name, tu.email as owner_email, ti.status as invitation_status, ti.invited_at, ti.tenant_user_id
+    FROM ${tableNames.TENANTS} t
+    INNER JOIN ${tableNames.TENANT_USERS} tu ON t.tenant_id = tu.tenant_id AND tu.role = 'tenant_admin' AND tu.is_deleted = 0
+    INNER JOIN ${tableNames.TENANT_INVITATIONS} ti ON tu.tenant_user_id = ti.tenant_user_id
+    WHERE ti.id IN (
+      SELECT MAX(id)
+      FROM ${tableNames.TENANT_INVITATIONS}
+      GROUP BY tenant_user_id
+    ) AND t.is_deleted = ?
+    ORDER BY ti.invited_at DESC`;
+
+  try {
+    const [rows] = await db.sequelize.query(query, {
+      replacements: [0],
+    });
+    return rows;
+  } catch (err) {
+    throw err;
+  }
+};
+
+export const getOnboardedTenantListService = async () => {
+  const query = `
+    SELECT 
+      t.*
+    FROM ${tableNames.TENANTS} t
+    WHERE t.status IN ('active', 'trial', 'expired', 'suspended', 'inactive', 'maintenance', 'grace_period', 'pending_setup', 'invited') AND t.is_deleted = ?
+    ORDER BY t.created_at DESC`;
+
+  try {
+    const [rows] = await db.sequelize.query(query, {
+      replacements: [0],
+    });
+    return rows;
   } catch (err) {
     throw err;
   }

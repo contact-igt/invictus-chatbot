@@ -1,4 +1,6 @@
 import { scrapeWebsiteText } from "../../utils/text/scrapeWebsiteText.js";
+import { cleanText } from "../../utils/text/cleanText.js";
+import { processKnowledgeWithAi } from "../../utils/ai/processKnowledgeAi.js";
 import {
   deleteKnowledgeService,
   permanentDeleteKnowledgeService,
@@ -10,6 +12,7 @@ import {
   getDeletedKnowledgeListService,
   restoreKnowledgeService,
 } from "./knowledge.service.js";
+import { searchKnowledgeChunks } from "./knowledge.search.js";
 
 export const getDeletedKnowledgeController = async (req, res) => {
   const tenant_id = req.user.tenant_id;
@@ -37,8 +40,6 @@ export const restoreKnowledgeController = async (req, res) => {
     return res.status(500).send({ message: err.message });
   }
 };
-import { cleanText } from "../../utils/text/cleanText.js";
-import { searchKnowledgeChunks } from "./knowledge.search.js";
 
 export const uploadKnowledge = async (req, res) => {
   const tenant_id = req.user.tenant_id;
@@ -48,7 +49,7 @@ export const uploadKnowledge = async (req, res) => {
   }
 
   try {
-    const { title, type, text, source_url, file_name } = req.body;
+    const { title, type, text, source_url, file_name, prompt } = req.body;
 
     if (!title || !type) {
       return res.status(400).json({ message: "Title & type required" });
@@ -59,18 +60,34 @@ export const uploadKnowledge = async (req, res) => {
 
     if (type === "text" || type === "file") {
       if (!text || text.trim().length < 10) {
-        return res.status(400).json({ message: "Text missing" });
+        return res.status(400).json({ message: "Text content must be at least 10 characters long." });
       }
       finalText = text;
     }
 
     if (type === "url") {
       if (!source_url) {
-        return res.status(400).json({ message: "URL required" });
+        return res.status(400).json({ message: "Website URL is required" });
       }
-      const scraped = await scrapeWebsiteText(source_url);
-      finalText = scraped.content;
-      sourceUrl = source_url;
+      
+      try {
+        const scraped = await scrapeWebsiteText(source_url);
+        finalText = scraped.content;
+        sourceUrl = source_url;
+
+        // AI Feature: Always process the scraped text with AI for optimal quality
+        if (finalText) {
+          finalText = await processKnowledgeWithAi(finalText, prompt);
+        }
+      } catch (scrapeErr) {
+        return res.status(400).json({ 
+          message: `Failed to scrape website: ${scrapeErr.message}. Please ensure the URL is correct and accessible.` 
+        });
+      }
+    }
+
+    if (!finalText || finalText.trim().length === 0) {
+      return res.status(400).json({ message: "No content found for the provided source." });
     }
 
     const cleanedText = cleanText(finalText);
@@ -84,9 +101,9 @@ export const uploadKnowledge = async (req, res) => {
       file_name,
     );
 
-    res.json({ success: true });
+    res.json({ success: true, message: "Knowledge source added successfully." });
   } catch (err) {
-    console.error(err);
+    console.error("[UPLOAD-KNOWLEDGE] Error:", err);
     res.status(500).json({ error: err.message });
   }
 };
@@ -140,13 +157,15 @@ export const updateKnowledge = async (req, res) => {
     const { id } = req.params;
     const { title, text } = req.body;
 
-    if (!title || !text) {
-      return res.status(400).json({ message: "title and text required" });
+    if (!title) {
+      return res.status(400).json({ message: "Title is required" });
     }
 
+    // Call service with optional text. If text is provided, it will re-chunk.
     await updateKnowledgeService(id, tenant_id, title, text);
     res.json({ message: "Knowledge updated successfully" });
   } catch (err) {
+    console.error("[UPDATE-KNOWLEDGE] Error:", err);
     res.status(500).json({ error: err.message });
   }
 };

@@ -88,6 +88,23 @@ export const updateInvitationStatusService = async (invitation_id, status) => {
   }
 };
 
+export const revokePreviousInvitationsService = async (tenant_user_id) => {
+  const query = `
+    UPDATE ${tableNames.TENANT_INVITATIONS}
+    SET status = 'revoked', updated_at = NOW()
+    WHERE tenant_user_id = ? AND status IN ('pending', 'accepted')
+  `;
+
+  try {
+    const [result] = await db.sequelize.query(query, {
+      replacements: [tenant_user_id],
+    });
+    return result;
+  } catch (err) {
+    throw err;
+  }
+};
+
 export const getLastTenantInvitationService = async (tenant_user_id) => {
   const Query = `SELECT * FROM ${tableNames?.TENANT_INVITATIONS} WHERE tenant_user_id = ? ORDER BY created_at DESC LIMIT 1`;
 
@@ -116,6 +133,9 @@ export const sendTenantInvitationService = async (
       "invitation_id",
       "INV",
     );
+
+    // Revoke any previous pending/accepted invites for this user
+    await revokePreviousInvitationsService(tenant_user_id);
 
     const inviteToken = generateInviteToken({
       tenant_id,

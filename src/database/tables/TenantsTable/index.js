@@ -47,6 +47,43 @@ export const TenantsTable = (sequelize, Sequelize) => {
         allowNull: false,
       },
 
+      address: {
+        type: Sequelize.TEXT,
+        allowNull: true,
+      },
+
+      city: {
+        type: Sequelize.STRING,
+        allowNull: true,
+      },
+      
+      country: {
+        type: Sequelize.STRING,
+        allowNull: true,
+      },
+
+      state: {
+        type: Sequelize.STRING,
+        allowNull: true,
+      },
+
+      pincode: {
+        type: Sequelize.STRING,
+        allowNull: true,
+      },
+
+      max_users: {
+        type: Sequelize.INTEGER,
+        allowNull: false,
+        defaultValue: 10,
+      },
+
+      subscription_plan: {
+        type: Sequelize.ENUM("basic", "pro", "enterprise"),
+        allowNull: false,
+        defaultValue: "basic",
+      },
+
       status: {
         type: Sequelize.ENUM(
           "invited",

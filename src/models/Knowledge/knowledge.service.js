@@ -77,39 +77,50 @@ export const getKnowledgeByIdService = async (id, tenant_id) => {
 };
 
 export const updateKnowledgeService = async (id, tenant_id, title, text) => {
-  const cleaned = cleanText(text);
-
   try {
-    // 1️⃣ Update source
-    await db.sequelize.query(
-      `
-    UPDATE ${tableNames.KNOWLEDGESOURCE}
-    SET title = ?, raw_text = ?
-    WHERE id = ? AND tenant_id = ? AND is_deleted = false
-    `,
-      { replacements: [title, cleaned, id, tenant_id] },
-    );
-
-    // 2️⃣ Delete old chunks
-    await db.sequelize.query(
-      `
-    DELETE FROM ${tableNames.KNOWLEDGECHUNKS}
-    WHERE source_id = ? AND tenant_id = ?
-    `,
-      { replacements: [id, tenant_id] },
-    );
-
-    // 3️⃣ Recreate chunks
-    const chunks = chunkText(cleaned);
-
-    for (const chunk of chunks) {
+    if (text) {
+      const cleaned = cleanText(text);
+      // 1️⃣ Update source title and text
       await db.sequelize.query(
         `
-      INSERT INTO ${tableNames.KNOWLEDGECHUNKS}
-      (tenant_id , source_id, chunk_text, embedding)
-      VALUES (?, ?, ? , ?)
+      UPDATE ${tableNames.KNOWLEDGESOURCE}
+      SET title = ?, raw_text = ?
+      WHERE id = ? AND tenant_id = ? AND is_deleted = false
       `,
-        { replacements: [tenant_id, id, chunk, JSON.stringify([])] },
+        { replacements: [title, cleaned, id, tenant_id] },
+      );
+
+      // 2️⃣ Delete old chunks
+      await db.sequelize.query(
+        `
+      DELETE FROM ${tableNames.KNOWLEDGECHUNKS}
+      WHERE source_id = ? AND tenant_id = ?
+      `,
+        { replacements: [id, tenant_id] },
+      );
+
+      // 3️⃣ Recreate chunks
+      const chunks = chunkText(cleaned);
+
+      for (const chunk of chunks) {
+        await db.sequelize.query(
+          `
+        INSERT INTO ${tableNames.KNOWLEDGECHUNKS}
+        (tenant_id , source_id, chunk_text, embedding)
+        VALUES (?, ?, ? , ?)
+        `,
+          { replacements: [tenant_id, id, chunk, JSON.stringify([])] },
+        );
+      }
+    } else {
+      // Only update title
+      await db.sequelize.query(
+        `
+      UPDATE ${tableNames.KNOWLEDGESOURCE}
+      SET title = ?
+      WHERE id = ? AND tenant_id = ? AND is_deleted = false
+      `,
+        { replacements: [title, id, tenant_id] },
       );
     }
   } catch (err) {

@@ -30,6 +30,12 @@ export const MessagesTable = (sequelize, Sequelize) => {
         allowNull: true,
       },
 
+      country_code: {
+        type: Sequelize.STRING,
+        allowNull: true,
+        defaultValue: "+91",
+      },
+
       phone: {
         type: Sequelize.STRING,
         allowNull: false,
@@ -136,7 +142,7 @@ export const MessagesTable = (sequelize, Sequelize) => {
         },
         {
           name: "idx_msg_tenant_phone",
-          fields: ["tenant_id", "phone"],
+          fields: ["tenant_id", "country_code", "phone"],
         },
         {
           name: "unique_msg_wamid",

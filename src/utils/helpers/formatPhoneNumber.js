@@ -24,12 +24,12 @@ export const formatPhoneNumber = (phone) => {
     return `91${cleaned.slice(1)}`;
   }
 
-  // Number with country code should be > 10 digits
-  if (cleaned.length > 10) {
+  // Number with country code should be > 10 digits and max 15 digits (E.164 standard)
+  if (cleaned.length > 10 && cleaned.length <= 15) {
     return cleaned;
   }
 
-  // Less than 10 digits — invalid
+  // Less than 10 digits or more than 15 digits — invalid
   return null;
 };
 
@@ -43,5 +43,5 @@ export const formatPhoneNumber = (phone) => {
 export const hasCountryCode = (phone) => {
   if (!phone) return false;
   const cleaned = phone.toString().replace(/\D/g, "");
-  return cleaned.length > 10;
+  return cleaned.length > 10 && cleaned.length <= 15;
 };

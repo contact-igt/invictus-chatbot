@@ -4,6 +4,7 @@ import { generateReadableIdFromLast } from "../../utils/helpers/generateReadable
 
 export const createContactService = async (
   tenant_id,
+  country_code,
   phone,
   name,
   profile_pic,
@@ -21,10 +22,10 @@ export const createContactService = async (
 
     const Query = `
     INSERT INTO ${tableNames?.CONTACTS} 
-    (contact_id, tenant_id, phone, name, profile_pic, wa_id, email, is_blocked, last_message_at) 
-    VALUES (?,?,?,?,?,?,?,?,NOW())`;
+    (contact_id, tenant_id, country_code, phone, name, profile_pic, wa_id, email, is_blocked, last_message_at) 
+    VALUES (?,?,?,?,?,?,?,?,?,NOW())`;
 
-    const Values = [contact_id, tenant_id, phone, name, profile_pic, wa_id, email, false];
+    const Values = [contact_id, tenant_id, country_code, phone, name, profile_pic, wa_id, email, false];
 
     const [result] = await db.sequelize.query(Query, { replacements: Values });
     return { contact_id, id: result };
@@ -33,19 +34,33 @@ export const createContactService = async (
   }
 };
 
-export const getContactByPhoneAndTenantIdService = async (tenant_id, phone) => {
+export const getContactByPhoneAndTenantIdService = async (tenant_id, phoneInput, countryCodeInput = null) => {
   try {
-    const Values = [tenant_id, phone];
+    let phone = phoneInput ? phoneInput.toString().replace(/\D/g, "") : "";
+    let country_code = countryCodeInput;
+
+    // Auto-split combined webhook strings (e.g. 919876543210) into country_code and phone
+    if (!country_code && phone.length > 10) {
+        country_code = `+${phone.slice(0, -10)}`;
+        phone = phone.slice(-10);
+    } else if (country_code && !country_code.startsWith("+")) {
+        country_code = `+${country_code.replace(/\D/g, "")}`;
+    }
+
+    const ccClause = country_code ? "AND country_code = ?" : "";
+    const ccReplacements = country_code ? [country_code] : [];
+    
+    const Values = [tenant_id, phone, ...ccReplacements];
 
     // First, try to find active contact
-    const activeQuery = `SELECT * FROM ${tableNames?.CONTACTS} WHERE tenant_id = ? AND phone = ? AND is_deleted = false LIMIT 1`;
+    const activeQuery = `SELECT * FROM ${tableNames?.CONTACTS} WHERE tenant_id = ? AND phone = ? ${ccClause} AND is_deleted = false LIMIT 1`;
     const [activeResult] = await db.sequelize.query(activeQuery, { replacements: Values });
 
     if (activeResult[0]) {
       return activeResult[0];
     }
 
-    // fallback: match by last 10 digits if strict match fails
+    // fallback: match by last 10 digits if strict match fails (ignoring country code)
     if (phone && phone.length >= 10) {
       const suffix = phone.slice(-10);
       const suffixQuery = `SELECT * FROM ${tableNames?.CONTACTS} WHERE tenant_id = ? AND phone LIKE ? AND is_deleted = false LIMIT 1`;
@@ -56,7 +71,7 @@ export const getContactByPhoneAndTenantIdService = async (tenant_id, phone) => {
     }
 
     // If no active contact, check for deleted contact
-    const deletedQuery = `SELECT * FROM ${tableNames?.CONTACTS} WHERE tenant_id = ? AND phone = ? AND is_deleted = true LIMIT 1`;
+    const deletedQuery = `SELECT * FROM ${tableNames?.CONTACTS} WHERE tenant_id = ? AND phone = ? ${ccClause} AND is_deleted = true LIMIT 1`;
     const [deletedResult] = await db.sequelize.query(deletedQuery, { replacements: Values });
 
     if (deletedResult[0]) {
@@ -292,6 +307,87 @@ export const restoreContactService = async (contact_id, tenant_id) => {
 
     await transaction.commit();
     return { message: "Contact and leads restored successfully" };
+  } catch (err) {
+    await transaction.rollback();
+    throw err;
+  }
+};
+
+/**
+ * Bulk import contacts from an array of objects
+ * @param {string} tenant_id 
+ * @param {Array<{name: string, phone: string}>} contactsData 
+ */
+export const importContactsService = async (tenant_id, contactsData) => {
+  const transaction = await db.sequelize.transaction();
+  const summary = {
+    total: contactsData.length,
+    success: 0,
+    skipped: 0,
+    errors: []
+  };
+
+  try {
+    for (const contact of contactsData) {
+      try {
+        let { name, phone, email } = contact;
+        if (!phone) {
+          summary.errors.push({ row: contact, error: "Phone number is missing" });
+          summary.skipped++;
+          continue;
+        }
+
+        // Clean phone
+        phone = phone.toString().replace(/\D/g, "");
+        let country_code = null;
+
+        // Split country code if prefixed (assuming last 10 digits are the phone)
+        if (phone.length > 10) {
+          country_code = `+${phone.slice(0, -10)}`;
+          phone = phone.slice(-10);
+        } else if (phone.length === 10) {
+          country_code = "+91"; // Default to India if only 10 digits
+        } else {
+          summary.errors.push({ row: contact, error: "Invalid phone number length" });
+          summary.skipped++;
+          continue;
+        }
+
+        // Check for existing contact
+        const existing = await getContactByPhoneAndTenantIdService(tenant_id, phone, country_code);
+        if (existing) {
+          summary.skipped++;
+          continue;
+        }
+
+        // Generate ID and create
+        const contact_id = await generateReadableIdFromLast(
+          tableNames.CONTACTS,
+          "contact_id",
+          "CNT",
+          5,
+          transaction
+        );
+
+        const Query = `
+          INSERT INTO ${tableNames.CONTACTS} 
+          (contact_id, tenant_id, country_code, phone, name, email, is_blocked, last_message_at) 
+          VALUES (?,?,?,?,?,?,?,NOW())`;
+
+        await db.sequelize.query(Query, {
+          replacements: [contact_id, tenant_id, country_code, phone, name || null, email || null, false],
+          transaction
+        });
+
+        summary.success++;
+      } catch (rowErr) {
+        summary.errors.push({ row: contact, error: rowErr.message });
+        summary.skipped++;
+      }
+    }
+
+    await transaction.commit();
+    return summary;
   } catch (err) {
     await transaction.rollback();
     throw err;

@@ -35,6 +35,7 @@ export const createUserMessageService = async (
   tenant_id,
   contact_id,
   phone_number_id,
+  country_code,
   phone,
   wamid,
   name,
@@ -46,14 +47,25 @@ export const createUserMessageService = async (
   media_mime_type,
   status,
   template_name )
-   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?) `;
+   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) `;
 
   try {
+    let cleanPhone = phone ? phone.toString().replace(/\D/g, "") : "";
+    let cc = "+91"; // fallback
+
+    if (cleanPhone.length > 10) {
+      cc = `+${cleanPhone.slice(0, -10)}`;
+      cleanPhone = cleanPhone.slice(-10);
+    } else if (cleanPhone.length === 10) {
+      // It's already 10 digits, keep default cc or retrieve from contact
+    }
+
     const values = [
       tenant_id,
       contact_id,
       phone_number_id,
-      phone,
+      cc,
+      cleanPhone,
       wamid,
       name,
       sender,

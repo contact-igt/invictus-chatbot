@@ -14,6 +14,7 @@ import {
   getDeletedTenantUserListController,
   restoreTenantUserController,
   getLoggedTenantUserController,
+  updateLoggedTenantOrganizationController,
 } from "./tenantuser.controller.js";
 
 const Router = express.Router();
@@ -38,6 +39,16 @@ Router.get(
     roles: ["tenant_admin", "doctor", "staff", "agent"],
   }),
   getLoggedTenantUserController,
+);
+
+Router.put(
+  "/user/organization",
+  authenticate,
+  authorize({
+    user_type: "tenant",
+    roles: ["tenant_admin"],
+  }),
+  updateLoggedTenantOrganizationController,
 );
 
 Router.get(

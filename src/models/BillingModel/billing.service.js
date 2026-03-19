@@ -1,7 +1,11 @@
 import db from "../../database/index.js";
+import { Op } from "sequelize";
 import cron from "node-cron";
 import axios from "axios";
+import libphonenumber from 'google-libphonenumber';
 import { getIO } from "../../middlewares/socket/socket.js";
+
+const phoneUtil = libphonenumber.PhoneNumberUtil.getInstance();
 
 /**
  * Processes Meta Webhook status updates to calculate billing.
@@ -45,18 +49,32 @@ export const processBillingFromWebhook = async (tenant_id, statusUpdate) => {
 
     // 2. Calculate Cost (Look up closest pricing rule)
     // In Meta, the appropriate country is critical for pricing. 
-    // We determine the country from the recipient's phone number (recipient_id) in the webhook.
+    // We determine the country accurately from the recipient's phone number using libphonenumber.
     const recipient_id = statusUpdate.recipient_id;
-    let country = pricing?.pricing_model === 'CBP' ? 'Global' : 'US'; // Default fallback
+    let country = 'Global'; // Default fallback
 
     if (recipient_id) {
-       // Extract country code from the recipient_id
-       if (recipient_id.startsWith('91')) country = 'IN';
-       else if (recipient_id.startsWith('44')) country = 'GB';
-       else if (recipient_id.startsWith('1')) country = 'US';
-       // We can expand this logic or use a library.
-    } else {
-      // Fallback: Check the tenant's default country if recipient_id is missing (rare)
+       try {
+         // Meta recipient IDs are usually digits only. libphonenumber needs a '+' for international parsing 
+         // without a default region, or we can try to parse it as is if it looks like it has a CC.
+         const phoneStr = recipient_id.startsWith('+') ? recipient_id : `+${recipient_id}`;
+         const number = phoneUtil.parseAndKeepRawInput(phoneStr);
+         const regionCode = phoneUtil.getRegionCodeForNumber(number);
+         
+         if (regionCode) {
+           country = regionCode;
+         }
+       } catch (phoneErr) {
+         console.warn(`[BILLING] Failed to parse recipient_id ${recipient_id} for country detection:`, phoneErr.message);
+         // Fallback to the old prefix logic for common cases if parsing fails
+         if (recipient_id.startsWith('91')) country = 'IN';
+         else if (recipient_id.startsWith('44')) country = 'GB';
+         else if (recipient_id.startsWith('1')) country = 'US';
+       }
+    } 
+
+    // Final fallback: Check the tenant's default country if detection failed
+    if (country === 'Global') {
       const tenant = await db.Tenants.findOne({ where: { tenant_id } });
       if (tenant && tenant.country) {
         country = tenant.country;
@@ -233,10 +251,24 @@ export const startDailyMetaBillingSyncCronService = () => {
 /**
  * Fetches the high-level Billing KPIs for a tenant.
  */
-export const getBillingKpiService = async (tenant_id) => {
+export const getBillingKpiService = async (tenant_id, startDate, endDate) => {
   try {
-    const ledgers = await db.BillingLedger.findAll({
-      where: { tenant_id },
+    const whereClause = { tenant_id };
+
+    if (startDate && endDate) {
+      whereClause.created_at = {
+        [Op.between]: [new Date(startDate), new Date(endDate)],
+      };
+    }
+
+    // 1. Calculate category-wise spent using aggregation
+    const categoryTotals = await db.BillingLedger.findAll({
+      attributes: [
+        "category",
+        [db.sequelize.fn("SUM", db.sequelize.col("total_cost")), "totalSpent"],
+      ],
+      where: whereClause,
+      group: ["category"],
     });
 
     let totalSpentEstimated = 0;
@@ -244,24 +276,34 @@ export const getBillingKpiService = async (tenant_id) => {
     let utilitySpent = 0;
     let authSpent = 0;
 
-    ledgers.forEach((l) => {
-      const cost = parseFloat(l.total_cost) || 0;
-      totalSpentEstimated += cost;
-      if (l.category === "marketing") marketingSpent += cost;
-      else if (l.category === "utility") utilitySpent += cost;
-      else if (l.category === "authentication") authSpent += cost;
+    categoryTotals.forEach((result) => {
+      const category = result.category;
+      const total = parseFloat(result.get("totalSpent")) || 0;
+      totalSpentEstimated += total;
+      if (category === "marketing") marketingSpent = total;
+      else if (category === "utility") utilitySpent = total;
+      else if (category === "authentication") authSpent = total;
     });
 
+    // 2. Count messages and conversations using aggregation
+    // Note: MessageUsage uses 'timestamp' for the actual event time
+    const usageWhere = { tenant_id };
+    if (startDate && endDate) {
+      usageWhere.timestamp = {
+        [Op.between]: [new Date(startDate), new Date(endDate)],
+      };
+    }
+
     const totalMessagesSent = await db.MessageUsage.count({
-      where: { tenant_id },
+      where: usageWhere,
     });
 
     const billableConversations = await db.MessageUsage.count({
-      where: { tenant_id, billable: true },
+      where: { ...usageWhere, billable: true },
     });
 
     const freeConversations = await db.MessageUsage.count({
-      where: { tenant_id, billable: false },
+      where: { ...usageWhere, billable: false },
     });
 
     return {
@@ -281,13 +323,19 @@ export const getBillingKpiService = async (tenant_id) => {
 /**
  * Fetches paginated billing ledger history for a tenant.
  */
-export const getBillingLedgerService = async (tenant_id, page = 1, limit = 50, category) => {
+export const getBillingLedgerService = async (tenant_id, page = 1, limit = 50, category, startDate, endDate) => {
   try {
     const offset = (page - 1) * limit;
 
     const whereClause = { tenant_id };
     if (category && category !== "All") {
       whereClause.category = category.toLowerCase();
+    }
+
+    if (startDate && endDate) {
+      whereClause.created_at = {
+        [Op.between]: [new Date(startDate), new Date(endDate)],
+      };
     }
 
     const { count, rows } = await db.BillingLedger.findAndCountAll({
@@ -336,10 +384,17 @@ export const getBillingLedgerService = async (tenant_id, page = 1, limit = 50, c
 /**
  * Fetches time-series spend chart data for a tenant.
  */
-export const getBillingSpendChartService = async (tenant_id) => {
+export const getBillingSpendChartService = async (tenant_id, startDate, endDate) => {
   try {
+    const whereClause = { tenant_id };
+    if (startDate && endDate) {
+      whereClause.created_at = {
+        [Op.between]: [new Date(startDate), new Date(endDate)],
+      };
+    }
+
     const ledgers = await db.BillingLedger.findAll({
-      where: { tenant_id },
+      where: whereClause,
       order: [["created_at", "ASC"]],
     });
 

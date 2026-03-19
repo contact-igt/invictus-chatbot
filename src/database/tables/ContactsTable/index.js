@@ -21,6 +21,12 @@ export const ContactsTable = (sequelize, Sequelize) => {
         allowNull: false,
       },
 
+      country_code: {
+        type: Sequelize.STRING,
+        allowNull: false,
+        defaultValue: "+91",
+      },
+
       phone: {
         type: Sequelize.STRING,
         allowNull: false,
@@ -97,7 +103,7 @@ export const ContactsTable = (sequelize, Sequelize) => {
         {
           name: "unique_contact_phone_tenant",
           unique: true,
-          fields: ["tenant_id", "phone", "is_deleted"],
+          fields: ["tenant_id", "country_code", "phone", "is_deleted"],
         },
         {
           name: "idx_contact_wa_id",
