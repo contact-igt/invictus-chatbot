@@ -72,6 +72,16 @@ export const WhatsappCampaignTable = (sequelize, Sequelize) => {
                 allowNull: true,
             },
 
+            location_params: {
+                type: Sequelize.JSON,
+                allowNull: true,
+            },
+
+            card_media_urls: {
+                type: Sequelize.JSON,
+                allowNull: true,
+            },
+
             is_deleted: {
                 type: Sequelize.BOOLEAN,
                 defaultValue: false,

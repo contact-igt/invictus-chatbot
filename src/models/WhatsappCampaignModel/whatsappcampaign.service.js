@@ -12,6 +12,8 @@ import {
     updateLiveChatTimestampService,
 } from "../LiveChatModel/livechat.service.js";
 import cron from "node-cron";
+import { generateWhatsAppOTPService } from "../OtpVerificationModel/otpverification.service.js";
+
 
 /**
  * Creates a new campaign and populates its recipients.
@@ -27,7 +29,9 @@ export const createCampaignService = async (tenant_id, data, created_by) => {
             audience_type, // "manual" | "group" | "csv"
             audience_data, // Array of recipients OR group_id
             scheduled_at,
-            header_media_url
+            header_media_url,
+            location_params,
+            card_media_urls
         } = data;
 
         // 0. Check for duplicate campaign name
@@ -117,6 +121,8 @@ export const createCampaignService = async (tenant_id, data, created_by) => {
                 total_audience: recipients.length,
                 scheduled_at,
                 header_media_url,
+                location_params,
+                card_media_urls,
                 created_by,
             },
             { transaction }
@@ -243,6 +249,18 @@ export const executeCampaignBatchService = async (campaign_id, tenant_id, batchS
         const templateBodyText = bodyComponent?.text_content || `Template: ${campaign.template.template_name}`;
         const headerFormat = headerComponent?.header_format;
 
+        // Extract run-time parameters from campaign
+        const campaignHeaderMediaUrl = campaign.header_media_url;
+        let campaignLocationParams = campaign.location_params;
+        let campaignCardMediaUrls = campaign.card_media_urls;
+
+        if (typeof campaignLocationParams === 'string') {
+            try { campaignLocationParams = JSON.parse(campaignLocationParams); } catch (e) { campaignLocationParams = null; }
+        }
+        if (typeof campaignCardMediaUrls === 'string') {
+            try { campaignCardMediaUrls = JSON.parse(campaignCardMediaUrls); } catch (e) { campaignCardMediaUrls = null; }
+        }
+
         if (recipients.length === 0) {
             // Mark campaign as completed if no more pending recipients
             await campaign.update({ status: "completed" });
@@ -301,15 +319,115 @@ export const executeCampaignBatchService = async (campaign_id, tenant_id, batchS
                             })),
                         },
                     ];
-                } else {
-                    // Check if template actually needs variables
-                    const [templateVars] = await db.sequelize.query(
-                        `SELECT COUNT(*) as count FROM ${tableNames.WHATSAPP_TEMPLATE_VARIABLES} WHERE template_id = ?`,
-                        { replacements: [campaign.template_id] }
-                    );
+                }
 
-                    if (templateVars[0].count > 0) {
-                        console.warn(`Campaign ${campaign_id}: Recipient ${recipient.mobile_number} has no dynamic variables, but template requires ${templateVars[0].count}`);
+                // ─────────────────────────────────────────
+                // AUTHENTICATION: Auto-generate OTP per recipient
+                // ─────────────────────────────────────────
+                if (campaign.template?.category?.toLowerCase() === 'authentication') {
+                    // Generate a unique OTP for this specific phone number
+                    const otp = await generateWhatsAppOTPService(
+                        recipient.mobile_number,
+                        campaign.template.template_name
+                    );
+                    // Override components — OTP is always the only body variable
+                    components = [
+                        {
+                            type: "body",
+                            parameters: [{ type: "text", text: otp }],
+                        },
+                    ];
+                    console.log(`🔐 [AUTH-CAMPAIGN] Generated OTP for ${recipient.mobile_number}`);
+                }
+
+
+                // 2. Add Header Component (Media or Location)
+                if (headerComponent) {
+                    const hFormat = headerComponent.header_format?.toUpperCase();
+                    if (['IMAGE', 'VIDEO', 'DOCUMENT'].includes(hFormat) && campaignHeaderMediaUrl) {
+                        components.push({
+                            type: "header",
+                            parameters: [
+                                {
+                                    type: hFormat.toLowerCase(),
+                                    [hFormat.toLowerCase()]: {
+                                        link: campaignHeaderMediaUrl
+                                    }
+                                }
+                            ]
+                        });
+                    } else if (hFormat === 'LOCATION' && campaignLocationParams) {
+                        components.push({
+                            type: "header",
+                            parameters: [
+                                {
+                                    type: "location",
+                                    location: {
+                                        latitude: campaignLocationParams.latitude,
+                                        longitude: campaignLocationParams.longitude,
+                                        name: campaignLocationParams.name,
+                                        address: campaignLocationParams.address
+                                    }
+                                }
+                            ]
+                        });
+                    }
+                }
+
+                // 3. Add Carousel Component
+                const [templateType] = await db.sequelize.query(
+                    `SELECT category FROM ${tableNames.WHATSAPP_TEMPLATE} WHERE template_id = ?`,
+                    { replacements: [campaign.template_id] }
+                );
+
+                // Fetch full template to check for carousel (since template record doesn't store 'carousel' as category)
+                // We actually need to check if there are CAROUSEL components
+                const [carousel_data] = await db.sequelize.query(
+                    `SELECT * FROM ${tableNames.WHATSAPP_TEMPLATE_COMPONENTS} WHERE template_id = ? AND component_type = 'CAROUSEL'`,
+                    { replacements: [campaign.template_id] }
+                );
+
+                if (carousel_data.length > 0 && campaignCardMediaUrls) {
+                    try {
+                        const carouselComp = JSON.parse(carousel_data[0].text_content);
+                        if (carouselComp.cards && Array.isArray(carouselComp.cards)) {
+                            const cardsPayload = carouselComp.cards.map((card, idx) => {
+                                const cardComponents = [];
+                                const cardMediaUrl = campaignCardMediaUrls[idx];
+                                
+                                // Find if this card has a header that needs media
+                                const cardHeader = card.components?.find(c => c.type === 'HEADER');
+                                if (cardHeader && (cardHeader.format === 'IMAGE' || cardHeader.format === 'VIDEO') && cardMediaUrl) {
+                                    cardComponents.push({
+                                        type: "header",
+                                        parameters: [
+                                            {
+                                                type: cardHeader.format.toLowerCase(),
+                                                [cardHeader.format.toLowerCase()]: {
+                                                    link: cardMediaUrl
+                                                }
+                                            }
+                                        ]
+                                    });
+                                }
+                                
+                                // Carousel cards can also have body variables if needed, 
+                                // but our current frontend implementation handles global variables.
+                                // Meta allows 'body' in carousel card components if the template defines them.
+                                
+                                return {
+                                    index: idx,
+                                    components: cardComponents
+                                };
+                            });
+
+                            components.push({
+                                type: "carousel",
+                                cards: cardsPayload
+                            });
+                        }
+                    } catch (e) {
+                        console.error("Error parsing carousel component for campaign execution:", e);
                     }
                 }
 
