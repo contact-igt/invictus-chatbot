@@ -394,7 +394,7 @@ export const submitWhatsappTemplateService = async ({
             const headerHandle = await uploadMediaToMetaForTemplate(whatsappAccount.tenant_id, sampleUrl, format);
             headerObj.example = { header_handle: [headerHandle] };
           } catch (uploadError) {
-             throw new Error(`Failed to upload media sample to Meta: ${uploadError.message}`);
+            throw new Error(`Failed to upload media sample to Meta: ${uploadError.message}`);
           }
         }
       } else if (format === "LOCATION") {
@@ -1224,7 +1224,7 @@ export const updateWhatsappTemplateService = async (
       const isNameChanged = template_name && template_name.toLowerCase() !== template.template_name.toLowerCase();
       const isLanguageChanged = language && language.toLowerCase() !== template.language.toLowerCase();
       const isCategoryChanged = category && category.toLowerCase() !== template.category.toLowerCase();
-      
+
       if (isNameChanged || isLanguageChanged || isCategoryChanged) {
         throw new Error(
           "Template name, category, and language cannot be changed after the template has been submitted to Meta. You may only edit the message content."

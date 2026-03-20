@@ -33,8 +33,8 @@ import DashboardRouter from "./models/DashboardModel/dashboard.routes.js";
 import { startAppointmentSchedulerService } from "./models/AppointmentModel/appointment.service.js";
 import PlaygroundRouter from "./models/Playground/playground.routes.js";
 import BillingRouter from "./models/BillingModel/billing.routes.js";
-import { startDailyMetaBillingSyncCronService } from "./models/BillingModel/billing.service.js";
 import WhatsappOtpRouter from "./models/OtpVerificationModel/otpverification.routes.js";
+
 
 dns.setDefaultResultOrder("ipv4first");
 
@@ -110,7 +110,7 @@ startLeadHeatDecayCronService();
 startLiveChatCleanupService();
 startCampaignSchedulerService();
 startAppointmentSchedulerService();
-startDailyMetaBillingSyncCronService();
+
 
 const PORT = process.env.PORT || 8000;
 const server = http.createServer(app);

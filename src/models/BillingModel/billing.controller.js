@@ -51,7 +51,7 @@ export const getBillingSpendChartController = async (req, res) => {
   try {
     const { tenant_id } = req.user;
     const { startDate, endDate } = req.query;
-    
+
     const spendChartData = await getBillingSpendChartService(tenant_id, startDate, endDate);
 
     return res.status(200).json({

@@ -17,7 +17,7 @@ export const processBillingFromWebhook = async (tenant_id, statusUpdate) => {
 
     // We only create entries when Meta provides the pricing object on the "sent" status of a new conversation window.
     if (!pricing) {
-      return; 
+      return;
     }
 
     // Prevent duplicate processing if we already handled this message_id
@@ -25,7 +25,7 @@ export const processBillingFromWebhook = async (tenant_id, statusUpdate) => {
     if (existingUsage) {
       // If we already captured the cost, but string changed to delivered/read, just update status
       if (existingUsage.status !== status) {
-         await existingUsage.update({ status });
+        await existingUsage.update({ status });
       }
       return;
     }
@@ -54,24 +54,24 @@ export const processBillingFromWebhook = async (tenant_id, statusUpdate) => {
     let country = 'Global'; // Default fallback
 
     if (recipient_id) {
-       try {
-         // Meta recipient IDs are usually digits only. libphonenumber needs a '+' for international parsing 
-         // without a default region, or we can try to parse it as is if it looks like it has a CC.
-         const phoneStr = recipient_id.startsWith('+') ? recipient_id : `+${recipient_id}`;
-         const number = phoneUtil.parseAndKeepRawInput(phoneStr);
-         const regionCode = phoneUtil.getRegionCodeForNumber(number);
-         
-         if (regionCode) {
-           country = regionCode;
-         }
-       } catch (phoneErr) {
-         console.warn(`[BILLING] Failed to parse recipient_id ${recipient_id} for country detection:`, phoneErr.message);
-         // Fallback to the old prefix logic for common cases if parsing fails
-         if (recipient_id.startsWith('91')) country = 'IN';
-         else if (recipient_id.startsWith('44')) country = 'GB';
-         else if (recipient_id.startsWith('1')) country = 'US';
-       }
-    } 
+      try {
+        // Meta recipient IDs are usually digits only. libphonenumber needs a '+' for international parsing 
+        // without a default region, or we can try to parse it as is if it looks like it has a CC.
+        const phoneStr = recipient_id.startsWith('+') ? recipient_id : `+${recipient_id}`;
+        const number = phoneUtil.parseAndKeepRawInput(phoneStr);
+        const regionCode = phoneUtil.getRegionCodeForNumber(number);
+
+        if (regionCode) {
+          country = regionCode;
+        }
+      } catch (phoneErr) {
+        console.warn(`[BILLING] Failed to parse recipient_id ${recipient_id} for country detection:`, phoneErr.message);
+        // Fallback to the old prefix logic for common cases if parsing fails
+        if (recipient_id.startsWith('91')) country = 'IN';
+        else if (recipient_id.startsWith('44')) country = 'GB';
+        else if (recipient_id.startsWith('1')) country = 'US';
+      }
+    }
 
     // Final fallback: Check the tenant's default country if detection failed
     if (country === 'Global') {
@@ -107,7 +107,7 @@ export const processBillingFromWebhook = async (tenant_id, statusUpdate) => {
       baseRate = pricingRule ? parseFloat(pricingRule.rate) : (defaultRates[category] || 0);
       markupPercent = pricingRule ? parseFloat(pricingRule.markup_percent) : 0;
     }
-    
+
     const platformFee = baseRate * (markupPercent / 100);
     const totalCost = baseRate + platformFee;
 
@@ -116,7 +116,7 @@ export const processBillingFromWebhook = async (tenant_id, statusUpdate) => {
 
     try {
       // 1. Fetch message details from our local database to get the template_name
-      const msgRecord = await db.MessageUsage.findOne({ 
+      const msgRecord = await db.MessageUsage.findOne({
         where: { message_id },
         include: [{
           model: db.Messages,
@@ -193,60 +193,7 @@ export const processBillingFromWebhook = async (tenant_id, statusUpdate) => {
   }
 };
 
-/**
- * Executes a daily Cron job to fetch official conversation analytics from Meta.
- * This ensures our local database resolves any discrepancies with actual Meta charges.
- */
-export const startDailyMetaBillingSyncCronService = () => {
-  // Run every day at 00:00 (Midnight)
-  cron.schedule("0 0 * * *", async () => {
-    console.log("[CRON] Starting Daily Meta Billing Sync...");
-    
-    try {
-      // 1. Fetch all active tenants with configured WhatsApp Business Accounts
-      const [accounts] = await db.sequelize.query(
-        `SELECT tenant_id, waba_id, access_token FROM whatsapp_accounts WHERE status = 'active' AND is_deleted = false`
-      );
 
-      for (const account of accounts) {
-        if (!account.waba_id || !account.access_token) continue;
-
-        const yesterday = new Date();
-        yesterday.setDate(yesterday.getDate() - 1);
-        const start = parseInt(yesterday.setHours(0, 0, 0, 0) / 1000);
-        const end = parseInt(yesterday.setHours(23, 59, 59, 999) / 1000);
-
-        try {
-          // 2. Fetch official conversation analytics from Meta Graph API
-          const response = await axios.get(
-            `https://graph.facebook.com/v19.0/${account.waba_id}/conversation_analytics`,
-            {
-              params: {
-                start,
-                end,
-                granularity: "DAILY",
-                dimensions: ["CONVERSATION_CATEGORY", "CONVERSATION_TYPE", "COUNTRY"],
-                access_token: account.access_token,
-              },
-            }
-          );
-
-          // 3. (Implementation detail) Here we parse response.data.data
-          // and compare the counts against our local MessageUsage daily counts.
-          // For Stage 1, we ensure the infrastructure exists and the job triggers successfully.
-          console.log(`[CRON] Meta billing data synced for tenant ${account.tenant_id}. Data points: ${response.data?.data?.length || 0}`);
-
-        } catch (apiErr) {
-          console.error(`[CRON] Meta API Error resolving billing for tenant ${account.tenant_id}:`, apiErr?.response?.data || apiErr.message);
-        }
-      }
-
-      console.log("[CRON] Daily Meta Billing Sync completed.");
-    } catch (err) {
-      console.error("[CRON] Global Daily Meta Billing Sync Error:", err);
-    }
-  });
-};
 
 /**
  * Fetches the high-level Billing KPIs for a tenant.

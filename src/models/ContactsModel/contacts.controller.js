@@ -41,38 +41,37 @@ export const restoreContactController = async (req, res) => {
 };
 
 export const createContactController = async (req, res) => {
-  const tenant_id = req.user.tenant_id; // Get from authenticated user
-  let { country_code, phone, name, profile_pic } = req.body;
+  const tenant_id = req.user.tenant_id;
+  let { country_code, phone, name, email, profile_pic } = req.body;
 
-  if (!country_code || !phone) {
+  if (!phone) {
     return res.status(400).json({
-      message: "Both country code and 10-digit phone number are required",
+      message: "Phone number is required",
     });
   }
 
-  // Clean and validate
+  // Clean phone
   phone = phone.toString().replace(/\D/g, "");
-  if (phone.length !== 10) {
-    return res.status(400).json({
-      message: "Phone number must be exactly 10 digits long",
-    });
+  
+  // Auto-handling for country code
+  if (!country_code) {
+    if (phone.length === 10) {
+      country_code = "+91"; // Default to India
+    } else if (phone.length > 10) {
+      // Split if combined
+      country_code = `+${phone.slice(0, -10)}`;
+      phone = phone.slice(-10);
+    } else {
+      return res.status(400).json({
+        message: "Invalid phone number length",
+      });
+    }
   }
 
   // Clean country code (ensure starts with +)
-  let clean_cc = country_code.toString().replace(/\D/g, "");
-  country_code = `+${clean_cc}`;
-
-  const requiredFields = {
-    country_code,
-    phone,
-  };
-
-  const missing = await missingFieldsChecker(requiredFields);
-  if (missing.length > 0) {
-    return res.status(400).json({
-      message: `Missing fields: ${missing.join(", ")}`,
-    });
-  }
+  country_code = country_code.toString().startsWith("+") 
+    ? country_code 
+    : `+${country_code.toString().replace(/\D/g, "")}`;
 
   try {
     const existingContact = await getContactByPhoneAndTenantIdService(
@@ -89,10 +88,12 @@ export const createContactController = async (req, res) => {
 
     await createContactService(
       tenant_id,
-      country_code,
       phone,
       name || null,
       profile_pic || null,
+      country_code,
+      null, // wa_id
+      email || null
     );
 
     return res.status(201).send({
@@ -104,6 +105,7 @@ export const createContactController = async (req, res) => {
     });
   }
 };
+
 
 export const getAllContactsController = async (req, res) => {
   const tenant_id = req.user.tenant_id;

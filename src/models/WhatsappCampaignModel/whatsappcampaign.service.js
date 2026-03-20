@@ -81,30 +81,53 @@ export const createCampaignService = async (tenant_id, data, created_by) => {
                 throw new Error("No valid recipients provided in audience data");
             }
         } else if (audience_type === "group") {
-            // Group: Fetch all members from the group
-            const group_id = audience_data; // audience_data is just the group_id string
+            if (Array.isArray(audience_data) && audience_data.length > 0) {
+                // Per-member mode: frontend sent individual recipients with per-member dynamic_variables
+                // Used when template has variables and user filled them per-member in Step 3
+                const seenNumbers = new Set();
+                recipients = audience_data
+                    .filter(item => item.mobile_number)
+                    .map((item) => {
+                        const formatted = formatPhoneNumber(item.mobile_number);
+                        if (seenNumbers.has(formatted)) return null;
+                        seenNumbers.add(formatted);
+                        return {
+                            mobile_number: formatted,
+                            contact_id: item.contact_id || null,
+                            dynamic_variables: item.dynamic_variables || null,
+                        };
+                    })
+                    .filter(Boolean);
 
-            const groupMembers = await db.ContactGroupMembers.findAll({
-                where: { group_id, tenant_id },
-                include: [
-                    {
-                        model: db.Contacts,
-                        as: "contact",
-                        attributes: ["contact_id", "phone", "name"],
-                        where: { is_deleted: false },
-                    },
-                ],
-            });
+                if (recipients.length === 0) {
+                    throw new Error("No valid recipients in group audience data");
+                }
+            } else {
+                // Plain group_id mode: fetch all members from DB, send same message to all
+                const group_id = audience_data;
 
-            if (groupMembers.length === 0) {
-                throw new Error("Group has no members or does not exist");
+                const groupMembers = await db.ContactGroupMembers.findAll({
+                    where: { group_id, tenant_id },
+                    include: [
+                        {
+                            model: db.Contacts,
+                            as: "contact",
+                            attributes: ["contact_id", "phone", "name"],
+                            where: { is_deleted: false },
+                        },
+                    ],
+                });
+
+                if (groupMembers.length === 0) {
+                    throw new Error("Group has no members or does not exist");
+                }
+
+                recipients = groupMembers.map((member) => ({
+                    mobile_number: member.contact.phone,
+                    contact_id: member.contact.contact_id,
+                    dynamic_variables: null,
+                }));
             }
-
-            recipients = groupMembers.map((member) => ({
-                mobile_number: member.contact.phone,
-                contact_id: member.contact.contact_id,
-                dynamic_variables: null, // Groups don't have per-contact variables by default
-            }));
         } else {
             throw new Error("Invalid audience_type. Must be 'manual', 'group', or 'csv'");
         }
