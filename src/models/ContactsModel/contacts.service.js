@@ -4,14 +4,25 @@ import { generateReadableIdFromLast } from "../../utils/helpers/generateReadable
 
 export const createContactService = async (
   tenant_id,
-  country_code,
-  phone,
+  phoneInput,
   name,
   profile_pic,
+  countryCodeInput = null,
   wa_id = null,
   email = null,
 ) => {
   try {
+    let country_code = countryCodeInput;
+    let phone = phoneInput;
+
+    // Auto-split if country_code is missing but phone is combined (e.g. 919876543210)
+    if (!country_code && phone && phone.length > 10) {
+      country_code = `+${phone.slice(0, -10)}`;
+      phone = phone.slice(-10);
+    } else if (country_code && !country_code.startsWith("+")) {
+      country_code = `+${country_code.replace(/\D/g, "")}`;
+    }
+
     // Generate contact_id
     const contact_id = await generateReadableIdFromLast(
       tableNames.CONTACTS,
@@ -25,7 +36,17 @@ export const createContactService = async (
     (contact_id, tenant_id, country_code, phone, name, profile_pic, wa_id, email, is_blocked, last_message_at) 
     VALUES (?,?,?,?,?,?,?,?,?,NOW())`;
 
-    const Values = [contact_id, tenant_id, country_code, phone, name, profile_pic, wa_id, email, false];
+    const Values = [
+      contact_id || null,
+      tenant_id || null,
+      country_code || null,
+      phone || null,
+      name || null,
+      profile_pic || null,
+      wa_id || null,
+      email || null,
+      false
+    ];
 
     const [result] = await db.sequelize.query(Query, { replacements: Values });
     return { contact_id, id: result };

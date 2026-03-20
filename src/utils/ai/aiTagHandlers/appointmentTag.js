@@ -7,6 +7,7 @@ import {
   formatAppointmentDate,
 } from "../../email/appointmentEmailTemplate.js";
 import { createUserMessageService } from "../../../models/Messages/messages.service.js";
+import { findDoctorByNameService } from "../../../models/DoctorModel/doctor.service.js";
 import db from "../../../database/index.js";
 
 export const execute = async (payload, context, cleanMessage) => {
@@ -66,15 +67,35 @@ export const execute = async (payload, context, cleanMessage) => {
       data.contact_number = phone;
     }
 
-    const missingFields = requiredFields.filter(
-      (f) => !data[f.key] || data[f.key] === "",
-    );
+    const placeholders = [
+      "NAME",
+      "NUM",
+      "EMAIL",
+      "AGE",
+      "YYYY-MM-DD",
+      "HH:MM AM/PM",
+      "HH:MM AM",
+      "ID",
+      "DOC_NAME",
+      "REASON",
+    ];
+
+    const missingFields = requiredFields.filter((f) => {
+      const val = data[f.key];
+      return (
+        !val ||
+        val === "" ||
+        val === undefined ||
+        placeholders.includes(String(val).toUpperCase())
+      );
+    });
+
     if (missingFields.length > 0) {
       const missingLabels = missingFields.map((f) => f.label).join(", ");
       const errorMsg = `❌ I'm missing the following information to complete your booking: ${missingLabels}.
 Please provide these details.`;
       console.error(
-        `[TAG-HANDLER-APPOINTMENT] Missing required fields: ${missingLabels}`,
+        `[TAG-HANDLER-APPOINTMENT] Missing or placeholder fields: ${missingLabels}`,
       );
       await sendWhatsAppMessage(tenant_id, phone, errorMsg).catch((err) =>
         console.error(
@@ -95,8 +116,25 @@ Please provide these details.`;
           errorMsg,
         );
       } catch (_) {}
-      // Explicitly throw error so caller can handle it
-      throw new Error(errorMsg);
+      // Exit without creating appointment
+      return;
+    }
+
+    // ─── Resolve Doctor ID from Name if ID is a placeholder or looks like a name ───
+    if (
+      data.doctor_id === "ID" ||
+      (data.doctor_name && data.doctor_id && data.doctor_id.length > 10)
+    ) {
+      const resolvedDoc = await findDoctorByNameService(
+        tenant_id,
+        data.doctor_name || data.doctor_id,
+      );
+      if (resolvedDoc) {
+        data.doctor_id = resolvedDoc.doctor_id;
+        console.log(
+          `[TAG-HANDLER-APPOINTMENT] Resolved doctor_id to ${data.doctor_id} for ${data.doctor_name}`,
+        );
+      }
     }
 
     // ─── Pre-Booking Validation: Check DB for existing appointments ───
@@ -339,34 +377,14 @@ Please provide these details.`;
         if (!doctorName) doctorName = data.doctor_name || null;
         const formattedDate = formatAppointmentDate(data.date);
 
-        const emailHtml = buildAppointmentEmailHtml({
-          type: "Confirmed",
-          patientName: appointmentData.patient_name,
-          appointmentId: appointment.appointment_id,
-          tokenNumber: appointment.token_number,
-          date: formattedDate,
-          time: data.time,
-          doctorName,
-          reason: data.problem || null,
-        });
-
-        const subject = buildAppointmentEmailSubject({
-          type: "Confirmed",
-          appointmentId: appointment.appointment_id,
-          tokenNumber: appointment.token_number,
-          date: formattedDate,
-          time: data.time,
-        });
-
-        await sendEmail({ to: emailTo, subject, html: emailHtml });
         console.log(
-          `[TAG-HANDLER-APPOINTMENT] Confirmation email sent to ${emailTo}`,
+          `[TAG-HANDLER-APPOINTMENT] Created appointment: ${appointment.appointment_id}`,
         );
       }
-    } catch (emailErr) {
+    } catch (err) {
       console.error(
-        "[TAG-HANDLER-APPOINTMENT] Email send error:",
-        emailErr.message,
+        "[TAG-HANDLER-APPOINTMENT] Error:",
+        err.message,
       );
     }
 

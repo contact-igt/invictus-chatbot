@@ -4,25 +4,13 @@ import OpenAI from "openai";
 import db from "../../database/index.js";
 import { tableNames } from "../../database/tableName.js";
 
-import { searchKnowledgeChunks } from "../Knowledge/knowledge.search.js";
+import { buildAiSystemPrompt } from "../../utils/ai/aiFlowHelper.js";
 import { getConversationMemory } from "../Messages/messages.memory.js";
 import { detectLanguageAI } from "../../utils/ai/detectLanguageStyle.js";
 import { buildChatHistory } from "../../utils/chat/buildChatHistory.js";
-import { getActivePromptService } from "../AiPrompt/aiprompt.service.js";
 import { processResponse } from "../../utils/ai/aiTagHandlers/index.js";
 import { classifyResponse } from "../../utils/ai/responseClassifier.js";
 import { handleClassification } from "../../utils/ai/classificationHandler.js";
-import { 
-  getCommonBasePrompt, 
-  getLeadSourcePrompt, 
-  getAppointmentBookingPrompt,
-  DEFAULT_SYSTEM_PROMPT
-} from "../../utils/ai/prompts/index.js";
-
-import { getLeadByContactIdService } from "../LeadsModel/leads.service.js";
-import { searchResolvedLogsService } from "../AiAnalysisLog/aiAnalysisLog.service.js";
-import { getDoctorsForAIService } from "../DoctorModel/doctor.service.js";
-import { getRecentAppointmentsForAIService } from "../AppointmentModel/appointment.service.js";
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -335,131 +323,16 @@ export const getOpenAIReply = async (
 
     console.log("language", languageInfo);
 
-    const memory = await getConversationMemory(tenant_id, phone);
+    const memory = await getConversationMemory(tenant_id, phone, contact_id);
     const chatHistory = buildChatHistory(memory);
 
-    const hospitalPrompt =
-      (await getActivePromptService(tenant_id)) || DEFAULT_SYSTEM_PROMPT;
-
-    const chunks = await searchKnowledgeChunks(tenant_id, cleanMessage);
-
-    // NEW: Fetch resolved logs
-    const resolvedLogs = await searchResolvedLogsService(tenant_id, 5);
-    const resolvedContext = resolvedLogs
-      .map(
-        (log) =>
-          `[Previous Question]: ${log.user_message}\n[Admin Resolution]: ${log.resolution}`,
-      )
-      .join("\n\n");
-
-    const knowledgeContext =
-      chunks && chunks.length > 0
-        ? chunks.join("\n\n")
-        : "No relevant uploaded documents.";
-
-    const combinedKnowledge = `
-${knowledgeContext}
-
-${
-  resolvedLogs.length > 0
-    ? `
-────────────────────────────────
-RESOLVED PAST QUESTIONS (HIGH PRIORITY)
-────────────────────────────────
-Use these past resolutions to answer if the user's question matches:
-
-${resolvedContext}
-`
-    : ""
-}
-`;
-
-    const COMMON_BASE_PROMPT = getCommonBasePrompt(languageInfo);
-
-    // Patient profile section for smarter collection
-    let patientProfileSection = "";
-    if (contact_id) {
-      try {
-        const contact = await db.Contacts.findOne({
-          where: { contact_id, tenant_id },
-          attributes: ["name", "email", "mobile"],
-        });
-        if (contact) {
-          patientProfileSection = `PATIENT PROFILE:\n- Name: ${contact.name || "Unknown"}\n- Email: ${contact.email || "Missing"}\n- Mobile: ${contact.mobile || "Known"}`;
-        }
-      } catch (err) {
-        console.error("[PATIENT_PROFILE] Error fetching profile:", err.message);
-      }
-    }
-
-    // Lead source detection prompt (only when source is unknown)
-    let leadSourcePrompt = "";
-    if (contact_id) {
-      try {
-        const lead = await getLeadByContactIdService(tenant_id, contact_id);
-        if (lead && lead.source === "none") {
-          leadSourcePrompt = getLeadSourcePrompt(contact_id);
-        }
-      } catch (err) {
-        console.error("[LEAD_SOURCE] Error checking lead source:", err.message);
-      }
-    }
-
-    let appointmentBookingPrompt = "";
-    try {
-      const doctorsList = await getDoctorsForAIService(tenant_id);
-      const doctorsSection = doctorsList
-        ? `AVAILABLE DOCTORS:\n${doctorsList}`
-        : "No doctors are currently available for booking.";
-
-      let existingAppointmentsSection = "";
-      if (contact_id) {
-        const recentAppts = await getRecentAppointmentsForAIService(tenant_id, contact_id);
-        if (recentAppts && recentAppts.length > 0) {
-          const activeAppts = recentAppts.filter(a => !a.is_deleted && a.status !== "Cancelled");
-          const cancelledAppts = recentAppts.filter(a => a.is_deleted || a.status === "Cancelled");
-
-          let activeText = "";
-          if (activeAppts.length > 0) {
-            activeText = "\nEXISTING ACTIVE APPOINTMENTS (SOURCE OF TRUTH):\n" + activeAppts.map((a) => {
-              const dateStr = new Date(a.appointment_date).toLocaleDateString("en-GB", { day: "2-digit", month: "long", year: "numeric" });
-              return `  - Appointment ${a.appointment_id} (Token: ${a.token_number}) on ${dateStr} at ${a.appointment_time} with ${a.doctor?.name || "Unknown Doctor"} [Status: ${a.status}]`;
-            }).join("\n") + "\n";
-          }
-
-          let cancelledText = "";
-          if (cancelledAppts.length > 0) {
-            cancelledText = "\nRECENTLY CANCELLED/DELETED APPOINTMENTS (PAST 24H):\n" + cancelledAppts.map((a) => {
-              const dateStr = new Date(a.appointment_date).toLocaleDateString("en-GB", { day: "2-digit", month: "long", year: "numeric" });
-              return `  - Appointment ${a.appointment_id} on ${dateStr} was CANCELLED/DELETED.`;
-            }).join("\n") + "\n";
-          }
-          existingAppointmentsSection = activeText + cancelledText;
-        }
-      }
-      appointmentBookingPrompt = getAppointmentBookingPrompt(doctorsSection, existingAppointmentsSection, patientProfileSection);
-    } catch (err) {
-      console.error("[APPOINTMENT_PROMPT] Error fetching data:", err.message);
-    }
-
-    const systemPrompt = `
-    
-${leadSourcePrompt}
-
-${appointmentBookingPrompt}
-
-${COMMON_BASE_PROMPT}
-
-${hospitalPrompt}
-
-CURRENT DATE & DAY & TIME (IST):
-Date: ${currentDateFormatted}
-Day: ${currentDayFormatted}
-Time: ${currentTimeFormatted}
-
-UPLOADED KNOWLEDGE:
-${combinedKnowledge}
-`;
+    // Use centralized AI flow helper for parity with Playground
+    const { systemPrompt } = await buildAiSystemPrompt(
+      tenant_id,
+      contact_id,
+      languageInfo,
+      cleanMessage
+    );
 
     const aiMessages = [
       { role: "system", content: systemPrompt },

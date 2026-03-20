@@ -63,7 +63,7 @@ export const searchKnowledgeChunks = async (tenant_id, question) => {
 
   /* 1️⃣ Search Main Knowledge Base */
   const query = `
-    SELECT kc.chunk_text
+    SELECT kc.chunk_text, ks.id as source_id, ks.title as source_title, ks.type as source_type
     FROM ${tableNames.KNOWLEDGECHUNKS} kc
     INNER JOIN ${tableNames.KNOWLEDGESOURCE} ks
       ON ks.id = kc.source_id
@@ -102,11 +102,27 @@ export const searchKnowledgeChunks = async (tenant_id, question) => {
     replacements: [tenant_id, ...logValues],
   });
 
-  // Combine both results (Prioritize Logs/Resolutions first)
-  const allResults = [
-    ...logRows.map((r) => `[Previous Question]: ${r.user_message}\n[Admin Resolution]: ${r.resolution}`),
-    ...knowledgeRows.map((r) => r.chunk_text)
-  ];
+  const logsFormatted = logRows.map(
+    (r) => `[Previous Question]: ${r.user_message}\n[Admin Resolution]: ${r.resolution}`,
+  );
 
-  return allResults;
+  // Group chunks by source for UI transparency
+  const sourceMap = new Map();
+  knowledgeRows.forEach((r) => {
+    if (!sourceMap.has(r.source_id)) {
+      sourceMap.set(r.source_id, {
+        id: r.source_id,
+        title: r.source_title,
+        type: r.source_type,
+        chunks: [],
+      });
+    }
+    sourceMap.get(r.source_id).chunks.push(r.chunk_text);
+  });
+
+  return {
+    chunks: knowledgeRows.map((r) => r.chunk_text),
+    resolvedLogs: logsFormatted,
+    sources: Array.from(sourceMap.values()),
+  };
 };

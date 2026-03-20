@@ -19,6 +19,7 @@ import {
   getLivechatByIdService,
   updateLiveChatTimestampService,
 } from "../LiveChatModel/livechat.service.js";
+import { renderTemplateContent } from "../../utils/whatsapp/templateRenderer.js";
 import { tableNames } from "../../database/tableName.js";
 import db from "../../database/index.js";
 import { getIO } from "../../middlewares/socket/socket.js";
@@ -207,77 +208,8 @@ export const sendTemplateMessageController = async (req, res) => {
       { replacements: [template_id, tenant_id] },
     );
 
-    const [[headerComponent]] = await db.sequelize.query(
-      `SELECT text_content FROM ${tableNames.WHATSAPP_TEMPLATE_COMPONENTS} WHERE template_id = ? AND component_type = 'header' LIMIT 1`,
-      { replacements: [template_id] },
-    );
-
-    const [[bodyComponent]] = await db.sequelize.query(
-      `SELECT text_content FROM ${tableNames.WHATSAPP_TEMPLATE_COMPONENTS} WHERE template_id = ? AND component_type = 'body' LIMIT 1`,
-      { replacements: [template_id] },
-    );
-
-    const [[contact]] = await db.sequelize.query(
-      `SELECT name FROM contacts WHERE contact_id = ?`,
-      { replacements: [contact_id] },
-    );
-
-    const [variables] = await db.sequelize.query(
-      `SELECT * FROM ${tableNames.WHATSAPP_TEMPLATE_VARIABLES} WHERE template_id = ?`,
-      { replacements: [template_id] },
-    );
-
-    if (variables.length > 0) {
-      const bodyParams =
-        components?.find((c) => c.type === "body")?.parameters || [];
-      const headerParams =
-        components?.find((c) => c.type === "header")?.parameters || [];
-      const totalParamsSent = bodyParams.length + headerParams.length;
-
-      if (totalParamsSent < variables.length) {
-        return res.status(400).send({
-          message: `This template requires ${variables.length} parameters, but only ${totalParamsSent} were provided.`,
-        });
-      }
-    }
-
-    let messageContent = "";
-
-    // 1. Handle Header
-    if (headerComponent && headerComponent.text_content) {
-      let headerText = headerComponent.text_content;
-      const headerParams =
-        components?.find((c) => c.type === "header")?.parameters || [];
-      headerParams.forEach((param, index) => {
-        if (param.type === "text") {
-          headerText = headerText.replace(
-            new RegExp(`\\{\\{${index + 1}\\}\\}`, "g"),
-            param.text,
-          );
-        }
-      });
-      messageContent += headerText + "\n";
-    }
-
-    // 2. Handle Body
-    if (bodyComponent && bodyComponent.text_content) {
-      let bodyText = bodyComponent.text_content;
-      const bodyParams =
-        components?.find((c) => c.type === "body")?.parameters || [];
-      bodyParams.forEach((param, index) => {
-        if (param.type === "text") {
-          bodyText = bodyText.replace(
-            new RegExp(`\\{\\{${index + 1}\\}\\}`, "g"),
-            param.text,
-          );
-        }
-      });
-      messageContent += bodyText;
-    }
-
-    if (!messageContent) {
-      messageContent = `Template: ${template?.template_name}`;
-    }
+    // 2. Render content for DB
+    const messageContent = await renderTemplateContent(template_id, components);
 
     if (!template) {
       return res.status(404).send({ message: "Template not found" });
@@ -472,7 +404,7 @@ export const sendTestMessageController = async (req, res) => {
         components || [],
       );
 
-      // Contact & Chat management
+      // 2. Contact & Chat management
       let contact = await getContactByPhoneAndTenantIdService(
         tenant_id,
         formattedPhone,
@@ -498,7 +430,9 @@ export const sendTestMessageController = async (req, res) => {
         await createLiveChatService(tenant_id, contact?.contact_id);
       else await updateLiveChatTimestampService(tenant_id, contact?.contact_id);
 
-      const messageContent = `Template: ${template.template_name} (Test)`;
+      // 1. Render message content
+      const messageContent = await renderTemplateContent(template_id, components || []);
+
       const savedMsg = await createUserMessageService(
         tenant_id,
         contact?.contact_id,

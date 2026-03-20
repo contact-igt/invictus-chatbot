@@ -43,10 +43,10 @@ export const createAppointment = async (req, res) => {
 
 export const getAllAppointments = async (req, res) => {
   try {
-    const { search, status, date } = req.query;
+    const { search, status, date, doctor_id } = req.query;
     const appointments = await AppointmentService.getAllAppointmentsService(
       req.user.tenant_id,
-      { search, status, date },
+      { search, status, date, doctor_id },
     );
     return res.status(200).json({ success: true, data: appointments });
   } catch (err) {

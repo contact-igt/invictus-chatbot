@@ -66,6 +66,7 @@ export const verifyWebhook = async (req, res) => {
 };
 
 export const receiveMessage = async (req, res) => {
+  const io = getIO();
   try {
     const value = req.body?.entry?.[0]?.changes?.[0]?.value;
     const msg = value?.messages?.[0];
@@ -220,7 +221,6 @@ export const receiveMessage = async (req, res) => {
                 { replacements: [status, msgRow.id] },
               );
               try {
-                const io = getIO();
                 io.to(`tenant-${msgRow.tenant_id}`).emit("message-status-update", {
                   message_id: msgRow.id,
                   phone: msgRow.phone,
@@ -332,7 +332,6 @@ export const receiveMessage = async (req, res) => {
     );
 
     // 7. Emit Real-time Event to Frontend
-    const io = getIO();
     io.to(`tenant-${tenant_id}`).emit("new-message", {
       tenant_id,
       phone,

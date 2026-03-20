@@ -83,19 +83,24 @@ export const createDoctorService = async (tenant_id, data) => {
 
     // 3. Handle specializations (validate they exist)
     if (data.specializations && data.specializations.length > 0) {
-      for (const specName of data.specializations) {
-        // Find specialization - must already exist
+      for (const specData of data.specializations) {
+        const specNameOrId = typeof specData === 'string' ? specData.trim() : specData;
+
+        // Find specialization - check by Name OR Specialization ID
         const spec = await db.Specializations.findOne({
           where: {
             tenant_id,
-            name: specName.trim(),
+            [db.Sequelize.Op.or]: [
+              { name: specNameOrId },
+              { specialization_id: specNameOrId }
+            ],
             is_deleted: false,
           },
         });
 
         if (!spec) {
           throw new Error(
-            `Specialization "${specName}" not found. Please create it first in the specializations master list.`,
+            `Specialization "${specNameOrId}" not found. Please create it first in the specializations master list.`,
           );
         }
 
@@ -163,6 +168,21 @@ export const createDoctorService = async (tenant_id, data) => {
     return { doctor_id, tenant_user_id };
   } catch (error) {
     await transaction.rollback();
+    throw error;
+  }
+};
+
+// ─── Find Doctor By Name (for AI Tag Handlers) ───
+export const findDoctorByNameService = async (tenant_id, name) => {
+  try {
+    const [[doctor]] = await db.sequelize.query(
+      `SELECT doctor_id, name, title FROM ${tableNames.DOCTORS}
+       WHERE tenant_id = ? AND name LIKE ? AND is_deleted = false
+       LIMIT 1`,
+      { replacements: [tenant_id, `%${name.trim()}%`] },
+    );
+    return doctor || null;
+  } catch (error) {
     throw error;
   }
 };
@@ -303,19 +323,24 @@ export const updateDoctorService = async (doctor_id, tenant_id, data) => {
       });
 
       // Add new ones (validate they exist)
-      for (const specName of data.specializations) {
-        // Find specialization - must already exist
+      for (const specData of data.specializations) {
+        const specNameOrId = typeof specData === 'string' ? specData.trim() : specData;
+
+        // Find specialization - check by Name OR Specialization ID
         const spec = await db.Specializations.findOne({
           where: {
             tenant_id,
-            name: specName.trim(),
+            [db.Sequelize.Op.or]: [
+              { name: specNameOrId },
+              { specialization_id: specNameOrId }
+            ],
             is_deleted: false,
           },
         });
 
         if (!spec) {
           throw new Error(
-            `Specialization "${specName}" not found. Please create it first in the specializations master list.`,
+            `Specialization "${specNameOrId}" not found. Please create it first in the specializations master list.`,
           );
         }
 
@@ -480,7 +505,7 @@ export const getDoctorsForAIService = async (tenant_id) => {
     const [doctors] = await db.sequelize.query(
       `SELECT d.doctor_id, d.title, d.name, d.status, d.consultation_duration, d.experience_years, d.qualification
        FROM ${tableNames.DOCTORS} d
-       WHERE d.tenant_id = ? AND d.is_deleted = false AND d.status = 'available'
+       WHERE d.tenant_id = ? AND d.is_deleted = false AND d.status IN ('available', 'busy', 'off duty')
        ORDER BY d.name ASC`,
       { replacements: [tenant_id] },
     );
@@ -522,6 +547,7 @@ export const getDoctorsForAIService = async (tenant_id) => {
       result.push(
         `• Doctor ID: ${doc.doctor_id} | ${title}${doc.name}${qual}${exp}\n` +
           `  Specializations: ${specializationNames}\n` +
+          `  Current Status: ${doc.status.toUpperCase()}\n` +
           `  Available: ${availabilityText}\n` +
           `  Slot Duration: ${doc.consultation_duration || 30} mins`,
       );

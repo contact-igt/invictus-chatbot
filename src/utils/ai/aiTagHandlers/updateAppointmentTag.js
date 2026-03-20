@@ -230,62 +230,7 @@ export const execute = async (payload, context) => {
       );
     } catch (_) {}
 
-    // Send email notification for the update
-    try {
-      const contact = await db.Contacts.findOne({
-        where: { contact_id, tenant_id },
-        attributes: ["email", "name"],
-      });
-
-      const emailTo = data.email || contact?.email;
-      if (emailTo) {
-        const apptDate =
-          updated.appointment_date || existingAppt?.appointment_date;
-        const apptTime =
-          updated.appointment_time || existingAppt?.appointment_time;
-        const doctorName =
-          updated.doctor?.name || existingAppt?.doctor?.name || null;
-        const formattedDate = formatAppointmentDate(apptDate);
-
-        const emailChanges = [];
-        if (data.date)
-          emailChanges.push(
-            `Date changed to ${formatAppointmentDate(data.date)}`,
-          );
-        if (data.time) emailChanges.push(`Time changed to ${data.time}`);
-        if (data.doctor_id) emailChanges.push(`Doctor updated`);
-
-        const emailHtml = buildAppointmentEmailHtml({
-          type: "Updated",
-          patientName: updated.patient_name || contact?.name || "Patient",
-          appointmentId: data.appointment_id,
-          tokenNumber: updated.token_number,
-          date: formattedDate,
-          time: apptTime,
-          doctorName,
-          reason: updated.notes || null,
-          changes: emailChanges,
-        });
-
-        const subject = buildAppointmentEmailSubject({
-          type: "Updated",
-          appointmentId: data.appointment_id,
-          tokenNumber: updated.token_number,
-          date: formattedDate,
-          time: apptTime,
-        });
-
-        await sendEmail({ to: emailTo, subject, html: emailHtml });
-        console.log(
-          `[TAG-HANDLER-UPDATE-APPOINTMENT] Email sent to ${emailTo}`,
-        );
-      }
-    } catch (emailErr) {
-      console.error(
-        "[TAG-HANDLER-UPDATE-APPOINTMENT] Email send error:",
-        emailErr.message,
-      );
-    }
+    // Confirmation message already sent via WhatsApp and stored in message history above
   } catch (err) {
     console.error(
       "[TAG-HANDLER-UPDATE-APPOINTMENT] Execution error:",

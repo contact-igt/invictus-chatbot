@@ -1,6 +1,7 @@
 import * as AppointmentService from "../../../models/AppointmentModel/appointment.service.js";
 import { sendWhatsAppMessage } from "../../../models/AuthWhatsapp/AuthWhatsapp.service.js";
 import { createUserMessageService } from "../../../models/Messages/messages.service.js";
+import db from "../../../database/index.js";
 
 export const execute = async (payload, context) => {
   try {
@@ -25,20 +26,6 @@ export const execute = async (payload, context) => {
 
     console.log(`[TAG-HANDLER-CANCEL-APPOINTMENT] Cancelling ${appointment_id}`);
     
-    // Fetch appointment details BEFORE deleting for email context
-    const appointment = await db.Appointments.findOne({
-      where: { appointment_id, tenant_id },
-      include: [
-        { model: db.Contacts, as: "contact", attributes: ["email", "name"] },
-        { model: db.Doctors, as: "doctor", attributes: ["name"] }
-      ]
-    });
-
-    if (!appointment) {
-      console.error(`[TAG-HANDLER-CANCEL-APPOINTMENT] Appointment ${appointment_id} not found.`);
-      return;
-    }
-
     await AppointmentService.deleteAppointmentService(tenant_id, appointment_id);
 
     const successMsg = `✅ *Appointment Cancelled*\n\nYour appointment *${appointment_id}* has been successfully cancelled.`;
@@ -58,39 +45,6 @@ export const execute = async (payload, context) => {
         successMsg,
       );
     } catch (_) {}
-
-    // Send email notification for cancellation
-    const emailTo = appointment.contact?.email;
-    if (emailTo) {
-      const { sendEmail } = await import("../../email/emailService.js");
-      const { buildAppointmentEmailHtml, buildAppointmentEmailSubject, formatAppointmentDate } = await import("../../email/appointmentEmailTemplate.js");
-
-      try {
-        const formattedDate = formatAppointmentDate(appointment.appointment_date);
-        const emailHtml = buildAppointmentEmailHtml({
-          type: "Cancelled",
-          patientName: appointment.patient_name || appointment.contact?.name || "Patient",
-          appointmentId: appointment.appointment_id,
-          tokenNumber: appointment.token_number,
-          date: formattedDate,
-          time: appointment.appointment_time,
-          doctorName: appointment.doctor?.name || null,
-        });
-
-        const subject = buildAppointmentEmailSubject({
-          type: "Cancelled",
-          appointmentId: appointment.appointment_id,
-          tokenNumber: appointment.token_number,
-          date: formattedDate,
-          time: appointment.appointment_time,
-        });
-
-        await sendEmail({ to: emailTo, subject, html: emailHtml });
-        console.log(`[TAG-HANDLER-CANCEL-APPOINTMENT] Cancellation email sent to ${emailTo}`);
-      } catch (emailErr) {
-        console.error("[TAG-HANDLER-CANCEL-APPOINTMENT] Email send error:", emailErr.message);
-      }
-    }
 
   } catch (err) {
     console.error("[TAG-HANDLER-CANCEL-APPOINTMENT] Error:", err.message);

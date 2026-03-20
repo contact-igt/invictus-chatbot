@@ -389,7 +389,13 @@ export const submitWhatsappTemplateService = async ({
         };
         const sampleUrl = header.media_url || defaultSamples[format];
         if (sampleUrl) {
-          headerObj.example = { header_handle: [sampleUrl] };
+          try {
+            const { uploadMediaToMetaForTemplate } = await import("../../utils/whatsapp/metaMediaUpload.js");
+            const headerHandle = await uploadMediaToMetaForTemplate(whatsappAccount.tenant_id, sampleUrl, format);
+            headerObj.example = { header_handle: [headerHandle] };
+          } catch (uploadError) {
+             throw new Error(`Failed to upload media sample to Meta: ${uploadError.message}`);
+          }
         }
       } else if (format === "LOCATION") {
         // Meta requires 'text' for Location header title
@@ -1211,6 +1217,19 @@ export const updateWhatsappTemplateService = async (
       throw new Error(
         `Cannot edit template with status: ${template.status}. Only draft, rejected, paused, or approved templates can be edited.`,
       );
+    }
+
+    // If template is already submitted to Meta, name, category, and language cannot change
+    if (template.status !== "draft") {
+      const isNameChanged = template_name && template_name.toLowerCase() !== template.template_name.toLowerCase();
+      const isLanguageChanged = language && language.toLowerCase() !== template.language.toLowerCase();
+      const isCategoryChanged = category && category.toLowerCase() !== template.category.toLowerCase();
+      
+      if (isNameChanged || isLanguageChanged || isCategoryChanged) {
+        throw new Error(
+          "Template name, category, and language cannot be changed after the template has been submitted to Meta. You may only edit the message content."
+        );
+      }
     }
 
     // Validate body component

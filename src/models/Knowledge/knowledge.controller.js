@@ -250,8 +250,9 @@ export const searchKnowledgeChunksController = async (req, res) => {
     const data = await searchKnowledgeChunks(tenant_id, question);
 
     return res.status(200).send({
-      message: "Knowledge status updated successfully",
-      output: data,
+      message: "Knowledge search successful",
+      output: data.chunks, // Maintain output as array for legacy UI
+      full_analysis: data, // Return full object for modern consumers
     });
   } catch (err) {
     return res.status(500).json({

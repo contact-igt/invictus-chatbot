@@ -145,6 +145,11 @@ export const getChatByPhoneService = async (phone, tenant_id) => {
     if (contact) {
       whereClause = "contact_id = ? AND tenant_id = ?";
       replacements = [contact.contact_id, tenant_id];
+    } else {
+      // Normalize phone to last 10 digits
+      const cleanPhone = phone ? phone.toString().replace(/\D/g, "") : "";
+      const suffix = cleanPhone.length >= 10 ? cleanPhone.slice(-10) : cleanPhone;
+      replacements = [suffix, tenant_id];
     }
 
     const Query = `
@@ -172,6 +177,11 @@ export const markSeenMessageService = async (tenant_id, phone) => {
     if (contact) {
       whereClause = "contact_id = ?";
       replacements = [contact.contact_id, tenant_id];
+    } else {
+      // Normalize phone to last 10 digits
+      const cleanPhone = phone ? phone.toString().replace(/\D/g, "") : "";
+      const suffix = cleanPhone.length >= 10 ? cleanPhone.slice(-10) : cleanPhone;
+      replacements = [suffix, tenant_id];
     }
 
     const Query = `UPDATE ${tableNames?.MESSAGES} SET seen = true WHERE ${whereClause} AND tenant_id = ? AND seen = false AND sender = 'user'`;
@@ -261,7 +271,7 @@ export const suggestReplyService = async (tenant_id, phone) => {
     const lastUserMessage = lastMsg[0].message;
 
     /* 3️⃣ Knowledge base search (Uses Smart AI Retrieval internally) */
-    const chunks = await searchKnowledgeChunks(tenant_id, lastUserMessage);
+    const { chunks } = await searchKnowledgeChunks(tenant_id, lastUserMessage);
 
     const knowledgeText =
       chunks && chunks.length > 0

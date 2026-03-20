@@ -1,6 +1,7 @@
 import { getAvailableSlotsService } from "../../../models/AppointmentModel/appointment.service.js";
 import { sendWhatsAppMessage } from "../../../models/AuthWhatsapp/AuthWhatsapp.service.js";
 import { createUserMessageService } from "../../../models/Messages/messages.service.js";
+import { findDoctorByNameService } from "../../../models/DoctorModel/doctor.service.js";
 
 export const execute = async (payload, context, cleanMessage) => {
   try {
@@ -35,9 +36,35 @@ export const execute = async (payload, context, cleanMessage) => {
     }
     const { doctor_id, date, doctor_name, preferred_time } = data;
 
-    if (!doctor_id || !date) {
+    const placeholders = ["ID", "YYYY-MM-DD", "DOC_NAME", "NAME"];
+    if (
+      !doctor_id ||
+      !date ||
+      placeholders.includes(String(doctor_id).toUpperCase()) ||
+      placeholders.includes(String(date).toUpperCase())
+    ) {
+      // Try to resolve doctor ID from name if doctor_id is a placeholder but name is provided
+      if (
+        (doctor_id === "ID" ||
+          !doctor_id ||
+          (doctor_name && doctor_id && doctor_id.length > 10)) &&
+        doctor_name &&
+        !placeholders.includes(doctor_name.toUpperCase())
+      ) {
+        const resolvedDoc = await findDoctorByNameService(tenant_id, doctor_name);
+        if (resolvedDoc) {
+          data.doctor_id = resolvedDoc.doctor_id;
+          // Re-assign local doctor_id for the rest of the function
+          const newDocId = resolvedDoc.doctor_id;
+          console.log(
+            `[TAG-HANDLER-CHECK_AVAILABILITY] Resolved doctor_id to ${newDocId} for ${doctor_name}`,
+          );
+          return execute(JSON.stringify({ ...data, doctor_id: newDocId }), context, cleanMessage);
+        }
+      }
+
       console.error(
-        "[TAG-HANDLER-CHECK_AVAILABILITY] Missing doctor_id or date",
+        "[TAG-HANDLER-CHECK_AVAILABILITY] Missing or placeholder doctor_id/date",
       );
       const errMsg =
         "❌ I need both the doctor name and date to check availability. Please provide both.";

@@ -281,8 +281,8 @@ export const getRecentAppointmentsForAIService = async (tenant_id, contact_id) =
           // Active appointments
           {
             is_deleted: false,
-            status: { [Op.in]: ["Pending", "Confirmed"] },
-            appointment_date: { [Op.gte]: today }
+            status: { [Op.in]: ["Pending", "Confirmed", "Completed"] },
+            appointment_date: { [Op.gte]: new Date(today.getTime() - 3 * 24 * 60 * 60 * 1000) }
           },
           // Recently cancelled/deleted appointments
           {
@@ -314,7 +314,7 @@ export const getAppointmentsByContactIdService = async (
 ) => {
   try {
     return await db.Appointments.findAll({
-      where: { tenant_id, contact_id, is_deleted: false },
+      where: { tenant_id, contact_id },
       order: [
         ["appointment_date", "DESC"],
         ["appointment_time", "DESC"],
@@ -327,12 +327,13 @@ export const getAppointmentsByContactIdService = async (
 
 export const getAllAppointmentsService = async (
   tenant_id,
-  { search, status, date } = {},
+  { search, status, date, doctor_id } = {},
 ) => {
   try {
     const where = { tenant_id, is_deleted: false };
     if (status) where.status = status;
     if (date) where.appointment_date = date;
+    if (doctor_id) where.doctor_id = doctor_id;
 
     const appointments = await db.Appointments.findAll({
       where,
@@ -442,8 +443,9 @@ const sendAppointmentNotificationEmail = async (
       ],
     });
     if (!appointment) return;
-
-    const emailTo = appointment.contact?.email;
+    
+    // Check both appointment and contact for email
+    const emailTo = appointment.email || appointment.contact?.email;
     if (!emailTo) return;
 
     const formattedDate = formatAppointmentDate(appointment.appointment_date);
@@ -717,7 +719,7 @@ export const deleteAppointmentService = async (tenant_id, appointment_id) => {
     const transaction = await db.sequelize.transaction();
     try {
       await db.Appointments.update(
-        { is_deleted: true, deleted_at: new Date() },
+        { status: "Cancelled", is_deleted: true, deleted_at: new Date() },
         { where: { appointment_id, tenant_id }, transaction },
       );
 
