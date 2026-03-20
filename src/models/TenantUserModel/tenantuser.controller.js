@@ -11,7 +11,10 @@ import {
   sendTenantInvitationService,
   sendTenantUserWelcomeEmailService,
 } from "../TenantInvitationModel/tenantinvitation.service.js";
-import { findTenantByIdService, updateTenantService } from "../TenantModel/tenant.service.js";
+import {
+  findTenantByIdService,
+  updateTenantService,
+} from "../TenantModel/tenant.service.js";
 import {
   createTenantUserService,
   findTenantUserByIdService,
@@ -24,6 +27,7 @@ import {
   findTenantUserByEmailGloballyService,
   getDeletedTenantUserListService,
   restoreTenantUserService,
+  findTenantUserByIdIgnoringDeleteService,
 } from "./tenantuser.service.js";
 import bcrypt from "bcrypt";
 import { generatePassword } from "../../utils/helpers/generatePassword.js";
@@ -54,14 +58,75 @@ export const getLoggedTenantUserController = async (req, res) => {
 
     // Fetch full tenant details for organization profile
     const tenant = await findTenantByIdService(user.tenant_id);
-    const organization = tenant ? { ...tenant } : null;
+    if (tenant) {
+      user.organization = {
+        company_name: tenant.company_name,
+        type: tenant.type,
+        address: tenant.address,
+        country: tenant.country,
+        state: tenant.state,
+        city: tenant.city,
+        pincode: tenant.pincode,
+        subscription_plan: tenant.subscription_plan,
+        subscription_start_date: tenant.subscription_start_date,
+        subscription_end_date: tenant.subscription_end_date,
+        max_users: tenant.max_users
+      };
+      user.webhook_verified = !!tenant.webhook_verified;
+    }
 
-    return res.status(200).send({
-      message: "Logged-in tenant user profile fetched successfully",
-      data: { ...user, organization, user_type: "tenant" },
+    return res.status(200).json({
+      message: "Profile fetched successfully",
+      data: { ...user, user_type: "tenant" },
     });
   } catch (err) {
-    res.status(500).send({ error: err.message });
+    return res.status(500).json({ message: err.message });
+  }
+};
+
+export const updateTenantOrganizationController = async (req, res) => {
+  const loginUser = req.user;
+
+  try {
+    const {
+      company_name,
+      type,
+      address,
+      country,
+      state,
+      city,
+      pincode
+    } = req.body;
+
+    if (loginUser.role !== 'tenant_admin') {
+      return res.status(403).json({ message: "Access denied: Only tenant admins can update organization details" });
+    }
+
+    const tenant = await findTenantByIdService(loginUser.tenant_id);
+    if (!tenant) {
+      return res.status(404).json({ message: "Tenant not found" });
+    }
+
+    await updateTenantService(
+      company_name,
+      tenant.owner_name,
+      tenant.owner_email,
+      tenant.owner_country_code,
+      tenant.owner_mobile,
+      type,
+      address,
+      country,
+      state,
+      city,
+      pincode,
+      loginUser.tenant_id
+    );
+
+    return res.status(200).json({
+      message: "Organization details updated successfully"
+    });
+  } catch (err) {
+    return res.status(500).json({ message: err.message });
   }
 };
 
@@ -462,7 +527,7 @@ export const permanentDeleteTenantUserController = async (req, res) => {
     const loginUser = req.user;
     const { id } = req.params;
 
-    const user = await findTenantUserByIdService(id);
+    const user = await findTenantUserByIdIgnoringDeleteService(id);
 
     if (!user) {
       return res.status(404).send({ message: "User not found" });

@@ -12,14 +12,14 @@ export const createTenantService = async (
   status,
   subscription_start_date,
   subscription_end_date,
-  address,
-  city,
-  country,
-  state,
-  pincode,
+
   max_users,
   subscription_plan,
   profile,
+  country = null,
+  state = null,
+  city = null,
+  pincode = null,
   verify_token = null,
 ) => {
   const Query = `INSERT INTO ${tableNames?.TENANTS} (
@@ -41,8 +41,13 @@ export const createTenantService = async (
       max_users,
       subscription_plan,
       profile,
+      address,
+      country,
+      state,
+      city,
+      pincode,
       verify_token
-  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`;
+  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`;
 
   try {
     const values = [
@@ -56,14 +61,14 @@ export const createTenantService = async (
       status,
       subscription_start_date,
       subscription_end_date,
-      address,
-      city,
-      country,
-      state,
-      pincode,
       max_users,
       subscription_plan,
       profile,
+      address,
+      country,
+      state,
+      city,
+      pincode,
       verify_token,
     ];
     console.log("values", values);
@@ -127,17 +132,11 @@ export const updateTenantService = async (
   owner_country_code,
   owner_mobile,
   type,
-  status,
-  subscription_start_date,
-  subscription_end_date,
   address,
-  city,
   country,
   state,
+  city,
   pincode,
-  max_users,
-  subscription_plan,
-  profile,
   tenant_id,
 ) => {
   const updateFields = [];
@@ -173,59 +172,29 @@ export const updateTenantService = async (
     updateValues.push(type);
   }
 
-  if (status !== undefined && status !== null) {
-    updateFields.push("status = ?");
-    updateValues.push(status);
-  }
-
-  if (subscription_start_date !== undefined && subscription_start_date !== null) {
-    updateFields.push("subscription_start_date = ?");
-    updateValues.push(subscription_start_date);
-  }
-
-  if (subscription_end_date !== undefined && subscription_end_date !== null) {
-    updateFields.push("subscription_end_date = ?");
-    updateValues.push(subscription_end_date);
-  }
-
-  if (address !== undefined) {
+  if (address !== undefined && address !== null) {
     updateFields.push("address = ?");
-    updateValues.push(address ?? null);
+    updateValues.push(address);
   }
 
-  if (city !== undefined) {
-    updateFields.push("city = ?");
-    updateValues.push(city ?? null);
-  }
-
-  if (country !== undefined) {
+  if (country !== undefined && country !== null) {
     updateFields.push("country = ?");
-    updateValues.push(country ?? null);
+    updateValues.push(country);
   }
 
-  if (state !== undefined) {
+  if (state !== undefined && state !== null) {
     updateFields.push("state = ?");
-    updateValues.push(state ?? null);
+    updateValues.push(state);
   }
 
-  if (pincode !== undefined) {
+  if (city !== undefined && city !== null) {
+    updateFields.push("city = ?");
+    updateValues.push(city);
+  }
+
+  if (pincode !== undefined && pincode !== null) {
     updateFields.push("pincode = ?");
-    updateValues.push(pincode ?? null);
-  }
-
-  if (max_users !== undefined && max_users !== null) {
-    updateFields.push("max_users = ?");
-    updateValues.push(max_users);
-  }
-
-  if (subscription_plan !== undefined && subscription_plan !== null) {
-    updateFields.push("subscription_plan = ?");
-    updateValues.push(subscription_plan);
-  }
-
-  if (profile !== undefined) {
-    updateFields.push("profile = ?");
-    updateValues.push(profile ?? null);
+    updateValues.push(pincode);
   }
 
   if (updateFields.length === 0) return null;

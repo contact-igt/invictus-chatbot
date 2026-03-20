@@ -77,13 +77,31 @@ import axios from "axios";
 /**
  * Tier label map: Meta messaging_limit_tier → human-readable UI label
  */
-const TIER_LABEL_MAP = {
-  TIER_NOT_SET: "TRIAL",
-  TIER_50: "1K MSG LIMIT",
-  TIER_250: "10K MSG LIMIT",
-  TIER_1K: "100K MSG LIMIT",
-  TIER_10K: "UNLIMITED",
-  TIER_100K: "UNLIMITED",
+export const META_TIER_CONFIG = {
+  TIER_NOT_SET: {
+    name: "Trial",
+    limit: 250,
+  },
+  TIER_50: {
+    name: "Tier 1",
+    limit: 1000,
+  },
+  TIER_250: {
+    name: "Tier 2",
+    limit: 10000,
+  },
+  TIER_1K: {
+    name: "Tier 3",
+    limit: 100000,
+  },
+  TIER_10K: {
+    name: "Tier 4",
+    limit: "Unlimited",
+  },
+  TIER_100K: {
+    name: "Tier 4",
+    limit: "Unlimited",
+  },
 };
 
 /**
@@ -133,10 +151,10 @@ export const syncWabaMetaInfoService = async (tenant_id) => {
       ? quality_rating
       : "GREEN";
 
-    const tierLabel =
-      TIER_LABEL_MAP[messaging_limit_tier] ||
-      messaging_limit_tier ||
-      "1K MSG LIMIT";
+    const tierRaw = messaging_limit_tier || "TIER_NOT_SET";
+    console.log("tierRaw", tierRaw);
+    const tierLabel = META_TIER_CONFIG[tierRaw] ? tierRaw : "TIER_NOT_SET";
+    console.log("tierLabel", tierLabel);
 
     // 4. Update the WhatsappAccount row
     await db.Whatsappaccount.update(

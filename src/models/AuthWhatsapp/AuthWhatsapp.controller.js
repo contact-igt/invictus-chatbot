@@ -24,6 +24,7 @@ import db from "../../database/index.js";
 import {
   createContactService,
   getContactByPhoneAndTenantIdService,
+  updateContactService,
 } from "../ContactsModel/contacts.service.js";
 import {
   createLeadService,
@@ -305,6 +306,18 @@ export const receiveMessage = async (req, res) => {
         name,
         contact_id: contactsaved?.contact_id,
       });
+    } else {
+      if (name && (!contactsaved.name || contactsaved.name === phone)) {
+        await updateContactService(
+          contactsaved.contact_id,
+          tenant_id,
+          name,
+          contactsaved.email,
+          contactsaved.profile_pic,
+          contactsaved.is_blocked
+        );
+        contactsaved.name = name;
+      }
     }
 
     const livelist = await getLivechatByIdService(
@@ -338,7 +351,7 @@ export const receiveMessage = async (req, res) => {
       id: savedMsg?.id,
       contact_id: contactsaved?.contact_id,
       phone_number_id,
-      name,
+      name: contactsaved?.name || name,
       message: text,
       sender: "user",
       created_at: new Date(),

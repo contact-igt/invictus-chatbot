@@ -121,6 +121,20 @@ export const findTenantUserByIdService = async (tenant_user_id) => {
   }
 };
 
+export const findTenantUserByIdIgnoringDeleteService = async (tenant_user_id) => {
+  const Query = `SELECT * FROM ${tableNames?.TENANT_USERS} WHERE tenant_user_id = ? LIMIT 1`;
+
+  try {
+    const result = await db.sequelize.query(Query, {
+      replacements: [tenant_user_id],
+      type: db.Sequelize.QueryTypes.SELECT,
+    });
+    return result[0];
+  } catch (err) {
+    throw err;
+  }
+};
+
 export const activateTenantUserService = async (tenant_user_id) => {
   const Query = `UPDATE ${tableNames?.TENANT_USERS} SET status = ? WHERE tenant_user_id = ? AND is_deleted = ?`;
 
@@ -161,6 +175,8 @@ export const getAllTenantUsersService = async (tenant_id) => {
       tu.username,
       tu.email,
       tu.role,
+      tu.mobile,
+      tu.country_code,
       COALESCE(ti.status, tu.status) as status,
       tu.created_at
     FROM ${tableNames.TENANT_USERS} tu

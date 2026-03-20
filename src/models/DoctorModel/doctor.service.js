@@ -8,6 +8,7 @@ import { getTemplate } from "../../utils/email/templateLoader.js";
 import {
   createTenantUserService,
   findTenantUserByEmailGloballyService,
+  findTenantUserByEmailOrMobileGloballyService,
   softDeleteTenantUserService,
   restoreTenantUserService,
 } from "../TenantUserModel/tenantuser.service.js";
@@ -17,11 +18,16 @@ export const createDoctorService = async (tenant_id, data) => {
   const transaction = await db.sequelize.transaction();
 
   try {
-    // Check if email already exists
-    const existingUser = await findTenantUserByEmailGloballyService(data.email);
+    // Check if email or mobile already exists
+    const existingUser = await findTenantUserByEmailOrMobileGloballyService(data.email, data.mobile);
 
     if (existingUser) {
-      throw new Error("User with this email already exists in the system.");
+      if (existingUser.email === data.email) {
+        throw new Error("User with this email already exists in the system.");
+      }
+      if (existingUser.mobile === data.mobile) {
+        throw new Error("User with this mobile number already exists in the system.");
+      }
     }
 
     // Generate new TenantUser ID
@@ -83,16 +89,14 @@ export const createDoctorService = async (tenant_id, data) => {
 
     // 3. Handle specializations (validate they exist)
     if (data.specializations && data.specializations.length > 0) {
-      for (const specData of data.specializations) {
-        const specNameOrId = typeof specData === 'string' ? specData.trim() : specData;
-
-        // Find specialization - check by Name OR Specialization ID
+      for (const specName of data.specializations) {
+        // Find specialization - check both name and specialization_id
         const spec = await db.Specializations.findOne({
           where: {
             tenant_id,
             [db.Sequelize.Op.or]: [
-              { name: specNameOrId },
-              { specialization_id: specNameOrId }
+              { name: specName.trim() },
+              { specialization_id: specName.trim() },
             ],
             is_deleted: false,
           },
@@ -120,12 +124,18 @@ export const createDoctorService = async (tenant_id, data) => {
         const slots = slot.slots || [
           { start_time: slot.start_time, end_time: slot.end_time },
         ];
+        const day_of_week = (
+          slot.day_of_week ||
+          slot.day ||
+          ""
+        ).toLowerCase();
+
         for (const timeSlot of slots) {
           await db.DoctorAvailability.create(
             {
               doctor_id,
               tenant_id,
-              day_of_week: slot.day,
+              day_of_week,
               start_time: timeSlot.start_time,
               end_time: timeSlot.end_time,
             },
@@ -323,16 +333,14 @@ export const updateDoctorService = async (doctor_id, tenant_id, data) => {
       });
 
       // Add new ones (validate they exist)
-      for (const specData of data.specializations) {
-        const specNameOrId = typeof specData === 'string' ? specData.trim() : specData;
-
-        // Find specialization - check by Name OR Specialization ID
+      for (const specName of data.specializations) {
+        // Find specialization - check both name and specialization_id
         const spec = await db.Specializations.findOne({
           where: {
             tenant_id,
             [db.Sequelize.Op.or]: [
-              { name: specNameOrId },
-              { specialization_id: specNameOrId }
+              { name: specName.trim() },
+              { specialization_id: specName.trim() },
             ],
             is_deleted: false,
           },
@@ -367,12 +375,18 @@ export const updateDoctorService = async (doctor_id, tenant_id, data) => {
         const slots = slot.slots || [
           { start_time: slot.start_time, end_time: slot.end_time },
         ];
+        const day_of_week = (
+          slot.day_of_week ||
+          slot.day ||
+          ""
+        ).toLowerCase();
+
         for (const timeSlot of slots) {
           await db.DoctorAvailability.create(
             {
               doctor_id,
               tenant_id,
-              day_of_week: slot.day,
+              day_of_week,
               start_time: timeSlot.start_time,
               end_time: timeSlot.end_time,
             },

@@ -115,6 +115,26 @@ export const TenantsTable = (sequelize, Sequelize) => {
         type: Sequelize.STRING,
         allowNull: true,
       },
+      address: {
+        type: Sequelize.TEXT,
+        allowNull: true,
+      },
+      country: {
+        type: Sequelize.STRING,
+        allowNull: true,
+      },
+      state: {
+        type: Sequelize.STRING,
+        allowNull: true,
+      },
+      city: {
+        type: Sequelize.STRING,
+        allowNull: true,
+      },
+      pincode: {
+        type: Sequelize.STRING,
+        allowNull: true,
+      },
 
       verify_token: {
         type: Sequelize.STRING,

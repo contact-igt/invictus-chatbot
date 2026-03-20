@@ -200,8 +200,9 @@ export const suggestReplyService = async (tenant_id, phone) => {
     let appointmentHistoryPrompt = "";
     let contact_id = null;
 
+    let contact = null;
     try {
-      const contact = await getContactByPhoneAndTenantIdService(
+      contact = await getContactByPhoneAndTenantIdService(
         tenant_id,
         phone,
       );

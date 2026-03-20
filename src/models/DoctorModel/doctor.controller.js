@@ -24,7 +24,9 @@ export const createDoctorController = async (req, res) => {
     mobile,
     email,
     status,
+    currentStatus,
     consultation_duration,
+    consultationDuration,
     specializations,
     availability,
     bio,
@@ -32,6 +34,11 @@ export const createDoctorController = async (req, res) => {
     experience_years,
     qualification,
   } = req.body;
+
+  // Map frontend field names to backend service names
+  const finalStatus = (status || currentStatus || "").replace("-", "_");
+  const finalConsultationDuration = (consultation_duration !== undefined) ? consultation_duration : consultationDuration;
+  const finalTitle = (title || "").replace(".", "");
 
   const requiredFields = { name, mobile, email };
   const missing = await missingFieldsChecker(requiredFields);
@@ -41,11 +48,11 @@ export const createDoctorController = async (req, res) => {
       .send({ message: `Missing fields: ${missing.join(", ")}` });
   }
 
-  if (consultation_duration !== undefined && consultation_duration !== null) {
+  if (finalConsultationDuration !== undefined && finalConsultationDuration !== null) {
     if (
-      typeof consultation_duration !== "number" ||
-      consultation_duration < 5 ||
-      consultation_duration > 240
+      typeof finalConsultationDuration !== "number" ||
+      finalConsultationDuration < 5 ||
+      finalConsultationDuration > 240
     ) {
       return res.status(400).send({
         message:
@@ -59,13 +66,13 @@ export const createDoctorController = async (req, res) => {
 
   try {
     const result = await createDoctorService(tenant_id, {
-      title,
+      title: finalTitle,
       name,
       country_code: cleanedCC,
       mobile: normalizedMobile,
       email,
-      status,
-      consultation_duration,
+      status: finalStatus,
+      consultation_duration: finalConsultationDuration,
       specializations,
       availability,
       bio,
@@ -79,6 +86,7 @@ export const createDoctorController = async (req, res) => {
       data: result,
     });
   } catch (err) {
+    console.error("❌ CREATE DOCTOR ERROR:", err);
     return res.status(500).send({ message: err.message });
   }
 };
@@ -119,14 +127,24 @@ export const getDoctorByIdController = async (req, res) => {
 export const updateDoctorController = async (req, res) => {
   const tenant_id = req.user.tenant_id;
   const { id } = req.params;
-  const { consultation_duration } = req.body;
+  const {
+    title,
+    consultation_duration,
+    consultationDuration,
+    status,
+    currentStatus,
+  } = req.body;
+
+  const finalConsultationDuration = (consultation_duration !== undefined) ? consultation_duration : consultationDuration;
+  const finalStatus = (status || currentStatus || "").replace("-", "_");
+  const finalTitle = (title || "").replace(".", "");
 
   // Validate consultation duration if provided
-  if (consultation_duration !== undefined && consultation_duration !== null) {
+  if (finalConsultationDuration !== undefined && finalConsultationDuration !== null) {
     if (
-      typeof consultation_duration !== "number" ||
-      consultation_duration < 5 ||
-      consultation_duration > 240
+      typeof finalConsultationDuration !== "number" ||
+      finalConsultationDuration < 5 ||
+      finalConsultationDuration > 240
     ) {
       return res.status(400).send({
         message:
@@ -134,6 +152,11 @@ export const updateDoctorController = async (req, res) => {
       });
     }
   }
+
+  // Update body with final values for service
+  if (finalConsultationDuration !== undefined) req.body.consultation_duration = finalConsultationDuration;
+  if (finalStatus !== undefined && finalStatus !== "") req.body.status = finalStatus;
+  if (finalTitle !== undefined && finalTitle !== "") req.body.title = finalTitle;
 
   try {
     // Normalize mobile and country_code if provided

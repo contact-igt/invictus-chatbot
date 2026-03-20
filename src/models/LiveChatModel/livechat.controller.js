@@ -7,6 +7,7 @@ import {
   assignAgentToLiveChatService,
   getAgentListService,
 } from "../LiveChatModel/livechat.service.js";
+import { getIO } from "../../middlewares/socket/socket.js";
 
 export const createLiveChatController = async (req, res) => {
   const { contact_id } = req.body;
@@ -104,7 +105,17 @@ export const claimLiveChatController = async (req, res) => {
       return res.status(404).send({ message: "Live chat not found" });
     }
 
+    if (chat.assigned_admin_id && chat.assigned_admin_id !== agent_id) {
+       const agents = await getAgentListService(tenant_id);
+       const assignedAgent = agents.find(a => a.tenant_user_id === chat.assigned_admin_id);
+       const agentName = assignedAgent ? assignedAgent.username : "another agent";
+       return res.status(400).send({ message: `This lead is already claimed by ${agentName}` });
+    }
+
     await claimLiveChatService(tenant_id, contact_id, agent_id);
+
+    const io = getIO();
+    io.to(`tenant-${tenant_id}`).emit("chat-assignment-updated", { contact_id, assigned_admin_id: agent_id });
 
     return res.status(200).send({ message: "Chat claimed successfully" });
   } catch (err) {
@@ -137,6 +148,9 @@ export const assignAgentToLiveChatController = async (req, res) => {
     }
 
     await assignAgentToLiveChatService(tenant_id, contact_id, finalAgentId);
+
+    const io = getIO();
+    io.to(`tenant-${tenant_id}`).emit("chat-assignment-updated", { contact_id, assigned_admin_id: finalAgentId });
 
     return res.status(200).send({ message: "Agent assigned successfully" });
   } catch (err) {
