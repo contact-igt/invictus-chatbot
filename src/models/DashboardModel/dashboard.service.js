@@ -12,7 +12,7 @@ const resolvePeriod = (period) => {
 
     if (period === "7days") {
         const start = new Date(); start.setDate(start.getDate() - 7); start.setHours(0, 0, 0, 0);
-        const prev  = new Date(); prev.setDate(prev.getDate() - 14);  prev.setHours(0, 0, 0, 0);
+        const prev = new Date(); prev.setDate(prev.getDate() - 14); prev.setHours(0, 0, 0, 0);
         return { periodStart: start, periodStartPrev: prev, periodLabel: "7 Days" };
     }
     if (period === "alltime") {
@@ -20,7 +20,7 @@ const resolvePeriod = (period) => {
     }
     // Default: 30days
     const start = new Date(); start.setDate(start.getDate() - 30); start.setHours(0, 0, 0, 0);
-    const prev  = new Date(); prev.setDate(prev.getDate() - 60);   prev.setHours(0, 0, 0, 0);
+    const prev = new Date(); prev.setDate(prev.getDate() - 60); prev.setHours(0, 0, 0, 0);
     return { periodStart: start, periodStartPrev: prev, periodLabel: "30 Days" };
 };
 
@@ -48,6 +48,37 @@ export const getDashboardStatsService = async (tenantId, period = "30days") => {
             raw: true
         });
 
+        // === 1.b. WABA limit rolling analytics ===
+        const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+        const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+
+        const [usedConversations24hRow] = await db.sequelize.query(`
+            SELECT COUNT(DISTINCT contact_id) as used
+            FROM messages
+            WHERE tenant_id = :tenantId
+              AND sender IN ('bot', 'admin')
+              AND created_at >= :targetTime
+        `, {
+            replacements: { tenantId, targetTime: twentyFourHoursAgo.toISOString() },
+            type: db.sequelize.QueryTypes.SELECT
+        });
+
+        const [sevenDayUniqueRow] = await db.sequelize.query(`
+            SELECT COUNT(DISTINCT contact_id) as unique_users
+            FROM messages
+            WHERE tenant_id = :tenantId
+              AND sender IN ('bot', 'admin')
+              AND created_at >= :targetTime
+        `, {
+            replacements: { tenantId, targetTime: sevenDaysAgo.toISOString() },
+            type: db.sequelize.QueryTypes.SELECT
+        });
+
+        if (wabaInfo) {
+            wabaInfo.rolling24hUsed = parseInt(usedConversations24hRow?.used || 0, 10);
+            wabaInfo.sevenDayUnique = parseInt(sevenDayUniqueRow?.unique_users || 0, 10);
+        }
+
         // === 2. Header Metrics (in parallel) ===
         const [newLeadsToday, resolvedToday, messagesSentToday] = await Promise.all([
             db.Leads.count({
@@ -66,8 +97,8 @@ export const getDashboardStatsService = async (tenantId, period = "30days") => {
         ]);
 
         // === 3. KPI — Total Leads with Trend (compared to previous equivalent period) ===
-        const leadsTotalWhere   = { tenant_id: tenantId, is_deleted: false, ...(periodStart ? { created_at: { [Op.gte]: periodStart } } : {}) };
-        const leadsPrevWhere    = periodStartPrev
+        const leadsTotalWhere = { tenant_id: tenantId, is_deleted: false, ...(periodStart ? { created_at: { [Op.gte]: periodStart } } : {}) };
+        const leadsPrevWhere = periodStartPrev
             ? { tenant_id: tenantId, is_deleted: false, created_at: { [Op.gte]: periodStartPrev, [Op.lt]: periodStart } }
             : { tenant_id: tenantId, is_deleted: false, created_at: { [Op.lt]: todayAtStart } };
 
@@ -173,7 +204,7 @@ export const getDashboardStatsService = async (tenantId, period = "30days") => {
             is_deleted: false,
             ...(periodStart ? { created_at: { [Op.gte]: periodStart } } : {})
         };
-        const funnelStats = await db.Leads.findAll({
+        const funnelStatsRaw = await db.Leads.findAll({
             where: funnelWhere,
             attributes: [
                 'lead_stage',
@@ -182,6 +213,37 @@ export const getDashboardStatsService = async (tenantId, period = "30days") => {
             group: ['lead_stage'],
             raw: true
         });
+
+        const STAGE_ORDER = ["New", "Contacted", "Interested", "Qualified", "Negotiation", "Won"];
+        const statsMap = {};
+        funnelStatsRaw.forEach(row => {
+            const stage = row.lead_stage || "New";
+            statsMap[stage] = (statsMap[stage] || 0) + parseInt(row.count);
+        });
+
+        let totalReach = 0;
+        const funnelData = STAGE_ORDER.map((stage, idx) => {
+            const count = statsMap[stage] || 0;
+            if (idx === 0) totalReach = count;
+            return { stage, count };
+        });
+
+        const processedFunnel = funnelData.map((step, i) => {
+            const prevCount = i === 0 ? step.count : funnelData[i-1].count;
+            return {
+                ...step,
+                pctOfTotal: totalReach > 0 ? Math.round((step.count / totalReach) * 100) : 0,
+                pctOfPrevious: i === 0 ? 100 : (prevCount > 0 ? Math.round((step.count / prevCount) * 100) : 0),
+                dropOff: i === 0 ? 0 : (prevCount > 0 ? Math.min(0, Math.round((step.count / prevCount) * 100) - 100) : 0)
+            };
+        });
+
+        const wonCount = statsMap["Won"] || 0;
+        const funnelSummary = {
+            totalReach,
+            conversionRate: totalReach > 0 ? parseFloat(((wonCount / totalReach) * 100).toFixed(1)) : 0,
+            revenueEst: `₹${(wonCount * 1250).toLocaleString()}`
+        };
 
         // === 11. Campaigns (latest 5) ===
         const campaigns = await db.WhatsappCampaigns.findAll({
@@ -279,7 +341,7 @@ export const getDashboardStatsService = async (tenantId, period = "30days") => {
 
         // Total active agents (have at least 1 active chat)
         const activeAgentCount = Object.keys(agentChatMap).length;
-        const totalAgentCount  = allAgents.length;
+        const totalAgentCount = allAgents.length;
 
         // Peak hour — the hour with most messages sent today by admin/bot
         const [peakHourResult] = await db.sequelize.query(`
@@ -304,12 +366,12 @@ export const getDashboardStatsService = async (tenantId, period = "30days") => {
 
         // Build agent performance array
         const agentPerformance = allAgents.map(agent => ({
-            agentId:         agent.tenant_user_id,
-            name:            agent.username,
-            role:            agent.role,
-            onlineStatus:    agent.status === 'active' ? 'online' : 'offline',
-            chatCount:       agentChatMap[agent.tenant_user_id] || 0,
-            avgResponseSec:  agentResponseMap[agent.tenant_user_id] || 0
+            agentId: agent.tenant_user_id,
+            name: agent.username,
+            role: agent.role,
+            onlineStatus: agent.status === 'active' ? 'online' : 'offline',
+            chatCount: agentChatMap[agent.tenant_user_id] || 0,
+            avgResponseSec: agentResponseMap[agent.tenant_user_id] || 0
         })).sort((a, b) => b.chatCount - a.chatCount);
 
         // ═══════════════════════════════════════════════════════════════════
@@ -367,8 +429,8 @@ export const getDashboardStatsService = async (tenantId, period = "30days") => {
             db.LiveChat.count({ where: { tenant_id: tenantId, status: 'closed', assigned_admin_id: { [Op.ne]: null } } })
         ]);
         const totalHandledChats = aiHandledChats + agentHandledChats;
-        const aiHandledPct     = totalHandledChats > 0 ? parseFloat(((aiHandledChats / totalHandledChats) * 100).toFixed(1)) : 0;
-        const agentHandledPct  = totalHandledChats > 0 ? parseFloat(((agentHandledChats / totalHandledChats) * 100).toFixed(1)) : 0;
+        const aiHandledPct = totalHandledChats > 0 ? parseFloat(((aiHandledChats / totalHandledChats) * 100).toFixed(1)) : 0;
+        const agentHandledPct = totalHandledChats > 0 ? parseFloat(((agentHandledChats / totalHandledChats) * 100).toFixed(1)) : 0;
 
         // Nurture efficiency = AI auto-resolved % (reuse aiAutoResolvedPct)
         const nurtureEfficiency = aiAutoResolvedPct;
@@ -444,9 +506,9 @@ export const getDashboardStatsService = async (tenantId, period = "30days") => {
             const dayLabel = days[d.getDay() === 0 ? 6 : d.getDay() - 1];
             const row = dailyVolumeMap[dateStr] || {};
             return {
-                day:       dayLabel,
-                date:      dateStr,
-                total:     parseInt(row.total || 0),
+                day: dayLabel,
+                date: dateStr,
+                total: parseInt(row.total || 0),
                 aiHandled: parseInt(row.ai_handled || 0)
             };
         });
@@ -455,7 +517,7 @@ export const getDashboardStatsService = async (tenantId, period = "30days") => {
         const outgoingThisWeek = deliveredMsgsThisWeek + failedMsgsThisWeek;
         const deliveryRate = outgoingThisWeek > 0
             ? parseFloat(((deliveredMsgsThisWeek / outgoingThisWeek) * 100).toFixed(1)) : 100;
-        const failedRate   = outgoingThisWeek > 0
+        const failedRate = outgoingThisWeek > 0
             ? parseFloat(((failedMsgsThisWeek / outgoingThisWeek) * 100).toFixed(1)) : 0;
 
         // Trend vs previous week
@@ -463,7 +525,7 @@ export const getDashboardStatsService = async (tenantId, period = "30days") => {
             ? parseFloat((((totalMsgsThisWeek - totalMsgsPrevWeek) / totalMsgsPrevWeek) * 100).toFixed(1)) : 0;
 
         // Avg per day & per hour
-        const avgPerDay  = Math.round(totalMsgsThisWeek / 7);
+        const avgPerDay = Math.round(totalMsgsThisWeek / 7);
         const msgsPerHour = Math.round(totalMsgsThisWeek / (7 * 24));
 
         // Response rate: messages from bot/admin / total user messages this week
@@ -483,7 +545,7 @@ export const getDashboardStatsService = async (tenantId, period = "30days") => {
             waba: wabaInfo,
             periodLabel,
             header: {
-                revenueToday: `38,400`,       // Placeholder — no billing table yet
+                revenueToday: `₹${(wonCount * 1250).toLocaleString()}`, // Corresponds to funnel revenue
                 newLeadsToday,
                 resolvedToday,
                 messagesSent: messagesSentToday,
@@ -501,7 +563,8 @@ export const getDashboardStatsService = async (tenantId, period = "30days") => {
                 escalatedCount,
                 agentWorkload
             },
-            funnel: funnelStats,
+            funnel: processedFunnel,
+            funnelSummary,
             campaigns,
             recent: {
                 leads: recentLeads,
@@ -509,22 +572,22 @@ export const getDashboardStatsService = async (tenantId, period = "30days") => {
             },
             // NEW SECTIONS
             agentPerf: {
-                agents:          agentPerformance,
-                activeCount:     activeAgentCount,
-                totalCount:      totalAgentCount,
-                peakTime:        peakHour
+                agents: agentPerformance,
+                activeCount: activeAgentCount,
+                totalCount: totalAgentCount,
+                peakTime: peakHour
             },
             followUps: {
-                dueToday:        followUpDueToday,
-                completedToday:  followUpCompletedToday,
-                overdue:         followUpOverdue,
+                dueToday: followUpDueToday,
+                completedToday: followUpCompletedToday,
+                overdue: followUpOverdue,
                 aiHandledPct,
                 agentHandledPct,
-                upcomingToday:   upcomingAppointments,
+                upcomingToday: upcomingAppointments,
                 nurtureEfficiency
             },
             messagingAnalytics: {
-                totalThisWeek:   totalMsgsThisWeek,
+                totalThisWeek: totalMsgsThisWeek,
                 trendVsPrevWeek: msgsTrend,
                 avgPerDay,
                 msgsPerHour,

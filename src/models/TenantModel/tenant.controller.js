@@ -516,7 +516,6 @@ export const getTenantInvitationListController = async (req, res) => {
   }
 };
 
-// Controller for onboarded tenant list
 export const getOnboardedTenantListController = async (req, res) => {
   try {
     const data = await getOnboardedTenantListService();
@@ -526,6 +525,30 @@ export const getOnboardedTenantListController = async (req, res) => {
     });
   } catch (err) {
     console.error("Error in getOnboardedTenantListController:", err);
+    return res.status(500).json({ message: err.message });
+  }
+};
+
+export const getTenantSettingsController = async (req, res) => {
+  try {
+    const tenant_id = req.user.tenant_id;
+    const { getTenantSettingsService } = await import("./tenant.service.js");
+    const settings = await getTenantSettingsService(tenant_id);
+    if (!settings) return res.status(404).json({ message: "Tenant not found" });
+    return res.status(200).json({ message: "success", data: settings });
+  } catch (err) {
+    return res.status(500).json({ message: err.message });
+  }
+};
+
+export const updateTenantAiSettingsController = async (req, res) => {
+  try {
+    const tenant_id = req.user.tenant_id;
+    const { ai_settings } = req.body;
+    const { updateTenantAiSettingsService } = await import("./tenant.service.js");
+    await updateTenantAiSettingsService(tenant_id, ai_settings);
+    return res.status(200).json({ message: "Settings updated successfully" });
+  } catch (err) {
     return res.status(500).json({ message: err.message });
   }
 };

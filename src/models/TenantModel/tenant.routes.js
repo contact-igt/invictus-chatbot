@@ -13,6 +13,8 @@ import {
   restoreTenantController,
   getTenantInvitationListController,
   getOnboardedTenantListController,
+  getTenantSettingsController,
+  updateTenantAiSettingsController,
 } from "./tenant.controller.js";
 import {
   authenticate,
@@ -151,6 +153,26 @@ Router.put(
     roles: ["platform_admin", "super_admin"],
   }),
   updateTenantController,
+);
+
+Router.get(
+  "/settings/general",
+  authenticate,
+  authorize({
+    user_type: "tenant",
+    roles: ["tenant_admin", "staff", "doctor", "agent"],
+  }),
+  getTenantSettingsController,
+);
+
+Router.patch(
+  "/settings/ai",
+  authenticate,
+  authorize({
+    user_type: "tenant",
+    roles: ["tenant_admin"],
+  }),
+  updateTenantAiSettingsController,
 );
 
 export default Router;

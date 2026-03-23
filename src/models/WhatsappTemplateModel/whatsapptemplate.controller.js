@@ -466,6 +466,16 @@ export const resubmitWhatsappTemplateController = async (req, res) => {
 
 export const generateAiTemplateController = async (req, res) => {
   try {
+    const tenant_id = req.user.tenant_id;
+    const { getTenantSettingsService } = await import("../TenantModel/tenant.service.js");
+    const tenantSettings = await getTenantSettingsService(tenant_id);
+    
+    if (tenantSettings?.ai_settings?.content_generation === false) {
+      return res.status(403).json({
+        message: "AI Template Generation is disabled for your organization. Please enable it in Settings.",
+      });
+    }
+
     const { prompt, focus, style, optimization, previous_content, rejection_reason } = req.body;
 
     const requiredFields = {

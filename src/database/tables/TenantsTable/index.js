@@ -115,26 +115,6 @@ export const TenantsTable = (sequelize, Sequelize) => {
         type: Sequelize.STRING,
         allowNull: true,
       },
-      address: {
-        type: Sequelize.TEXT,
-        allowNull: true,
-      },
-      country: {
-        type: Sequelize.STRING,
-        allowNull: true,
-      },
-      state: {
-        type: Sequelize.STRING,
-        allowNull: true,
-      },
-      city: {
-        type: Sequelize.STRING,
-        allowNull: true,
-      },
-      pincode: {
-        type: Sequelize.STRING,
-        allowNull: true,
-      },
 
       verify_token: {
         type: Sequelize.STRING,
@@ -156,6 +136,17 @@ export const TenantsTable = (sequelize, Sequelize) => {
       deleted_at: {
         type: Sequelize.DATE,
         allowNull: true,
+      },
+
+      ai_settings: {
+        type: Sequelize.JSON,
+        allowNull: true,
+        defaultValue: {
+          auto_responder: true,
+          smart_reply: true,
+          neural_summary: true,
+          content_generation: true
+        }
       },
 
       createdAt: {

@@ -91,6 +91,7 @@ export const getChatListService = async (tenant_id) => {
     m.contact_id,
     c.phone,
     c.name,
+    c.is_ai_silenced,
     m.message,
     m.message_type,
     m.created_at AS last_message_at,

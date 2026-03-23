@@ -477,10 +477,23 @@ export const receiveMessage = async (req, res) => {
 
     setImmediate(async () => {
       try {
+        const { getTenantSettingsService } = await import("../TenantModel/tenant.service.js");
+        const tenantSettings = await getTenantSettingsService(tenant_id);
+        const autoResponderEnabled = tenantSettings?.ai_settings?.auto_responder !== false;
+
+        if (!autoResponderEnabled) {
+          console.log(`[WEBHOOK] AI Auto-Responder is globally disabled for tenant: ${tenant_id}`);
+          return;
+        }
+
+        if (contactsaved?.is_ai_silenced) {
+          console.log(`[WEBHOOK] AI is silenced for specific contact: ${phone}`);
+          return;
+        }
         await sendTypingIndicator(
+          tenant_id,
           phone_number_id,
-          account?.access_token,
-          messageId,
+          phone,
         );
 
         const aiResult = await getOpenAIReply(
@@ -521,8 +534,15 @@ export const receiveMessage = async (req, res) => {
         );
 
         await sendWhatsAppMessage(tenant_id, phone, messageToSend).catch(
-          (err) =>
-            console.error("[WHATSAPP-SEND] Failed to send reply:", err.message),
+          (err) => {
+            console.error("[WHATSAPP-SEND] Failed to send reply:", err.message);
+            import("fs").then(fs => {
+              fs.appendFileSync(
+                "whatsapp_send_error.log", 
+                `[${new Date().toISOString()}] To: ${phone} | Msg: ${messageToSend} | Error: ${err.message}\n`
+              );
+            });
+          }
         );
 
         // Execute tag handler AFTER sending the AI reply

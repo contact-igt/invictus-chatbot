@@ -54,6 +54,12 @@ export const ContactsTable = (sequelize, Sequelize) => {
         allowNull: true,
       },
 
+      is_ai_silenced: {
+        type: Sequelize.BOOLEAN,
+        allowNull: false,
+        defaultValue: false,
+      },
+
       is_blocked: {
         type: Sequelize.BOOLEAN,
         allowNull: false,

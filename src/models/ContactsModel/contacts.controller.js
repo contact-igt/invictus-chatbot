@@ -11,7 +11,9 @@ import {
   getDeletedContactListService,
   restoreContactService,
   importContactsService,
+  toggleSilenceAiService,
 } from "./contacts.service.js";
+
 
 export const getDeletedContactListController = async (req, res) => {
   const tenant_id = req.user.tenant_id;
@@ -315,3 +317,21 @@ export const importContactsController = async (req, res) => {
     });
   }
 };
+
+export const toggleSilenceAiController = async (req, res) => {
+  const tenant_id = req.user.tenant_id;
+  const { id } = req.params; // contact_id
+  const { is_ai_silenced } = req.body;
+
+  try {
+    await toggleSilenceAiService(id, tenant_id, is_ai_silenced);
+    
+    // Attempting to emit socket event if possible here, but usually socket is handled in messages/webhook
+    // We will just do a fast update. Frontend handles it optimism.
+    
+    return res.status(200).send({ message: "AI silence status updated successfully" });
+  } catch (err) {
+    return res.status(500).send({ message: err?.message });
+  }
+};
+

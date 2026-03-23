@@ -163,8 +163,16 @@ export const markSeenMessage = async (req, res) => {
 
 export const suggestReplyController = async (req, res) => {
   const { phone } = req.body;
-
   const tenant_id = req.user.tenant_id;
+  const { getTenantSettingsService } = await import("../TenantModel/tenant.service.js");
+  const tenantSettings = await getTenantSettingsService(tenant_id);
+
+  if (tenantSettings?.ai_settings?.smart_reply === false) {
+    return res.status(403).json({
+      success: false,
+      message: "Smart Reply is disabled for your organization. Please enable it in Settings.",
+    });
+  }
 
   if (!phone) {
     return res.status(400).json({
@@ -287,8 +295,9 @@ export const sendTemplateMessageController = async (req, res) => {
 // ─── Send Test Message ───
 export const sendTestMessageController = async (req, res) => {
   const { phone, message_type, message, template_id, components } = req.body;
+  console.log("req.body", JSON.stringify(req.body, null, 2))
   const tenant_id = req.user.tenant_id;
-
+  console.log("components", JSON.stringify(components, null, 2))
   if (!tenant_id) {
     return res.status(400).send({ message: "Invalid tenant context" });
   }

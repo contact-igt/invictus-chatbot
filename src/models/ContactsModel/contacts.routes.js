@@ -9,6 +9,7 @@ import {
   getDeletedContactListController,
   restoreContactController,
   importContactsController,
+  toggleSilenceAiController,
 } from "./contacts.controller.js";
 import { authenticate, authorize } from "../../middlewares/auth/authMiddlewares.js";
 
@@ -84,6 +85,13 @@ Router.post(
   authenticate,
   authorize({ user_type: "tenant", roles: ["tenant_admin", "staff"] }),
   importContactsController,
+);
+
+Router.patch(
+  "/contact/:id/silence",
+  authenticate,
+  authorize({ user_type: "tenant", roles: tenantRoles }),
+  toggleSilenceAiController,
 );
 
 export default Router;

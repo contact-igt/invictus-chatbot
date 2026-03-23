@@ -76,6 +76,7 @@ export const getLiveChatListService = async (tenant_id) => {
       m.created_at AS last_message_at,
       lc.assigned_admin_id,
       agent.username AS assigned_agent_name,
+      c.is_ai_silenced,
       (
         SELECT COUNT(*)
         FROM ${tableNames.MESSAGES} um
@@ -125,6 +126,7 @@ export const getHistoryChatListService = async (tenant_id) => {
       c.contact_id,
       c.phone,
       c.name,
+      c.is_ai_silenced,
       m.message,
       m.created_at AS last_message_at,
       (

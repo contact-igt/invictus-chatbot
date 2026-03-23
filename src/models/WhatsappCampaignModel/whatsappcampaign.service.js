@@ -132,6 +132,36 @@ export const createCampaignService = async (tenant_id, data, created_by) => {
             throw new Error("Invalid audience_type. Must be 'manual', 'group', or 'csv'");
         }
 
+        // 2.5 Campaign Safety: Validate against rolling 24h limit
+        const account = await db.Whatsappaccount.findOne({ where: { tenant_id, is_deleted: false } });
+        if (!account) throw new Error("WhatsApp account not found or deactivated.");
+        
+        let limit = 1000;
+        if (account.tier === 'TIER_10K') limit = 10000;
+        else if (account.tier === 'TIER_100K') limit = 100000;
+        else if (account.tier === 'TIER_UNLIMITED') limit = Infinity;
+
+        if (limit !== Infinity) {
+            const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+            const [usedRow] = await db.sequelize.query(`
+                SELECT COUNT(DISTINCT contact_id) as used
+                FROM messages
+                WHERE tenant_id = :tenantId
+                  AND sender IN ('bot', 'admin')
+                  AND created_at >= :targetTime
+            `, {
+                replacements: { tenantId, targetTime: twentyFourHoursAgo.toISOString() },
+                type: db.sequelize.QueryTypes.SELECT
+            });
+            
+            const used = parseInt(usedRow?.used || 0, 10);
+            const remaining = Math.max(0, limit - used);
+
+            if (recipients.length > remaining) {
+                throw new Error(`Campaign blocked: Exceeds 24h messaging limits. You have ${remaining} conversations remaining but attempted to send to ${recipients.length} users.`);
+            }
+        }
+
         // 3. Create Campaign Record
         const campaign = await db.WhatsappCampaigns.create(
             {
@@ -173,13 +203,21 @@ export const createCampaignService = async (tenant_id, data, created_by) => {
 /**
  * Retrieves a list of campaigns for a tenant with filtering.
  */
-export const getCampaignListService = async (tenant_id) => {
+export const getCampaignListService = async (tenant_id, query = {}) => {
     try {
+        const { page = 1, limit = 10, status } = query;
+        const offset = (page - 1) * limit;
+        
         const where = { tenant_id, is_deleted: false };
+        if (status) {
+            where.status = status;
+        }
 
-        const rows = await db.WhatsappCampaigns.findAll({
+        const { count, rows } = await db.WhatsappCampaigns.findAndCountAll({
             where,
             order: [["created_at", "DESC"]],
+            limit: parseInt(limit, 10),
+            offset: parseInt(offset, 10),
             include: [
                 {
                     model: db.WhatsappTemplates,
@@ -191,6 +229,9 @@ export const getCampaignListService = async (tenant_id) => {
 
         return {
             campaigns: rows,
+            totalItems: count,
+            totalPages: Math.ceil(count / limit),
+            currentPage: parseInt(page, 10)
         };
     } catch (err) {
         throw err;
@@ -332,35 +373,83 @@ export const executeCampaignBatchService = async (campaign_id, tenant_id, batchS
                     }
                 }
 
-                if (Array.isArray(dynamicVariables) && dynamicVariables.length > 0) {
-                    components = [
-                        {
-                            type: "body",
-                            parameters: dynamicVariables.map((v) => ({
-                                type: "text",
-                                text: String(v), // Ensure it's a string
-                            })),
-                        },
-                    ];
-                }
-
-                // ─────────────────────────────────────────
-                // AUTHENTICATION: Auto-generate OTP per recipient
-                // ─────────────────────────────────────────
+                // ── Handle Authentication Templates (OTP) ──
                 if (campaign.template?.category?.toLowerCase() === 'authentication') {
                     // Generate a unique OTP for this specific phone number
                     const otp = await generateWhatsAppOTPService(
                         recipient.mobile_number,
                         campaign.template.template_name
                     );
-                    // Override components — OTP is always the only body variable
-                    components = [
-                        {
-                            type: "body",
-                            parameters: [{ type: "text", text: otp }],
-                        },
-                    ];
+
+                    // 1. Add Body Component with OTP
+                    components.push({
+                        type: "body",
+                        parameters: [{ type: "text", text: otp }],
+                    });
+
+                    // 2. Add Button Component if it exists (Meta requirement for dynamic buttons)
+                    // Let's check the template components for a dynamic button
+                    const [[templateComp]] = await db.sequelize.query(
+                        `SELECT * FROM ${tableNames.WHATSAPP_TEMPLATE_COMPONENTS} WHERE template_id = ? AND component_type = 'buttons'`,
+                        { replacements: [campaign.template_id] }
+                    );
+
+                    if (templateComp && templateComp.text_content) {
+                        try {
+                            const buttons = JSON.parse(templateComp.text_content);
+                            // Look for a URL button with a dynamic parameter
+                            const dynamicButtonIndex = buttons.findIndex(btn => 
+                                btn.type === 'URL' && btn.url && btn.url.includes('{{1}}')
+                            );
+
+                            if (dynamicButtonIndex !== -1) {
+                                components.push({
+                                    type: "button",
+                                    sub_type: "url",
+                                    index: String(dynamicButtonIndex),
+                                    parameters: [{ type: "text", text: otp }]
+                                });
+                            }
+                        } catch (e) {
+                            console.error("Error parsing buttons for OTP template:", e);
+                        }
+                    }
                     console.log(`🔐 [AUTH-CAMPAIGN] Generated OTP for ${recipient.mobile_number}`);
+                } 
+                // ── Handle Normal Templates ──
+                else {
+                    // Support both Array and Object structure for dynamic_variables
+                    if (typeof dynamicVariables === 'object' && !Array.isArray(dynamicVariables) && dynamicVariables !== null) {
+                        // Object structure: { body: [...], buttons: [...] }
+                        if (Array.isArray(dynamicVariables.body) && dynamicVariables.body.length > 0) {
+                            components.push({
+                                type: "body",
+                                parameters: dynamicVariables.body.map(v => ({ type: "text", text: String(v) }))
+                            });
+                        }
+                        
+                        if (Array.isArray(dynamicVariables.buttons)) {
+                            dynamicVariables.buttons.forEach((btn, idx) => {
+                                if (btn && btn.parameters && btn.parameters.length > 0) {
+                                    components.push({
+                                        type: "button",
+                                        sub_type: "url",
+                                        index: String(btn.index !== undefined ? btn.index : idx),
+                                        parameters: btn.parameters.map(p => ({ type: "text", text: String(p) }))
+                                    });
+                                }
+                            });
+                        }
+                    } else if (Array.isArray(dynamicVariables) && dynamicVariables.length > 0) {
+                        // Legacy Array support: Treat everything as Body parameters
+                        components.push({
+                            type: "body",
+                            parameters: dynamicVariables.map((v) => ({
+                                type: "text",
+                                text: String(v),
+                            })),
+                        });
+                    }
                 }
 
 

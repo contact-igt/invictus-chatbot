@@ -139,8 +139,7 @@ export const getContactByIdAndTenantIdService = async (id, tenant_id) => {
   }
 };
 
-
-
+// Trigger restart
 export const getContactByContactIdAndTenantIdService = async (contact_id, tenant_id) => {
   try {
     const Values = [contact_id, tenant_id];
@@ -414,3 +413,12 @@ export const importContactsService = async (tenant_id, contactsData) => {
     throw err;
   }
 };
+
+export const toggleSilenceAiService = async (contact_id, tenant_id, is_ai_silenced) => {
+  const Query = `UPDATE ${tableNames.CONTACTS} SET is_ai_silenced = ? WHERE contact_id = ? AND tenant_id = ?`;
+  const [result] = await db.sequelize.query(Query, {
+    replacements: [is_ai_silenced, contact_id, tenant_id],
+  });
+  return result;
+};
+

@@ -397,9 +397,6 @@ export const submitWhatsappTemplateService = async ({
             throw new Error(`Failed to upload media sample to Meta: ${uploadError.message}`);
           }
         }
-      } else if (format === "LOCATION") {
-        // Meta requires 'text' for Location header title
-        headerObj.text = "Location";
       }
 
       metaComponents.push(headerObj);
@@ -492,35 +489,50 @@ export const submitWhatsappTemplateService = async ({
       try {
         const carouselData = JSON.parse(carouselComp.text_content);
         if (carouselData && Array.isArray(carouselData.cards)) {
+          const { uploadMediaToMetaForTemplate } = await import("../../utils/whatsapp/metaMediaUpload.js");
+          const cardPromises = carouselData.cards.map(async (card) => {
+            const format = carouselData.mediaType || "IMAGE";
+            const defaultSamples = {
+              IMAGE: "https://www.facebook.com/images/fb_icon_325x325.png",
+              VIDEO: "https://www.w3schools.com/html/mov_bbb.mp4",
+            };
+            const sampleUrl = card.media_url || defaultSamples[format] || defaultSamples.IMAGE;
+
+            // Upload the media using media API
+            const headerHandle = await uploadMediaToMetaForTemplate(whatsappAccount.tenant_id, sampleUrl, format);
+
+            const cardComponents = [
+              {
+                type: "HEADER",
+                format: format,
+                example: {
+                  header_handle: [headerHandle]
+                }
+              },
+              {
+                type: "BODY",
+                text: card.bodyText || "Sample Card Body"
+              }
+            ];
+
+            if (card.buttons && Array.isArray(card.buttons) && card.buttons.length > 0) {
+              cardComponents.push({
+                type: "BUTTONS",
+                buttons: card.buttons.slice(0, 2).map(btn => ({
+                  type: "QUICK_REPLY",
+                  text: btn.text || "Quick Reply"
+                }))
+              });
+            }
+
+            return { components: cardComponents };
+          });
+
+          const resolvedCards = await Promise.all(cardPromises);
+
           metaComponents.push({
             type: "CAROUSEL",
-            cards: carouselData.cards.map(card => {
-              const cardComponents = [
-                {
-                  type: "HEADER",
-                  format: carouselData.mediaType || "IMAGE",
-                  example: {
-                    header_handle: [card.media_url || "https://www.facebook.com/images/fb_icon_325x325.png"]
-                  }
-                },
-                {
-                  type: "BODY",
-                  text: card.bodyText || "Sample Card Body"
-                }
-              ];
-
-              if (card.buttons && Array.isArray(card.buttons) && card.buttons.length > 0) {
-                cardComponents.push({
-                  type: "BUTTONS",
-                  buttons: card.buttons.slice(0, 2).map(btn => ({
-                    type: "QUICK_REPLY",
-                    text: btn.text || "Quick Reply"
-                  }))
-                });
-              }
-
-              return { components: cardComponents };
-            })
+            cards: resolvedCards
           });
         }
       } catch (e) {
@@ -553,7 +565,8 @@ export const submitWhatsappTemplateService = async ({
                 if (!/^\+[1-9]\d{10,14}$/.test(phone)) {
                   throw new Error(`Invalid phone number for button "${btn.text}": Include + country code and 10 to 14 digits`);
                 }
-                b.phone_number = phone.substring(1); // Meta expects digits only in the final payload
+                // Meta API accepts the leading + sign, space stripping is already done above.
+                b.phone_number = phone; 
               }
               if (btn.type === "URL") {
                 b.url = btn.url || btn.value;

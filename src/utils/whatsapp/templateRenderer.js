@@ -80,8 +80,18 @@ export const renderTemplateContent = async (template_id, dynamicComponents = [])
       try {
         const buttons = JSON.parse(buttonsComp.text_content);
         if (Array.isArray(buttons)) {
-          buttons.forEach(btn => {
-            messageContent += `\n[Button: ${btn.text}]`;
+          buttons.forEach((btn, index) => {
+            let btnText = btn.text;
+            
+            // Handle Dynamic URL Buttons
+            if (btn.type === 'URL' && btn.url && btn.url.includes('{{1}}')) {
+              const btnParams = dynamicComponents?.find((c) => c.type === "button" && String(c.index) === String(index))?.parameters || [];
+              if (btnParams?.[0]?.text) {
+                btnText += ` (${btnParams[0].text})`;
+              }
+            }
+            
+            messageContent += `\n[Button: ${btnText}]`;
           });
         }
       } catch (e) {

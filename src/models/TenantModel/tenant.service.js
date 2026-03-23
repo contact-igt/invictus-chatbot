@@ -12,45 +12,18 @@ export const createTenantService = async (
   status,
   subscription_start_date,
   subscription_end_date,
-
+  address,
+  city,
+  country,
+  state,
+  pincode,
   max_users,
   subscription_plan,
   profile,
-  country = null,
-  state = null,
-  city = null,
-  pincode = null,
   verify_token = null,
 ) => {
-  const Query = `INSERT INTO ${tableNames?.TENANTS} (
-      tenant_id,
-      company_name,
-      owner_name,
-      owner_email,
-      owner_country_code,
-      owner_mobile,
-      type,
-      status,
-      subscription_start_date,
-      subscription_end_date,
-      address,
-      city,
-      country,
-      state,
-      pincode,
-      max_users,
-      subscription_plan,
-      profile,
-      address,
-      country,
-      state,
-      city,
-      pincode,
-      verify_token
-  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`;
-
   try {
-    const values = [
+    const result = await db.Tenants.create({
       tenant_id,
       company_name,
       owner_name,
@@ -61,24 +34,20 @@ export const createTenantService = async (
       status,
       subscription_start_date,
       subscription_end_date,
+      address,
+      city,
+      country,
+      state,
+      pincode,
       max_users,
       subscription_plan,
       profile,
-      address,
-      country,
-      state,
-      city,
-      pincode,
       verify_token,
-    ];
-    console.log("values", values);
-
-    const [result] = await db.sequelize.query(Query, {
-      replacements: values,
     });
 
     return result;
   } catch (err) {
+    console.error("[TENANT SERVICE] Error creating tenant:", err);
     throw err;
   }
 };
@@ -393,6 +362,61 @@ export const getOnboardedTenantListService = async () => {
       replacements: [0],
     });
     return rows;
+  } catch (err) {
+    throw err;
+  }
+};
+
+export const getTenantSettingsService = async (tenant_id) => {
+  const Query = `SELECT company_name, owner_email, owner_name, type, ai_settings FROM ${tableNames?.TENANTS} WHERE tenant_id = ? AND is_deleted = ?`;
+
+  try {
+    const [result] = await db.sequelize.query(Query, {
+      replacements: [tenant_id, 0],
+    });
+    const tenantData = result[0];
+    if (tenantData && typeof tenantData.ai_settings === 'string') {
+      try {
+        tenantData.ai_settings = JSON.parse(tenantData.ai_settings);
+      } catch (e) {
+        console.error("Failed to parse ai_settings on read");
+      }
+    }
+    return tenantData;
+  } catch (err) {
+    throw err;
+  }
+};
+
+export const updateTenantAiSettingsService = async (tenant_id, ai_settings) => {
+  // Merge existing settings before updating
+  const currentSettings = await getTenantSettingsService(tenant_id);
+  
+  let parsedSettings = {};
+  if (currentSettings && currentSettings.ai_settings) {
+    if (typeof currentSettings.ai_settings === 'string') {
+      try {
+        parsedSettings = JSON.parse(currentSettings.ai_settings);
+      } catch (e) {
+        console.error("Failed to parse ai_settings string");
+      }
+    } else {
+      parsedSettings = currentSettings.ai_settings;
+    }
+  }
+
+  const updatedSettings = {
+    ...parsedSettings,
+    ...ai_settings
+  };
+
+  const Query = `UPDATE ${tableNames?.TENANTS} SET ai_settings = ? WHERE tenant_id = ? AND is_deleted = ?`;
+
+  try {
+    const [result] = await db.sequelize.query(Query, {
+      replacements: [JSON.stringify(updatedSettings), tenant_id, 0],
+    });
+    return Object.keys(result).length > 0;
   } catch (err) {
     throw err;
   }

@@ -110,7 +110,7 @@ export const sendWhatsAppTemplate = async (
   }
 
   const { phone_number_id, access_token } = rows[0];
-
+  console.log("components", JSON.stringify(components, null, 2))
   const payload = {
     messaging_product: "whatsapp",
     to,
@@ -123,7 +123,7 @@ export const sendWhatsAppTemplate = async (
       components: components || [],
     },
   };
-
+  console.log("Full Payload:", JSON.stringify(payload, null, 2))
   const META_API_VERSION = process.env.META_API_VERSION || "v22.0";
   console.log(
     `[SEND-TEMPLATE] Using Meta API version: ${META_API_VERSION}, phone_number_id: ${phone_number_id}, to: ${to}`,
@@ -178,22 +178,27 @@ export const sendTypingIndicator = async (tenant_id, phone_number_id, to) => {
     if (!rows.length) return;
 
     const META_API_VERSION = process.env.META_API_VERSION || "v22.0";
-    await axios.post(
-      `https://graph.facebook.com/${META_API_VERSION}/${phone_number_id}/messages`,
-      {
-        messaging_product: "whatsapp",
-        to,
-        type: "typing",
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${rows[0].access_token}`,
-          "Content-Type": "application/json",
+    try {
+      await axios.post(
+        `https://graph.facebook.com/${META_API_VERSION}/${phone_number_id}/messages`,
+        {
+          messaging_product: "whatsapp",
+          to,
+          type: "typing",
         },
-      },
-    );
+        {
+          headers: {
+            Authorization: `Bearer ${rows[0].access_token}`,
+            "Content-Type": "application/json",
+          },
+        },
+      );
+    } catch (apiErr) {
+      console.error("[TYPING] Meta API Error:", apiErr?.response?.data || apiErr.message);
+      // Suppress error so it doesn't break AI reply
+    }
   } catch (err) {
-    throw err;
+    console.error("[TYPING] Database Error:", err.message);
   }
 };
 

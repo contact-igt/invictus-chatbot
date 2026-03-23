@@ -82,7 +82,7 @@ export const createCampaignController = async (req, res) => {
 export const getCampaignListController = async (req, res) => {
     const tenant_id = req.user.tenant_id;
     try {
-        const data = await getCampaignListService(tenant_id);
+        const data = await getCampaignListService(tenant_id, req.query);
         return res.status(200).send({
             message: "Success",
             data,
