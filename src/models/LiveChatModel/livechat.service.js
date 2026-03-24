@@ -77,22 +77,14 @@ export const getLiveChatListService = async (tenant_id) => {
       lc.assigned_admin_id,
       agent.username AS assigned_agent_name,
       c.is_ai_silenced,
-      (
-        SELECT COUNT(*)
-        FROM ${tableNames.MESSAGES} um
-        WHERE um.contact_id = m.contact_id
-          AND um.tenant_id = ?
-          AND um.seen = false
-          AND um.sender = 'user'
-          AND um.is_deleted = false
-      ) AS unread_count
+      COALESCE(uc.cnt, 0) AS unread_count
     FROM messages m
     INNER JOIN (
       SELECT
         contact_id,
         MAX(created_at) AS last_message_time
       FROM messages
-      WHERE tenant_id = ?
+      WHERE tenant_id = ? AND is_deleted = false
       GROUP BY contact_id
     ) lm
       ON m.contact_id = lm.contact_id
@@ -105,8 +97,15 @@ export const getLiveChatListService = async (tenant_id) => {
     LEFT JOIN ${tableNames.TENANT_USERS} agent
       ON agent.tenant_user_id = lc.assigned_admin_id
      AND agent.is_deleted = false
+    LEFT JOIN (
+      SELECT contact_id, COUNT(*) AS cnt
+      FROM ${tableNames.MESSAGES}
+      WHERE tenant_id = ? AND seen = false AND sender = 'user' AND is_deleted = false
+      GROUP BY contact_id
+    ) uc ON uc.contact_id = m.contact_id
     WHERE m.tenant_id = ?
     ORDER BY m.created_at DESC
+    LIMIT 200
   `;
 
   try {
@@ -129,22 +128,14 @@ export const getHistoryChatListService = async (tenant_id) => {
       c.is_ai_silenced,
       m.message,
       m.created_at AS last_message_at,
-      (
-        SELECT COUNT(*)
-        FROM ${tableNames.MESSAGES} um
-        WHERE um.contact_id = c.contact_id
-          AND um.tenant_id = ?
-          AND um.seen = false
-          AND um.sender = 'user'
-          AND um.is_deleted = false
-      ) AS unread_count
+      COALESCE(uc.cnt, 0) AS unread_count
     FROM messages m
     INNER JOIN (
       SELECT
         contact_id,
         MAX(created_at) AS last_message_time
       FROM messages
-      WHERE tenant_id = ?
+      WHERE tenant_id = ? AND is_deleted = false
       GROUP BY contact_id
     ) lm
       ON m.contact_id = lm.contact_id
@@ -154,9 +145,16 @@ export const getHistoryChatListService = async (tenant_id) => {
     LEFT JOIN ${tableNames.LIVECHAT} lc
       ON lc.contact_id = c.contact_id
      AND lc.tenant_id = ?
+    LEFT JOIN (
+      SELECT contact_id, COUNT(*) AS cnt
+      FROM ${tableNames.MESSAGES}
+      WHERE tenant_id = ? AND seen = false AND sender = 'user' AND is_deleted = false
+      GROUP BY contact_id
+    ) uc ON uc.contact_id = c.contact_id
     WHERE m.tenant_id = ?
       AND lc.contact_id IS NULL
     ORDER BY m.created_at DESC
+    LIMIT 200
   `;
 
   try {

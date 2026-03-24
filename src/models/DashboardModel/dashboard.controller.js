@@ -46,90 +46,13 @@ export const getDashboardController = async (req, res) => {
             ? parseFloat(((totalLeadsTrend / stats.kpis.totalLeads.previous) * 100).toFixed(1))
             : 0;
 
-        // ─── Funnel Mapping ───────────────────────────────────────────────
-        // DB lead_stage → UI funnel stage mapping
-        const stageToFunnelMap = {
-            "New":         "WhatsApp Opens",
-            "Qualified":   "AI Qualified",
-            "Contacted":   "Human Chat",
-            "Negotiation": "Appointments",
-            "Won":         "Converted"
-        };
-
-        const funnelOrder = [
-            "Ads Clicks", "WhatsApp Opens", "AI Qualified", "Human Chat", "Appointments", "Converted"
-        ];
-
-        // Build a map from funnel-stage name → count from DB results
-        const funnelCountMap = {};
-        stats.funnel.forEach(f => {
-            const uiStage = stageToFunnelMap[f.lead_stage];
-            if (uiStage) funnelCountMap[uiStage] = parseInt(f.count);
-        });
-
-        // "Ads Clicks" = total audience of latest campaign (or total leads as reference)
-        const latestCampaign = stats.campaigns[0];
-        const adsClicksCount = latestCampaign?.total_audience
-            ? parseInt(latestCampaign.total_audience)
-            : stats.kpis.totalLeads.current || 1;
-        funnelCountMap["Ads Clicks"] = adsClicksCount;
-
-        // Map to ordered funnel with correct percentages
-        const mappedFunnel = funnelOrder.map((stageName, idx) => {
-            const count = funnelCountMap[stageName] || 0;
-
-            // pctOfTotal: count vs Ads Clicks — used for progress bar width
-            const pctOfTotal = adsClicksCount > 0
-                ? parseFloat(((count / adsClicksCount) * 100).toFixed(1))
-                : 0;
-
-            // pctOfPrevious: count vs immediate previous stage — used for the right-side % label in UI
-            const prevStageName = idx > 0 ? funnelOrder[idx - 1] : null;
-            const prevCount     = prevStageName ? (funnelCountMap[prevStageName] || 0) : count;
-            const pctOfPrevious = (idx === 0)
-                ? 100
-                : prevCount > 0
-                    ? parseFloat(((count / prevCount) * 100).toFixed(1))
-                    : 0;
-
-            // dropOff: % change vs previous stage (always negative in a funnel)
-            const dropOff = (prevCount > 0 && idx > 0)
-                ? parseFloat((((count - prevCount) / prevCount) * 100).toFixed(1))
-                : 0;
-
-            return {
-                stage:         stageName,
-                count,
-                pctOfTotal,       // for bar width (e.g. 100, 66, 19, 8, 4, 1.7)
-                pctOfPrevious,    // for right-side % label (e.g. 100, 66, 29, 43, 49, 40)
-                dropOff           // e.g. -34, -71, -56, -50, -60 (negative = drop)
-            };
-        });
-
-        // ─── Funnel Summary Bar ──────────────────────────────────────────
-        // TOTAL REACH = Ads Clicks, CONVERSION RATE = Converted/Ads Clicks, REVENUE EST. = placeholder
-        const convertedCount     = funnelCountMap["Converted"] || 0;
-        const conversionRatePct  = adsClicksCount > 0
-            ? parseFloat(((convertedCount / adsClicksCount) * 100).toFixed(2))
-            : 0;
-        const funnelSummary = {
-            totalReach:      adsClicksCount,
-            conversionRate:  conversionRatePct,   // % e.g. 1.69
-            revenueEst:      `₹${stats.header.revenueToday}` // Placeholder
-        };
-
-        // ─── AI Metrics Breakdown ────────────────────────────────────────
-        const aiMetrics = stats.kpis.aiPerformance.reduce((acc, current) => {
-            acc[current.type] = parseInt(current.count);
-            return acc;
-        }, {});
-
         // ─── Agent Workload ──────────────────────────────────────────────
+        const totalAgentChats = stats.liveOps.agentWorkload.reduce((sum, a) => sum + a.chatCount, 0);
         const agentWorkload = stats.liveOps.agentWorkload.map(agent => ({
             name: agent.name,
             chatCount: agent.chatCount,
-            percentage: stats.liveOps.escalatedCount > 0
-                ? parseFloat(((agent.chatCount / stats.liveOps.escalatedCount) * 100).toFixed(1))
+            percentage: totalAgentChats > 0
+                ? parseFloat(((agent.chatCount / totalAgentChats) * 100).toFixed(1))
                 : 0
         }));
 
@@ -168,7 +91,9 @@ export const getDashboardController = async (req, res) => {
                 status:  stats.waba?.status === "active" ? "Live" : (stats.waba?.status || "Unknown"),
                 quality: stats.waba?.quality || "GREEN",
                 region:  stats.waba?.region  || "Global",
-                tier:    stats.waba?.tier    || "1K MSG LIMIT"
+                tier:    stats.waba?.tier    || "1K MSG LIMIT",
+                rolling24hUsed:  stats.waba?.rolling24hUsed ?? 0,
+                sevenDayUnique:  stats.waba?.sevenDayUnique ?? 0
             },
             header: {
                 revenueToday:     `₹${stats.header.revenueToday}`,
@@ -209,8 +134,6 @@ export const getDashboardController = async (req, res) => {
                     status: "good"
                 }
             },
-            funnel:         mappedFunnel,
-            funnelSummary,
             liveOperations: {
                 hotLeads,
                 metrics: {
@@ -218,14 +141,6 @@ export const getDashboardController = async (req, res) => {
                     escalated:  stats.liveOps.escalatedCount    // Real
                 },
                 agentWorkload
-            },
-            aiPerformance: {
-                autoResolvedPct:    stats.kpis.aiAutoResolvedPct,
-                urgentCount:        aiMetrics.urgent            || 0,
-                missingKnowledge:   aiMetrics.missing_knowledge || 0,
-                outOfScope:         aiMetrics.out_of_scope      || 0,
-                sentimentAlerts:    aiMetrics.sentiment         || 0,
-                hubStatus:          "active"
             },
             campaigns: stats.campaigns.map(c => ({
                 name:      c.campaign_name,
@@ -314,6 +229,56 @@ export const getDashboardController = async (req, res) => {
                 // 7-day chart data  →  use for line chart (TOTAL VOLUME + AI HANDLED lines)
                 dailyVolume:     stats.messagingAnalytics.dailyVolume
                 // each item: { day: "Mon", date: "2026-03-05", total: 400, aiHandled: 280 }
+            },
+
+            // ─────────────────────────────────────────────────────────────
+            // BILLING & SPEND SUMMARY
+            // ─────────────────────────────────────────────────────────────
+            billingSummary: {
+                totalSpent:      stats.billingSummary.totalSpent,
+                marketing:       stats.billingSummary.marketingSpent,
+                utility:         stats.billingSummary.utilitySpent,
+                authentication:  stats.billingSummary.authSpent,
+                totalMessages:   stats.billingSummary.totalMessagesSent,
+                billable:        stats.billingSummary.billableConversations,
+                free:            stats.billingSummary.freeConversations
+            },
+
+            // ─────────────────────────────────────────────────────────────
+            // DOCTOR & AVAILABILITY OVERVIEW
+            // ─────────────────────────────────────────────────────────────
+            doctorOverview: {
+                statusBreakdown: (stats.doctorOverview.statusCounts || []).map(r => ({
+                    status: r.status,
+                    count: parseInt(r.count)
+                })),
+                totalDoctors: (stats.doctorOverview.statusCounts || []).reduce((s, r) => s + parseInt(r.count), 0),
+                specializations: stats.doctorOverview.specializationCount
+            },
+
+            // ─────────────────────────────────────────────────────────────
+            // KNOWLEDGE BASE HEALTH
+            // ─────────────────────────────────────────────────────────────
+            knowledgeHealth: {
+                totalSources:    stats.knowledgeHealth.totalSources,
+                activeSources:   stats.knowledgeHealth.activeSources,
+                inactiveSources: stats.knowledgeHealth.inactiveSources,
+                totalChunks:     stats.knowledgeHealth.totalChunks,
+                sourceTypes:     (stats.knowledgeHealth.sourceTypes || []).map(r => ({
+                    type: r.type,
+                    count: parseInt(r.count)
+                }))
+            },
+
+            // ─────────────────────────────────────────────────────────────
+            // CONTACT & AUDIENCE OVERVIEW
+            // ─────────────────────────────────────────────────────────────
+            contactOverview: {
+                totalContacts: stats.contactOverview.totalContacts,
+                blocked:       stats.contactOverview.blocked,
+                aiSilenced:    stats.contactOverview.aiSilenced,
+                totalGroups:   stats.contactOverview.totalGroups,
+                avgGroupSize:  stats.contactOverview.avgGroupSize
             }
 
         };

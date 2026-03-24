@@ -95,22 +95,14 @@ export const getChatListService = async (tenant_id) => {
     m.message,
     m.message_type,
     m.created_at AS last_message_at,
-    (
-      SELECT COUNT(*)
-      FROM ${tableNames.MESSAGES} um
-      WHERE um.contact_id = m.contact_id
-        AND um.tenant_id = ?
-        AND um.seen = false
-        AND um.sender = 'user'
-        AND um.is_deleted = false
-    ) AS unread_count
+    COALESCE(uc.cnt, 0) AS unread_count
   FROM messages m
   INNER JOIN (
     SELECT
       contact_id,
       MAX(created_at) AS last_message_time
     FROM messages
-    WHERE tenant_id = ?
+    WHERE tenant_id = ? AND is_deleted = false
     GROUP BY contact_id
   ) lm
     ON m.contact_id = lm.contact_id
@@ -120,9 +112,16 @@ export const getChatListService = async (tenant_id) => {
   LEFT JOIN ${tableNames.LIVECHAT} lc
     ON lc.contact_id = m.contact_id
    AND lc.tenant_id = ?
+  LEFT JOIN (
+    SELECT contact_id, COUNT(*) AS cnt
+    FROM ${tableNames.MESSAGES}
+    WHERE tenant_id = ? AND seen = false AND sender = 'user' AND is_deleted = false
+    GROUP BY contact_id
+  ) uc ON uc.contact_id = m.contact_id
   WHERE m.tenant_id = ?
     AND lc.contact_id IS NULL
   ORDER BY m.created_at DESC
+  LIMIT 200
 `;
 
   try {
@@ -157,8 +156,9 @@ export const getChatByPhoneService = async (phone, tenant_id) => {
     const Query = `
     SELECT id, contact_id, sender, message, message_type, media_url, media_mime_type, seen, status, created_at
     FROM ${tableNames?.MESSAGES}
-    WHERE ${whereClause}
+    WHERE ${whereClause} AND is_deleted = false
     ORDER BY created_at ASC
+    LIMIT 500
   `;
     const [result] = await db.sequelize.query(Query, {
       replacements: replacements,

@@ -393,7 +393,15 @@ export const receiveMessage = async (req, res) => {
     );
 
     // 7. Emit Real-time Event to Frontend
-    io.to(`tenant-${tenant_id}`).emit("new-message", {
+    const ioInstance = getIO();
+    // Start typing indicator immediately for better perceived performance
+    ioInstance.to(`tenant-${tenant_id}`).emit("ai-typing", {
+      tenant_id,
+      phone,
+      status: true,
+    });
+
+    ioInstance.to(`tenant-${tenant_id}`).emit("new-message", {
       tenant_id,
       phone,
       id: savedMsg?.id,
@@ -545,9 +553,15 @@ export const receiveMessage = async (req, res) => {
           console.log(
             `[WEBHOOK] AI is silenced for specific contact: ${phone}`,
           );
+          // Clear the indicator we started earlier since we won't be replying
+          const ioInst = getIO();
+          ioInst.to(`tenant-${tenant_id}`).emit("ai-typing", {
+            tenant_id,
+            phone,
+            status: false,
+          });
           return;
         }
-        await sendTypingIndicator(tenant_id, phone_number_id, phone);
 
         const aiResult = await getOpenAIReply(
           tenant_id,
@@ -577,6 +591,13 @@ export const receiveMessage = async (req, res) => {
         );
 
         const ioInstance = getIO();
+        // Clear typing indicator before sending message to avoid overlap
+        ioInstance.to(`tenant-${tenant_id}`).emit("ai-typing", {
+          tenant_id,
+          phone,
+          status: false,
+        });
+
         ioInstance.to(`tenant-${tenant_id}`).emit("new-message", {
           tenant_id,
           phone,

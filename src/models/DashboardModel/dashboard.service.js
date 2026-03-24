@@ -168,27 +168,17 @@ export const getDashboardStatsService = async (tenantId, period = "30days") => {
             chatCount: parseInt(a.chatCount)
         }));
 
-        // === 7. AI Performance — auto-resolved % ===
+        // === 7. AI Performance — auto-resolved % (PERIOD-FILTERED) ===
+        const aiBaseWhere = { tenant_id: tenantId, is_deleted: false, ...(periodStart ? { created_at: { [Op.gte]: periodStart } } : {}) };
         const [aiTotalLogs, aiResolvedLogs] = await Promise.all([
-            db.AiAnalysisLog.count({ where: { tenant_id: tenantId, is_deleted: false } }),
-            db.AiAnalysisLog.count({ where: { tenant_id: tenantId, is_deleted: false, status: 'resolved' } })
+            db.AiAnalysisLog.count({ where: aiBaseWhere }),
+            db.AiAnalysisLog.count({ where: { ...aiBaseWhere, status: 'resolved' } })
         ]);
         const aiAutoResolvedPct = aiTotalLogs > 0
             ? parseFloat(((aiResolvedLogs / aiTotalLogs) * 100).toFixed(1))
             : 0;
 
-        // === 8. AI Analysis type breakdown (for escalatedToAgent KPI) ===
-        const aiMetricsQuery = await db.AiAnalysisLog.findAll({
-            where: { tenant_id: tenantId, is_deleted: false },
-            attributes: [
-                'type',
-                [Sequelize.fn('COUNT', Sequelize.col('id')), 'count']
-            ],
-            group: ['type'],
-            raw: true
-        });
-
-        // === 9. Needs Attention — urgent AI logs pending action ===
+        // === 8. Needs Attention — urgent AI logs pending action ===
         const needsAttention = await db.AiAnalysisLog.count({
             where: {
                 tenant_id: tenantId,
@@ -198,56 +188,9 @@ export const getDashboardStatsService = async (tenantId, period = "30days") => {
             }
         });
 
-        // === 10. Conversion Funnel (Leads grouped by Stage, filtered by period) ===
-        const funnelWhere = {
-            tenant_id: tenantId,
-            is_deleted: false,
-            ...(periodStart ? { created_at: { [Op.gte]: periodStart } } : {})
-        };
-        const funnelStatsRaw = await db.Leads.findAll({
-            where: funnelWhere,
-            attributes: [
-                'lead_stage',
-                [Sequelize.fn('COUNT', Sequelize.col('lead_id')), 'count']
-            ],
-            group: ['lead_stage'],
-            raw: true
-        });
-
-        const STAGE_ORDER = ["New", "Contacted", "Interested", "Qualified", "Negotiation", "Won"];
-        const statsMap = {};
-        funnelStatsRaw.forEach(row => {
-            const stage = row.lead_stage || "New";
-            statsMap[stage] = (statsMap[stage] || 0) + parseInt(row.count);
-        });
-
-        let totalReach = 0;
-        const funnelData = STAGE_ORDER.map((stage, idx) => {
-            const count = statsMap[stage] || 0;
-            if (idx === 0) totalReach = count;
-            return { stage, count };
-        });
-
-        const processedFunnel = funnelData.map((step, i) => {
-            const prevCount = i === 0 ? step.count : funnelData[i-1].count;
-            return {
-                ...step,
-                pctOfTotal: totalReach > 0 ? Math.round((step.count / totalReach) * 100) : 0,
-                pctOfPrevious: i === 0 ? 100 : (prevCount > 0 ? Math.round((step.count / prevCount) * 100) : 0),
-                dropOff: i === 0 ? 0 : (prevCount > 0 ? Math.min(0, Math.round((step.count / prevCount) * 100) - 100) : 0)
-            };
-        });
-
-        const wonCount = statsMap["Won"] || 0;
-        const funnelSummary = {
-            totalReach,
-            conversionRate: totalReach > 0 ? parseFloat(((wonCount / totalReach) * 100).toFixed(1)) : 0,
-            revenueEst: `₹${(wonCount * 1250).toLocaleString()}`
-        };
-
-        // === 11. Campaigns (latest 5) ===
+        // === 9. Campaigns (latest 5, PERIOD-FILTERED) ===
         const campaigns = await db.WhatsappCampaigns.findAll({
-            where: { tenant_id: tenantId, is_deleted: false },
+            where: { tenant_id: tenantId, is_deleted: false, ...(periodStart ? { created_at: { [Op.gte]: periodStart } } : {}) },
             attributes: ['campaign_name', 'status', 'total_audience', 'delivered_count', 'read_count', 'replied_count'],
             order: [['created_at', 'DESC']],
             limit: 5,
@@ -423,10 +366,11 @@ export const getDashboardStatsService = async (tenantId, period = "30days") => {
             })
         ]);
 
-        // AI vs Agent handled — closed chats: null assigned = AI, not-null = Agent
+        // AI vs Agent handled — closed chats (PERIOD-FILTERED)
+        const closedChatWhere = { tenant_id: tenantId, status: 'closed', ...(periodStart ? { updated_at: { [Op.gte]: periodStart } } : {}) };
         const [aiHandledChats, agentHandledChats] = await Promise.all([
-            db.LiveChat.count({ where: { tenant_id: tenantId, status: 'closed', assigned_admin_id: null } }),
-            db.LiveChat.count({ where: { tenant_id: tenantId, status: 'closed', assigned_admin_id: { [Op.ne]: null } } })
+            db.LiveChat.count({ where: { ...closedChatWhere, assigned_admin_id: null } }),
+            db.LiveChat.count({ where: { ...closedChatWhere, assigned_admin_id: { [Op.ne]: null } } })
         ]);
         const totalHandledChats = aiHandledChats + agentHandledChats;
         const aiHandledPct = totalHandledChats > 0 ? parseFloat(((aiHandledChats / totalHandledChats) * 100).toFixed(1)) : 0;
@@ -436,48 +380,57 @@ export const getDashboardStatsService = async (tenantId, period = "30days") => {
         const nurtureEfficiency = aiAutoResolvedPct;
 
         // ═══════════════════════════════════════════════════════════════════
-        // === 16. MESSAGING ANALYTICS (7-day window) ===
+        // === 16. MESSAGING ANALYTICS (PERIOD-FILTERED) ===
         // ═══════════════════════════════════════════════════════════════════
-        const weekStart = new Date(todayAtStart);
-        weekStart.setDate(weekStart.getDate() - 6); // Mon (or 7 days ago)
+        // Use period for aggregate counts; chart always shows last 7 days
+        const msgDateFilter = periodStart ? { created_at: { [Op.gte]: periodStart } } : {};
+        const periodDays = period === "7days" ? 7 : period === "30days" ? 30 : 90; // alltime caps at 90 for averages
 
-        const prevWeekStart = new Date(weekStart);
-        prevWeekStart.setDate(prevWeekStart.getDate() - 7);
+        // Previous period for trend comparison
+        const msgPrevFilter = periodStartPrev
+            ? { created_at: { [Op.gte]: periodStartPrev, [Op.lt]: periodStart } }
+            : {};
+
+        // Chart always uses last 7 days
+        const chartStart = new Date(todayAtStart);
+        chartStart.setDate(chartStart.getDate() - 6);
 
         const [
-            totalMsgsThisWeek,
-            totalMsgsPrevWeek,
-            failedMsgsThisWeek,
-            deliveredMsgsThisWeek,
+            totalMsgsInPeriod,
+            totalMsgsPrevPeriod,
+            failedMsgsInPeriod,
+            deliveredMsgsInPeriod,
             dailyVolumeRaw
         ] = await Promise.all([
-            // Total messages this week
+            // Total messages in period
             db.Messages.count({
-                where: { tenant_id: tenantId, created_at: { [Op.gte]: weekStart } }
+                where: { tenant_id: tenantId, ...msgDateFilter }
             }),
-            // Previous week total for trend
-            db.Messages.count({
-                where: { tenant_id: tenantId, created_at: { [Op.gte]: prevWeekStart, [Op.lt]: weekStart } }
-            }),
-            // Failed outgoing messages this week
+            // Previous period total for trend
+            periodStartPrev
+                ? db.Messages.count({
+                    where: { tenant_id: tenantId, ...msgPrevFilter }
+                })
+                : Promise.resolve(0),
+            // Failed outgoing in period
             db.Messages.count({
                 where: {
                     tenant_id: tenantId,
-                    created_at: { [Op.gte]: weekStart },
+                    ...msgDateFilter,
                     sender: { [Op.in]: ['bot', 'admin'] },
                     status: 'failed'
                 }
             }),
-            // Delivered outgoing messages this week
+            // Delivered outgoing in period
             db.Messages.count({
                 where: {
                     tenant_id: tenantId,
-                    created_at: { [Op.gte]: weekStart },
+                    ...msgDateFilter,
                     sender: { [Op.in]: ['bot', 'admin'] },
                     status: { [Op.in]: ['delivered', 'read'] }
                 }
             }),
-            // Daily volume per day last 7 days — split bot vs (bot+admin)
+            // Daily volume chart — always last 7 days
             db.sequelize.query(`
                 SELECT
                     DATE(created_at) AS day,
@@ -485,11 +438,11 @@ export const getDashboardStatsService = async (tenantId, period = "30days") => {
                     SUM(CASE WHEN sender = 'bot' THEN 1 ELSE 0 END) AS ai_handled
                 FROM messages
                 WHERE tenant_id = :tenantId
-                  AND created_at >= :weekStart
+                  AND created_at >= :chartStart
                 GROUP BY DATE(created_at)
                 ORDER BY day ASC
             `, {
-                replacements: { tenantId, weekStart: weekStart.toISOString() },
+                replacements: { tenantId, chartStart: chartStart.toISOString() },
                 type: db.sequelize.QueryTypes.SELECT
             })
         ]);
@@ -500,7 +453,7 @@ export const getDashboardStatsService = async (tenantId, period = "30days") => {
         dailyVolumeRaw.forEach(r => { dailyVolumeMap[r.day] = r; });
 
         const dailyVolume = Array.from({ length: 7 }, (_, i) => {
-            const d = new Date(weekStart);
+            const d = new Date(chartStart);
             d.setDate(d.getDate() + i);
             const dateStr = d.toISOString().split('T')[0];
             const dayLabel = days[d.getDay() === 0 ? 6 : d.getDay() - 1];
@@ -513,30 +466,111 @@ export const getDashboardStatsService = async (tenantId, period = "30days") => {
             };
         });
 
-        // Outgoing messages this week for rate calculations
-        const outgoingThisWeek = deliveredMsgsThisWeek + failedMsgsThisWeek;
-        const deliveryRate = outgoingThisWeek > 0
-            ? parseFloat(((deliveredMsgsThisWeek / outgoingThisWeek) * 100).toFixed(1)) : 100;
-        const failedRate = outgoingThisWeek > 0
-            ? parseFloat(((failedMsgsThisWeek / outgoingThisWeek) * 100).toFixed(1)) : 0;
+        // Outgoing messages in period for rate calculations
+        const outgoingInPeriod = deliveredMsgsInPeriod + failedMsgsInPeriod;
+        const deliveryRate = outgoingInPeriod > 0
+            ? parseFloat(((deliveredMsgsInPeriod / outgoingInPeriod) * 100).toFixed(1)) : 100;
+        const failedRate = outgoingInPeriod > 0
+            ? parseFloat(((failedMsgsInPeriod / outgoingInPeriod) * 100).toFixed(1)) : 0;
 
-        // Trend vs previous week
-        const msgsTrend = totalMsgsPrevWeek > 0
-            ? parseFloat((((totalMsgsThisWeek - totalMsgsPrevWeek) / totalMsgsPrevWeek) * 100).toFixed(1)) : 0;
+        // Trend vs previous period
+        const msgsTrend = totalMsgsPrevPeriod > 0
+            ? parseFloat((((totalMsgsInPeriod - totalMsgsPrevPeriod) / totalMsgsPrevPeriod) * 100).toFixed(1)) : 0;
 
         // Avg per day & per hour
-        const avgPerDay = Math.round(totalMsgsThisWeek / 7);
-        const msgsPerHour = Math.round(totalMsgsThisWeek / (7 * 24));
+        const avgPerDay = Math.round(totalMsgsInPeriod / periodDays);
+        const msgsPerHour = Math.round(totalMsgsInPeriod / (periodDays * 24));
 
-        // Response rate: messages from bot/admin / total user messages this week
-        const [userMsgsThisWeek] = await Promise.all([
-            db.Messages.count({
-                where: { tenant_id: tenantId, created_at: { [Op.gte]: weekStart }, sender: 'user' }
-            })
-        ]);
-        const botAdminMsgs = totalMsgsThisWeek - userMsgsThisWeek;
-        const responseRate = userMsgsThisWeek > 0
-            ? parseFloat(((botAdminMsgs / userMsgsThisWeek) * 100).toFixed(1)) : 100;
+        // Response rate: messages from bot/admin / total user messages in period
+        const userMsgsInPeriod = await db.Messages.count({
+            where: { tenant_id: tenantId, ...msgDateFilter, sender: 'user' }
+        });
+        const botAdminMsgs = totalMsgsInPeriod - userMsgsInPeriod;
+        const responseRate = userMsgsInPeriod > 0
+            ? parseFloat(((botAdminMsgs / userMsgsInPeriod) * 100).toFixed(1)) : 100;
+
+        // ═══════════════════════════════════════════════════════════════════
+        // NEW SECTIONS — Doctors, Knowledge, Contacts
+        // ═══════════════════════════════════════════════════════════════════
+
+        // §N4 — Doctor overview
+        const doctorStatusCounts = await db.sequelize.query(`
+            SELECT status, COUNT(*) as count
+            FROM ${tableNames.DOCTORS}
+            WHERE tenant_id = :tenantId AND is_deleted = false
+            GROUP BY status
+        `, { replacements: { tenantId }, type: db.sequelize.QueryTypes.SELECT });
+
+        const [specialCount] = await db.sequelize.query(`
+            SELECT COUNT(DISTINCT s.specialization_id) as count
+            FROM ${tableNames.SPECIALIZATIONS} s
+            WHERE s.tenant_id = :tenantId AND s.is_deleted = false AND s.is_active = true
+        `, { replacements: { tenantId }, type: db.sequelize.QueryTypes.SELECT });
+
+        // §N5 — Knowledge Base health
+        const [knowledgeStats] = await db.sequelize.query(`
+            SELECT
+                COUNT(*) as total_sources,
+                SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) as active_sources,
+                SUM(CASE WHEN status = 'inactive' THEN 1 ELSE 0 END) as inactive_sources
+            FROM ${tableNames.KNOWLEDGESOURCE}
+            WHERE tenant_id = :tenantId AND is_deleted = false
+        `, { replacements: { tenantId }, type: db.sequelize.QueryTypes.SELECT });
+
+        const [chunkStats] = await db.sequelize.query(`
+            SELECT COUNT(*) as total_chunks
+            FROM ${tableNames.KNOWLEDGECHUNKS}
+            WHERE tenant_id = :tenantId AND is_deleted = false
+        `, { replacements: { tenantId }, type: db.sequelize.QueryTypes.SELECT });
+
+        const knowledgeSourceTypes = await db.sequelize.query(`
+            SELECT type, COUNT(*) as count
+            FROM ${tableNames.KNOWLEDGESOURCE}
+            WHERE tenant_id = :tenantId AND is_deleted = false
+            GROUP BY type
+        `, { replacements: { tenantId }, type: db.sequelize.QueryTypes.SELECT });
+
+        // §N6 — Contact & Audience overview
+        const [contactStats] = await db.sequelize.query(`
+            SELECT
+                COUNT(*) as total_contacts,
+                SUM(CASE WHEN is_blocked = true THEN 1 ELSE 0 END) as blocked,
+                SUM(CASE WHEN is_ai_silenced = true THEN 1 ELSE 0 END) as ai_silenced
+            FROM ${tableNames.CONTACTS}
+            WHERE tenant_id = :tenantId AND is_deleted = false
+        `, { replacements: { tenantId }, type: db.sequelize.QueryTypes.SELECT });
+
+        const [groupStats] = await db.sequelize.query(`
+            SELECT
+                COUNT(DISTINCT g.group_id) as total_groups,
+                COUNT(gm.id) as total_members
+            FROM ${tableNames.CONTACT_GROUPS} g
+            LEFT JOIN ${tableNames.CONTACT_GROUP_MEMBERS} gm ON gm.group_id = g.group_id AND gm.tenant_id = g.tenant_id
+            WHERE g.tenant_id = :tenantId AND g.is_deleted = false
+        `, { replacements: { tenantId }, type: db.sequelize.QueryTypes.SELECT });
+
+        // §N7 — Billing summary (inline query — no separate API call)
+        const billingDateFilter = periodStart ? { created_at: { [Op.gte]: periodStart } } : {};
+        const [billingKpi] = await db.sequelize.query(`
+            SELECT
+                COALESCE(SUM(total_cost), 0) as total_spent,
+                COALESCE(SUM(CASE WHEN category = 'marketing' THEN total_cost ELSE 0 END), 0) as marketing_spent,
+                COALESCE(SUM(CASE WHEN category = 'utility' THEN total_cost ELSE 0 END), 0) as utility_spent,
+                COALESCE(SUM(CASE WHEN category = 'authentication' THEN total_cost ELSE 0 END), 0) as auth_spent
+            FROM ${tableNames.BILLING_LEDGER}
+            WHERE tenant_id = :tenantId
+            ${periodStart ? 'AND created_at >= :periodStart' : ''}
+        `, { replacements: { tenantId, ...(periodStart ? { periodStart: periodStart.toISOString() } : {}) }, type: db.sequelize.QueryTypes.SELECT });
+
+        const [msgUsageStats] = await db.sequelize.query(`
+            SELECT
+                COUNT(*) as total_messages,
+                SUM(CASE WHEN billable = true THEN 1 ELSE 0 END) as billable,
+                SUM(CASE WHEN billable = false THEN 1 ELSE 0 END) as free_tier
+            FROM ${tableNames.MESSAGE_USAGE}
+            WHERE tenant_id = :tenantId
+            ${periodStart ? 'AND timestamp >= :periodStart' : ''}
+        `, { replacements: { tenantId, ...(periodStart ? { periodStart: periodStart.toISOString() } : {}) }, type: db.sequelize.QueryTypes.SELECT });
 
         // ═══════════════════════════════════════════════════════════════════
         // RETURN ALL DATA
@@ -545,7 +579,7 @@ export const getDashboardStatsService = async (tenantId, period = "30days") => {
             waba: wabaInfo,
             periodLabel,
             header: {
-                revenueToday: `₹${(wonCount * 1250).toLocaleString()}`, // Corresponds to funnel revenue
+                revenueToday: '₹0',
                 newLeadsToday,
                 resolvedToday,
                 messagesSent: messagesSentToday,
@@ -554,7 +588,6 @@ export const getDashboardStatsService = async (tenantId, period = "30days") => {
             kpis: {
                 totalLeads: { current: totalLeadsNow, previous: totalLeadsYesterday },
                 activeChats,
-                aiPerformance: aiMetricsQuery,
                 aiAutoResolvedPct,
                 appointmentsToday
             },
@@ -563,8 +596,6 @@ export const getDashboardStatsService = async (tenantId, period = "30days") => {
                 escalatedCount,
                 agentWorkload
             },
-            funnel: processedFunnel,
-            funnelSummary,
             campaigns,
             recent: {
                 leads: recentLeads,
@@ -587,7 +618,7 @@ export const getDashboardStatsService = async (tenantId, period = "30days") => {
                 nurtureEfficiency
             },
             messagingAnalytics: {
-                totalThisWeek: totalMsgsThisWeek,
+                totalThisWeek: totalMsgsInPeriod,
                 trendVsPrevWeek: msgsTrend,
                 avgPerDay,
                 msgsPerHour,
@@ -595,10 +626,38 @@ export const getDashboardStatsService = async (tenantId, period = "30days") => {
                 deliveryRate,
                 failedRate,
                 dailyVolume      // array of 7 items: { day, date, total, aiHandled }
+            },
+            // NEW SECTIONS
+            doctorOverview: {
+                statusCounts: doctorStatusCounts,
+                specializationCount: parseInt(specialCount?.count || 0)
+            },
+            knowledgeHealth: {
+                totalSources: parseInt(knowledgeStats?.total_sources || 0),
+                activeSources: parseInt(knowledgeStats?.active_sources || 0),
+                inactiveSources: parseInt(knowledgeStats?.inactive_sources || 0),
+                totalChunks: parseInt(chunkStats?.total_chunks || 0),
+                sourceTypes: knowledgeSourceTypes
+            },
+            contactOverview: {
+                totalContacts: parseInt(contactStats?.total_contacts || 0),
+                blocked: parseInt(contactStats?.blocked || 0),
+                aiSilenced: parseInt(contactStats?.ai_silenced || 0),
+                totalGroups: parseInt(groupStats?.total_groups || 0),
+                avgGroupSize: parseInt(groupStats?.total_groups || 0) > 0
+                    ? Math.round(parseInt(groupStats?.total_members || 0) / parseInt(groupStats?.total_groups || 0))
+                    : 0
+            },
+            billingSummary: {
+                totalSpent: parseFloat(billingKpi?.total_spent || 0),
+                marketingSpent: parseFloat(billingKpi?.marketing_spent || 0),
+                utilitySpent: parseFloat(billingKpi?.utility_spent || 0),
+                authSpent: parseFloat(billingKpi?.auth_spent || 0),
+                totalMessagesSent: parseInt(msgUsageStats?.total_messages || 0),
+                billableConversations: parseInt(msgUsageStats?.billable || 0),
+                freeConversations: parseInt(msgUsageStats?.free_tier || 0)
             }
         };
-
-
     } catch (err) {
         console.error("Dashboard Service Error:", err);
         throw err;
