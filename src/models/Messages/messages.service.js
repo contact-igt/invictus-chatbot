@@ -8,11 +8,11 @@ import { handleClassification } from "../../utils/ai/classificationHandler.js";
 import { getContactByPhoneAndTenantIdService } from "../ContactsModel/contacts.service.js";
 import { getLeadByContactIdService } from "../LeadsModel/leads.service.js";
 import { getLastAppointmentService } from "../AppointmentModel/appointment.service.js";
-import { 
-  getAdminSystemPrompt, 
-  getAdminSuggestedReplyPrompt, 
-  getAdminLeadSourcePrompt, 
-  getAdminAppointmentHistoryPrompt 
+import {
+  getAdminSystemPrompt,
+  getAdminSuggestedReplyPrompt,
+  getAdminLeadSourcePrompt,
+  getAdminAppointmentHistoryPrompt,
 } from "../../utils/ai/prompts/index.js";
 
 export const createUserMessageService = async (
@@ -149,7 +149,8 @@ export const getChatByPhoneService = async (phone, tenant_id) => {
     } else {
       // Normalize phone to last 10 digits
       const cleanPhone = phone ? phone.toString().replace(/\D/g, "") : "";
-      const suffix = cleanPhone.length >= 10 ? cleanPhone.slice(-10) : cleanPhone;
+      const suffix =
+        cleanPhone.length >= 10 ? cleanPhone.slice(-10) : cleanPhone;
       replacements = [suffix, tenant_id];
     }
 
@@ -181,7 +182,8 @@ export const markSeenMessageService = async (tenant_id, phone) => {
     } else {
       // Normalize phone to last 10 digits
       const cleanPhone = phone ? phone.toString().replace(/\D/g, "") : "";
-      const suffix = cleanPhone.length >= 10 ? cleanPhone.slice(-10) : cleanPhone;
+      const suffix =
+        cleanPhone.length >= 10 ? cleanPhone.slice(-10) : cleanPhone;
       replacements = [suffix, tenant_id];
     }
 
@@ -203,10 +205,7 @@ export const suggestReplyService = async (tenant_id, phone) => {
 
     let contact = null;
     try {
-      contact = await getContactByPhoneAndTenantIdService(
-        tenant_id,
-        phone,
-      );
+      contact = await getContactByPhoneAndTenantIdService(tenant_id, phone);
       if (contact) {
         contact_id = contact.contact_id;
 
@@ -221,7 +220,8 @@ export const suggestReplyService = async (tenant_id, phone) => {
           tenant_id,
           contact_id,
         );
-        appointmentHistoryPrompt = getAdminAppointmentHistoryPrompt(lastAppointment);
+        appointmentHistoryPrompt =
+          getAdminAppointmentHistoryPrompt(lastAppointment);
       }
     } catch (err) {
       console.error(
@@ -230,7 +230,10 @@ export const suggestReplyService = async (tenant_id, phone) => {
       );
     }
 
-    const ADMIN_SYSTEM_PROMPT = getAdminSystemPrompt(leadSourcePrompt, appointmentHistoryPrompt);
+    const ADMIN_SYSTEM_PROMPT = getAdminSystemPrompt(
+      leadSourcePrompt,
+      appointmentHistoryPrompt,
+    );
 
     let msgWhere = "phone = ? AND tenant_id = ?";
     let msgReplacements = [phone, tenant_id];
@@ -288,7 +291,12 @@ export const suggestReplyService = async (tenant_id, phone) => {
       knowledgeText,
     });
 
-    const rawReply = await AiService("system", prompt);
+    const rawReply = await AiService(
+      "system",
+      prompt,
+      tenant_id,
+      "smart_reply",
+    );
 
     console.log("[AI-RAW-RESPONSE]", rawReply);
 
@@ -308,6 +316,7 @@ export const suggestReplyService = async (tenant_id, phone) => {
       const classification = await classifyResponse(
         lastUserMessage,
         cleanReply,
+        tenant_id,
       );
 
       // If the primary AI explicitly tagged missing knowledge or out of scope, use that as a "hint"

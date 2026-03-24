@@ -1,4 +1,5 @@
-import { sendTypingIndicator } from "../../utils/chat/sendTypingIndicator.js";
+// Remove incorrect utility import to fix OAuth collision
+// import { sendTypingIndicator } from "../../utils/chat/sendTypingIndicator.js";
 import { createUserMessageService } from "../Messages/messages.service.js";
 import { formatPhoneNumber } from "../../utils/helpers/formatPhoneNumber.js";
 import fs from "fs";
@@ -9,6 +10,8 @@ import {
   lockChat,
   markMessageProcessed,
   sendWhatsAppMessage,
+  sendReadReceipt,
+  sendTypingIndicator,
   unlockChat,
 } from "./AuthWhatsapp.service.js";
 
@@ -38,6 +41,8 @@ import {
   getLivechatByIdService,
   updateLiveChatTimestampService,
 } from "../LiveChatModel/livechat.service.js";
+
+import { getTenantSettingsService } from "../TenantModel/tenant.service.js";
 
 export const verifyWebhook = async (req, res) => {
   try {
@@ -84,7 +89,7 @@ export const receiveMessage = async (req, res) => {
       try {
         const [msgSearch] = await db.sequelize.query(
           `SELECT tenant_id FROM messages WHERE wamid = ? LIMIT 1`,
-          { replacements: [messageId] }
+          { replacements: [messageId] },
         );
         if (msgSearch.length > 0) {
           webhook_tenant_id = msgSearch[0].tenant_id;
@@ -94,7 +99,7 @@ export const receiveMessage = async (req, res) => {
             `SELECT c.tenant_id FROM whatsapp_campaign_recipients r 
              JOIN whatsapp_campaigns c ON r.campaign_id = c.campaign_id 
              WHERE r.meta_message_id = ? LIMIT 1`,
-            { replacements: [messageId] }
+            { replacements: [messageId] },
           );
           if (campaignSearch.length > 0) {
             webhook_tenant_id = campaignSearch[0].tenant_id;
@@ -104,7 +109,7 @@ export const receiveMessage = async (req, res) => {
             if (phoneId) {
               const [accountSearch] = await db.sequelize.query(
                 `SELECT tenant_id FROM whatsapp_accounts WHERE phone_number_id = ? LIMIT 1`,
-                { replacements: [phoneId] }
+                { replacements: [phoneId] },
               );
               if (accountSearch.length > 0) {
                 webhook_tenant_id = accountSearch[0].tenant_id;
@@ -119,7 +124,7 @@ export const receiveMessage = async (req, res) => {
           if (wabaId) {
             const [wabaSearch] = await db.sequelize.query(
               `SELECT tenant_id FROM whatsapp_accounts WHERE waba_id = ? LIMIT 1`,
-              { replacements: [wabaId] }
+              { replacements: [wabaId] },
             );
             if (wabaSearch.length > 0) {
               webhook_tenant_id = wabaSearch[0].tenant_id;
@@ -131,13 +136,18 @@ export const receiveMessage = async (req, res) => {
       }
 
       if (webhook_tenant_id) {
-        console.log(`[WEBHOOK] Identified tenant ${webhook_tenant_id} for status update: ${messageId}`);
+        console.log(
+          `[WEBHOOK] Identified tenant ${webhook_tenant_id} for status update: ${messageId}`,
+        );
         // Fire and forget billing cost calculation
         setImmediate(() => {
           processBillingFromWebhook(webhook_tenant_id, statusUpdate);
         });
       } else {
-        console.warn(`[WEBHOOK] Could not identify tenant for status update: ${messageId}. Payload:`, JSON.stringify(value?.metadata));
+        console.warn(
+          `[WEBHOOK] Could not identify tenant for status update: ${messageId}. Payload:`,
+          JSON.stringify(value?.metadata),
+        );
       }
 
       await db.sequelize.transaction(async (t) => {
@@ -222,18 +232,24 @@ export const receiveMessage = async (req, res) => {
                 { replacements: [status, msgRow.id] },
               );
               try {
-                io.to(`tenant-${msgRow.tenant_id}`).emit("message-status-update", {
-                  message_id: msgRow.id,
-                  phone: msgRow.phone,
-                  contact_id: msgRow.contact_id,
-                  status,
-                });
+                io.to(`tenant-${msgRow.tenant_id}`).emit(
+                  "message-status-update",
+                  {
+                    message_id: msgRow.id,
+                    phone: msgRow.phone,
+                    contact_id: msgRow.contact_id,
+                    status,
+                  },
+                );
               } catch (_) {}
             }
           }
         }
       } catch (statusErr) {
-        console.error("[WEBHOOK] Error updating message status:", statusErr.message);
+        console.error(
+          "[WEBHOOK] Error updating message status:",
+          statusErr.message,
+        );
       }
 
       return res.sendStatus(200);
@@ -262,6 +278,9 @@ export const receiveMessage = async (req, res) => {
     let text = "";
     const type = msg.type;
 
+    let media_url = null;
+    let media_mime_type = null;
+
     if (type === "text") text = msg.text?.body || "";
     else if (type === "interactive") {
       const interactive = msg.interactive;
@@ -271,14 +290,23 @@ export const receiveMessage = async (req, res) => {
         text = interactive.list_reply.title;
       else text = "[Interactive Message]";
     } else if (type === "button") text = msg.button?.text || "[Button Click]";
-    else if (type === "image") text = msg.image?.caption || "[Image]";
-    else if (type === "video") text = msg.video?.caption || "[Video]";
-    else if (type === "document")
-      text =
-        msg.document?.caption ||
-        `[Document: ${msg.document?.filename || "file"}]`;
-    else if (type === "audio") text = "[Audio]";
-    else if (type === "location")
+    else if (type === "image") {
+      text = msg.image?.caption || "";
+      media_url = msg.image?.id ? `meta_media_id:${msg.image.id}` : null;
+      media_mime_type = msg.image?.mime_type || "image/jpeg";
+    } else if (type === "video") {
+      text = msg.video?.caption || "";
+      media_url = msg.video?.id ? `meta_media_id:${msg.video.id}` : null;
+      media_mime_type = msg.video?.mime_type || "video/mp4";
+    } else if (type === "document") {
+      text = msg.document?.caption || msg.document?.filename || "";
+      media_url = msg.document?.id ? `meta_media_id:${msg.document.id}` : null;
+      media_mime_type = msg.document?.mime_type || "application/octet-stream";
+    } else if (type === "audio") {
+      text = "";
+      media_url = msg.audio?.id ? `meta_media_id:${msg.audio.id}` : null;
+      media_mime_type = msg.audio?.mime_type || "audio/ogg";
+    } else if (type === "location")
       text = `[Location: ${msg.location?.name || "Shared Location"}]`;
     else if (type === "contacts") text = "[Contact Card]";
     else text = "[Unknown Message Type]";
@@ -292,10 +320,23 @@ export const receiveMessage = async (req, res) => {
     if (ismessage?.length > 0) return res.sendStatus(200);
     await markMessageProcessed(tenant_id, phone_number_id, messageId, phone);
 
+    // 4.5 Send Read Receipt to Meta (Blue Tick)
+    setImmediate(() => {
+      sendReadReceipt(tenant_id, phone_number_id, messageId);
+    });
+
     // 5. Manage Contact and LiveChat
-    let contactsaved = await getContactByPhoneAndTenantIdService(tenant_id, phone);
+
+    const tenantSettings = await getTenantSettingsService(tenant_id);
+    const defaultNameConfig = tenantSettings?.default_contact_name || null;
+    const finalName = defaultNameConfig ? defaultNameConfig : name || null;
+
+    let contactsaved = await getContactByPhoneAndTenantIdService(
+      tenant_id,
+      phone,
+    );
     if (!contactsaved) {
-      await createContactService(tenant_id, phone, name ? name : null, null);
+      await createContactService(tenant_id, phone, finalName, null);
       contactsaved = await getContactByPhoneAndTenantIdService(
         tenant_id,
         phone,
@@ -303,20 +344,25 @@ export const receiveMessage = async (req, res) => {
       io.to(`tenant-${tenant_id}`).emit("contact-created", {
         tenant_id,
         phone,
-        name,
+        name: finalName,
         contact_id: contactsaved?.contact_id,
       });
     } else {
-      if (name && (!contactsaved.name || contactsaved.name === phone)) {
+      if (
+        finalName &&
+        (!contactsaved.name ||
+          contactsaved.name === phone ||
+          (defaultNameConfig && contactsaved.name !== defaultNameConfig))
+      ) {
         await updateContactService(
           contactsaved.contact_id,
           tenant_id,
-          name,
+          finalName,
           contactsaved.email,
           contactsaved.profile_pic,
-          contactsaved.is_blocked
+          contactsaved.is_blocked,
         );
-        contactsaved.name = name;
+        contactsaved.name = finalName;
       }
     }
 
@@ -341,7 +387,9 @@ export const receiveMessage = async (req, res) => {
       "user",
       null,
       text,
-      type
+      type,
+      media_url,
+      media_mime_type,
     );
 
     // 7. Emit Real-time Event to Frontend
@@ -354,6 +402,9 @@ export const receiveMessage = async (req, res) => {
       name: contactsaved?.name || name,
       message: text,
       sender: "user",
+      message_type: type,
+      media_url,
+      media_mime_type,
       created_at: new Date(),
     });
 
@@ -477,24 +528,26 @@ export const receiveMessage = async (req, res) => {
 
     setImmediate(async () => {
       try {
-        const { getTenantSettingsService } = await import("../TenantModel/tenant.service.js");
+        const { getTenantSettingsService } =
+          await import("../TenantModel/tenant.service.js");
         const tenantSettings = await getTenantSettingsService(tenant_id);
-        const autoResponderEnabled = tenantSettings?.ai_settings?.auto_responder !== false;
+        const autoResponderEnabled =
+          tenantSettings?.ai_settings?.auto_responder !== false;
 
         if (!autoResponderEnabled) {
-          console.log(`[WEBHOOK] AI Auto-Responder is globally disabled for tenant: ${tenant_id}`);
+          console.log(
+            `[WEBHOOK] AI Auto-Responder is globally disabled for tenant: ${tenant_id}`,
+          );
           return;
         }
 
         if (contactsaved?.is_ai_silenced) {
-          console.log(`[WEBHOOK] AI is silenced for specific contact: ${phone}`);
+          console.log(
+            `[WEBHOOK] AI is silenced for specific contact: ${phone}`,
+          );
           return;
         }
-        await sendTypingIndicator(
-          tenant_id,
-          phone_number_id,
-          phone,
-        );
+        await sendTypingIndicator(tenant_id, phone_number_id, phone);
 
         const aiResult = await getOpenAIReply(
           tenant_id,
@@ -505,23 +558,13 @@ export const receiveMessage = async (req, res) => {
         );
 
         const finalReply = aiResult?.message;
-        const fallback = aiResult?.tagDetected 
-          ? "" 
+        const fallback = aiResult?.tagDetected
+          ? ""
           : "Our team will review your message and contact you shortly.";
         const messageToSend =
           finalReply && finalReply.trim() ? finalReply.trim() : fallback;
 
-        io.to(`tenant-${tenant_id}`).emit("new-message", {
-          tenant_id,
-          phone,
-          phone_number_id,
-          name,
-          message: messageToSend,
-          sender: "bot",
-          created_at: new Date(),
-        });
-
-        await createUserMessageService(
+        const savedBotMsg = await createUserMessageService(
           tenant_id,
           contactsaved?.contact_id,
           phone_number_id,
@@ -533,16 +576,32 @@ export const receiveMessage = async (req, res) => {
           messageToSend,
         );
 
+        const ioInstance = getIO();
+        ioInstance.to(`tenant-${tenant_id}`).emit("new-message", {
+          tenant_id,
+          phone,
+          id: savedBotMsg?.id,
+          contact_id: contactsaved?.contact_id,
+          phone_number_id,
+          name: contactsaved?.name || name,
+          message: messageToSend,
+          message_type: "text",
+          media_url: null,
+          status: null,
+          sender: "bot",
+          created_at: new Date(),
+        });
+
         await sendWhatsAppMessage(tenant_id, phone, messageToSend).catch(
           (err) => {
             console.error("[WHATSAPP-SEND] Failed to send reply:", err.message);
-            import("fs").then(fs => {
+            import("fs").then((fs) => {
               fs.appendFileSync(
-                "whatsapp_send_error.log", 
-                `[${new Date().toISOString()}] To: ${phone} | Msg: ${messageToSend} | Error: ${err.message}\n`
+                "whatsapp_send_error.log",
+                `[${new Date().toISOString()}] To: ${phone} | Msg: ${messageToSend} | Error: ${err.message}\n`,
               );
             });
-          }
+          },
         );
 
         // Execute tag handler AFTER sending the AI reply
@@ -569,6 +628,17 @@ export const receiveMessage = async (req, res) => {
         console.error("Background AI error:", err);
       } finally {
         await unlockChat(tenant_id, phone_number_id, phone);
+        // Deactivate Typying Animation on Dashboard
+        try {
+          const io = getIO();
+          if (io) {
+            io.to(`tenant-${tenant_id}`).emit("ai-typing", {
+              tenant_id,
+              phone,
+              status: false,
+            });
+          }
+        } catch (_) {}
       }
     });
   } catch (err) {

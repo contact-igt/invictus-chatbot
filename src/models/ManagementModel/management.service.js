@@ -294,7 +294,7 @@ export const updateManagementPasswordService = async (
 export const getPricingRulesService = async () => {
   try {
     const [rows] = await db.sequelize.query(
-      `SELECT * FROM ${tableNames.PRICING_TABLE}`
+      `SELECT * FROM ${tableNames.PRICING_TABLE}`,
     );
     return rows;
   } catch (err) {
@@ -302,20 +302,27 @@ export const getPricingRulesService = async () => {
   }
 };
 
-export const createPricingRuleService = async (category, country, rate, markup_percent = 0) => {
+export const createPricingRuleService = async (
+  category,
+  country,
+  rate,
+  markup_percent = 0,
+) => {
   try {
     const [existing] = await db.sequelize.query(
       `SELECT id FROM ${tableNames.PRICING_TABLE} WHERE category = ? AND country = ? LIMIT 1`,
-      { replacements: [category, country] }
+      { replacements: [category, country] },
     );
     if (existing.length > 0) {
-      throw new Error(`Pricing rule already exists for ${category} / ${country}`);
+      throw new Error(
+        `Pricing rule already exists for ${category} / ${country}`,
+      );
     }
 
     const [result] = await db.sequelize.query(
       `INSERT INTO ${tableNames.PRICING_TABLE} (category, country, rate, markup_percent, created_at, updated_at)
        VALUES (?, ?, ?, ?, NOW(), NOW())`,
-      { replacements: [category, country, rate, markup_percent] }
+      { replacements: [category, country, rate, markup_percent] },
     );
     return result;
   } catch (err) {
@@ -346,7 +353,7 @@ export const updatePricingRuleService = async (id, rate, markup_percent) => {
 
     const [result] = await db.sequelize.query(
       `UPDATE ${tableNames.PRICING_TABLE} SET ${updateFields.join(", ")} WHERE id = ?`,
-      { replacements: values }
+      { replacements: values },
     );
     return result;
   } catch (err) {
@@ -358,9 +365,99 @@ export const deletePricingRuleService = async (id) => {
   try {
     const [result] = await db.sequelize.query(
       `DELETE FROM ${tableNames.PRICING_TABLE} WHERE id = ?`,
-      { replacements: [id] }
+      { replacements: [id] },
     );
     return result;
+  } catch (err) {
+    throw err;
+  }
+};
+
+// ─── AI Model Pricing CRUD Services ─────────────────────────────
+
+export const getAiPricingRulesService = async () => {
+  try {
+    const rules = await db.AiPricing.findAll({
+      order: [["model", "ASC"]],
+      raw: true,
+    });
+    return rules;
+  } catch (err) {
+    throw err;
+  }
+};
+
+export const createAiPricingRuleService = async (
+  model,
+  input_rate,
+  output_rate,
+  markup_percent = 0,
+  usd_to_inr_rate = 85,
+  description = null,
+  recommended_for = "both",
+  category = "mid-tier",
+) => {
+  try {
+    const existing = await db.AiPricing.findOne({ where: { model } });
+    if (existing) {
+      throw new Error(`AI pricing rule already exists for model: ${model}`);
+    }
+
+    const rule = await db.AiPricing.create({
+      model,
+      input_rate,
+      output_rate,
+      markup_percent,
+      usd_to_inr_rate,
+      description,
+      recommended_for,
+      category,
+      is_active: true,
+    });
+    return rule;
+  } catch (err) {
+    throw err;
+  }
+};
+
+export const updateAiPricingRuleService = async (id, data) => {
+  try {
+    const rule = await db.AiPricing.findByPk(id);
+    if (!rule) {
+      throw new Error("AI pricing rule not found");
+    }
+
+    const updateFields = {};
+    if (data.input_rate !== undefined)
+      updateFields.input_rate = data.input_rate;
+    if (data.output_rate !== undefined)
+      updateFields.output_rate = data.output_rate;
+    if (data.markup_percent !== undefined)
+      updateFields.markup_percent = data.markup_percent;
+    if (data.usd_to_inr_rate !== undefined)
+      updateFields.usd_to_inr_rate = data.usd_to_inr_rate;
+    if (data.is_active !== undefined) updateFields.is_active = data.is_active;
+    if (data.description !== undefined)
+      updateFields.description = data.description;
+    if (data.recommended_for !== undefined)
+      updateFields.recommended_for = data.recommended_for;
+    if (data.category !== undefined) updateFields.category = data.category;
+
+    await rule.update(updateFields);
+    return rule;
+  } catch (err) {
+    throw err;
+  }
+};
+
+export const deleteAiPricingRuleService = async (id) => {
+  try {
+    const rule = await db.AiPricing.findByPk(id);
+    if (!rule) {
+      throw new Error("AI pricing rule not found");
+    }
+    await rule.destroy();
+    return { deleted: true };
   } catch (err) {
     throw err;
   }

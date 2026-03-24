@@ -15,6 +15,7 @@ import {
   getOnboardedTenantListController,
   getTenantSettingsController,
   updateTenantAiSettingsController,
+  updateTenantGeneralSettingsController,
 } from "./tenant.controller.js";
 import {
   authenticate,
@@ -136,6 +137,36 @@ Router.get(
 );
 
 Router.get(
+  "/settings/general",
+  authenticate,
+  authorize({
+    user_type: "tenant",
+    roles: ["tenant_admin", "staff", "doctor", "agent"],
+  }),
+  getTenantSettingsController,
+);
+
+Router.patch(
+  "/settings/general",
+  authenticate,
+  authorize({
+    user_type: "tenant",
+    roles: ["tenant_admin"],
+  }),
+  updateTenantGeneralSettingsController,
+);
+
+Router.patch(
+  "/settings/ai",
+  authenticate,
+  authorize({
+    user_type: "tenant",
+    roles: ["tenant_admin"],
+  }),
+  updateTenantAiSettingsController,
+);
+
+Router.get(
   "/:id",
   authenticate,
   authorize({
@@ -153,26 +184,6 @@ Router.put(
     roles: ["platform_admin", "super_admin"],
   }),
   updateTenantController,
-);
-
-Router.get(
-  "/settings/general",
-  authenticate,
-  authorize({
-    user_type: "tenant",
-    roles: ["tenant_admin", "staff", "doctor", "agent"],
-  }),
-  getTenantSettingsController,
-);
-
-Router.patch(
-  "/settings/ai",
-  authenticate,
-  authorize({
-    user_type: "tenant",
-    roles: ["tenant_admin"],
-  }),
-  updateTenantAiSettingsController,
 );
 
 export default Router;

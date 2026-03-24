@@ -60,7 +60,11 @@ export const uploadKnowledge = async (req, res) => {
 
     if (type === "text" || type === "file") {
       if (!text || text.trim().length < 10) {
-        return res.status(400).json({ message: "Text content must be at least 10 characters long." });
+        return res
+          .status(400)
+          .json({
+            message: "Text content must be at least 10 characters long.",
+          });
       }
       finalText = text;
     }
@@ -69,7 +73,7 @@ export const uploadKnowledge = async (req, res) => {
       if (!source_url) {
         return res.status(400).json({ message: "Website URL is required" });
       }
-      
+
       try {
         const scraped = await scrapeWebsiteText(source_url);
         finalText = scraped.content;
@@ -77,17 +81,23 @@ export const uploadKnowledge = async (req, res) => {
 
         // AI Feature: Always process the scraped text with AI for optimal quality
         if (finalText) {
-          finalText = await processKnowledgeWithAi(finalText, prompt);
+          finalText = await processKnowledgeWithAi(
+            finalText,
+            prompt,
+            tenant_id,
+          );
         }
       } catch (scrapeErr) {
-        return res.status(400).json({ 
-          message: `Failed to scrape website: ${scrapeErr.message}. Please ensure the URL is correct and accessible.` 
+        return res.status(400).json({
+          message: `Failed to scrape website: ${scrapeErr.message}. Please ensure the URL is correct and accessible.`,
         });
       }
     }
 
     if (!finalText || finalText.trim().length === 0) {
-      return res.status(400).json({ message: "No content found for the provided source." });
+      return res
+        .status(400)
+        .json({ message: "No content found for the provided source." });
     }
 
     const cleanedText = cleanText(finalText);
@@ -101,7 +111,10 @@ export const uploadKnowledge = async (req, res) => {
       file_name,
     );
 
-    res.json({ success: true, message: "Knowledge source added successfully." });
+    res.json({
+      success: true,
+      message: "Knowledge source added successfully.",
+    });
   } catch (err) {
     console.error("[UPLOAD-KNOWLEDGE] Error:", err);
     res.status(500).json({ error: err.message });

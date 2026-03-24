@@ -5,16 +5,23 @@ import { calculateHeatState } from "../../utils/helpers/calculateHeatState.js";
 import cron from "node-cron";
 import { getConversationMemory } from "../Messages/messages.memory.js";
 import { AiService } from "../../utils/ai/coreAi.js";
-import { getLeadSummarizePrompt, getLeadSummaryModeInstruction } from "../../utils/ai/prompts/index.js";
+import {
+  getLeadSummarizePrompt,
+  getLeadSummaryModeInstruction,
+} from "../../utils/ai/prompts/index.js";
 import { generateReadableIdFromLast } from "../../utils/helpers/generateReadableIdFromLast.js";
 
-export const createLeadService = async (tenant_id, contact_id, source = "none") => {
+export const createLeadService = async (
+  tenant_id,
+  contact_id,
+  source = "none",
+) => {
   try {
     const lead_id = await generateReadableIdFromLast(
       tableNames.LEADS,
       "lead_id",
       "L",
-      3
+      3,
     );
 
     const Query = `
@@ -33,7 +40,6 @@ export const createLeadService = async (tenant_id, contact_id, source = "none") 
     throw err;
   }
 };
-
 
 export const getLeadByLeadIdService = async (tenant_id, lead_id) => {
   const dataQuery = `
@@ -98,14 +104,12 @@ export const getLeadByLeadIdService = async (tenant_id, lead_id) => {
 
     return {
       ...lead,
-      last_messages: messages || []
+      last_messages: messages || [],
     };
-
   } catch (err) {
     throw err;
   }
 };
-
 
 export const getLeadByContactIdService = async (tenant_id, contact_id) => {
   const Query = `
@@ -120,7 +124,6 @@ export const getLeadByContactIdService = async (tenant_id, contact_id) => {
     throw err;
   }
 };
-
 
 export const getLeadListService = async (tenant_id) => {
   const dataQuery = `
@@ -164,7 +167,7 @@ export const getLeadListService = async (tenant_id) => {
     }
 
     // 2. Fetch last 4 messages for these leads for preview
-    const contactIds = leads.map(l => l.contact_id);
+    const contactIds = leads.map((l) => l.contact_id);
     const messagesQuery = `
       SELECT contact_id, sender, message, created_at
       FROM (
@@ -189,9 +192,9 @@ export const getLeadListService = async (tenant_id) => {
       return acc;
     }, {});
 
-    const leadsWithMessages = leads.map(lead => ({
+    const leadsWithMessages = leads.map((lead) => ({
       ...lead,
-      last_messages: messagesMap[lead.contact_id] || []
+      last_messages: messagesMap[lead.contact_id] || [],
     }));
 
     return {
@@ -203,14 +206,17 @@ export const getLeadListService = async (tenant_id) => {
   }
 };
 
-
 export const updateLeadService = async (tenant_id, contact_id) => {
   const { heat_state, heat_score } = calculateHeatState(new Date());
 
   const Query = `UPDATE ${tableNames?.LEADS} SET last_user_message_at = Now() , heat_state = ?, score = ? , summary_status = ?  WHERE tenant_id = ? AND contact_id = ? AND is_deleted = false`;
 
   try {
-    console.log("[DEBUG-HEAT] Updating specific lead:", { tenant_id, contact_id, heat_score });
+    console.log("[DEBUG-HEAT] Updating specific lead:", {
+      tenant_id,
+      contact_id,
+      heat_score,
+    });
     const [result] = await db.sequelize.query(Query, {
       replacements: [heat_state, heat_score, "new", tenant_id, contact_id],
     });
@@ -222,7 +228,6 @@ export const updateLeadService = async (tenant_id, contact_id) => {
     throw err;
   }
 };
-
 
 export const updateAdminLeadService = async (tenant_id, contact_id) => {
   const { heat_state, heat_score } = calculateHeatState(new Date());
@@ -239,7 +244,6 @@ export const updateAdminLeadService = async (tenant_id, contact_id) => {
     throw err;
   }
 };
-
 
 export const startLeadHeatDecayCronService = () => {
   cron.schedule("*/30 * * * *", async () => {
@@ -272,15 +276,13 @@ export const startLeadHeatDecayCronService = () => {
   });
 };
 
-
-
 export const getBulkLeadSummaryService = async (
   tenant_id,
   lead_ids,
   mode = null,
   targetDate = null,
   startDateParam = null,
-  endDateParam = null
+  endDateParam = null,
 ) => {
   try {
     if (!lead_ids || !Array.isArray(lead_ids) || lead_ids.length === 0) {
@@ -320,7 +322,7 @@ export const getBulkLeadSummaryService = async (
           targetDate,
           startDateParam,
           endDateParam,
-          lead.contact_id
+          lead.contact_id,
         );
 
         return {
@@ -337,13 +339,11 @@ export const getBulkLeadSummaryService = async (
 
     const results = await Promise.all(summaryPromises);
     return results;
-
   } catch (err) {
     console.error("Error in getBulkLeadSummaryService:", err);
     throw err;
   }
 };
-
 
 export const getLeadSummaryService = async (
   tenant_id,
@@ -353,31 +353,34 @@ export const getLeadSummaryService = async (
   targetDate = null,
   startDateParam = null,
   endDateParam = null,
-  contact_id = null
+  contact_id = null,
 ) => {
   try {
-
-    const sanitize = (val) => (val === "null" || val === "undefined" || !val) ? null : val;
-
+    const sanitize = (val) =>
+      val === "null" || val === "undefined" || !val ? null : val;
 
     const cleanMode = sanitize(mode);
     const cleanTargetDate = sanitize(targetDate);
     const cleanStartDate = sanitize(startDateParam);
     const cleanEndDate = sanitize(endDateParam);
 
-
     const hasDateFilter = !!(cleanTargetDate || cleanStartDate || cleanEndDate);
-    const resultingMode = (cleanMode === "detailed" || hasDateFilter) ? "filtered" : "overall";
+    const resultingMode =
+      cleanMode === "detailed" || hasDateFilter ? "filtered" : "overall";
 
     let startDate = cleanStartDate;
     let endDate = cleanEndDate;
     if (cleanTargetDate === "today") {
-      const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+      const today = new Date().toLocaleDateString("en-CA", {
+        timeZone: "Asia/Kolkata",
+      });
       startDate = endDate = today;
     } else if (cleanTargetDate === "yesterday") {
       const yesterday = new Date();
       yesterday.setDate(yesterday.getDate() - 1);
-      startDate = endDate = yesterday.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+      startDate = endDate = yesterday.toLocaleDateString("en-CA", {
+        timeZone: "Asia/Kolkata",
+      });
     } else if (cleanTargetDate && !cleanStartDate && !cleanEndDate) {
       startDate = endDate = cleanTargetDate;
     }
@@ -393,15 +396,21 @@ export const getLeadSummaryService = async (
       currentLead = await getLeadByLeadIdService(tenant_id, activeLeadId);
     }
 
-    if (resultingMode === "overall" && currentLead?.summary_status === "old" && currentLead?.ai_summary) {
-      console.log(`[AI-SUMMARY] Cache Hit! Returning saved overall summary for lead: ${activeLeadId}`);
+    if (
+      resultingMode === "overall" &&
+      currentLead?.summary_status === "old" &&
+      currentLead?.ai_summary
+    ) {
+      console.log(
+        `[AI-SUMMARY] Cache Hit! Returning saved overall summary for lead: ${activeLeadId}`,
+      );
       return {
         summary: currentLead.ai_summary,
         has_data: true,
         mode: "overall",
         date: null,
         cached: true,
-        summary_created_at: currentLead.ai_summary_created_at
+        summary_created_at: currentLead.ai_summary_created_at,
       };
     }
 
@@ -420,63 +429,97 @@ export const getLeadSummaryService = async (
 
     let filteredMemory = memory;
     let promptInstruction = "";
-    const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+    const todayStr = new Date().toLocaleDateString("en-CA", {
+      timeZone: "Asia/Kolkata",
+    });
 
     // Re-apply date filters for memory slicing
     if (cleanTargetDate === "last_week") {
       const lastWeek = new Date();
       lastWeek.setDate(lastWeek.getDate() - 7);
-      startDate = lastWeek.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+      startDate = lastWeek.toLocaleDateString("en-CA", {
+        timeZone: "Asia/Kolkata",
+      });
       endDate = todayStr;
     } else if (cleanTargetDate === "last_month") {
       const lastMonth = new Date();
       lastMonth.setDate(lastMonth.getDate() - 30);
-      startDate = lastMonth.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+      startDate = lastMonth.toLocaleDateString("en-CA", {
+        timeZone: "Asia/Kolkata",
+      });
       endDate = todayStr;
     } else if (cleanTargetDate === "last_year") {
       const lastYear = new Date();
       lastYear.setDate(lastYear.getDate() - 365);
-      startDate = lastYear.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+      startDate = lastYear.toLocaleDateString("en-CA", {
+        timeZone: "Asia/Kolkata",
+      });
       endDate = todayStr;
     }
 
     if (startDate && endDate) {
       console.log(`Summary Filtering (IST): [${startDate}] to [${endDate}]`);
-      filteredMemory = memory.filter(m => {
+      filteredMemory = memory.filter((m) => {
         if (!m.created_at) return false;
         let msgDate = "";
         try {
           const dateObj = new Date(m.created_at);
-          msgDate = dateObj.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
-        } catch (e) { return false; }
+          msgDate = dateObj.toLocaleDateString("en-CA", {
+            timeZone: "Asia/Kolkata",
+          });
+        } catch (e) {
+          return false;
+        }
         return msgDate >= startDate && msgDate <= endDate;
       });
 
       if (filteredMemory.length === 0) {
-        const rangeInfo = startDate === endDate ? `on ${startDate}` : `between ${startDate} and ${endDate}`;
-        return { summary: `No interaction found ${rangeInfo}.`, has_data: false };
+        const rangeInfo =
+          startDate === endDate
+            ? `on ${startDate}`
+            : `between ${startDate} and ${endDate}`;
+        return {
+          summary: `No interaction found ${rangeInfo}.`,
+          has_data: false,
+        };
       }
 
-      promptInstruction = getLeadSummaryModeInstruction(cleanMode, startDate, endDate);
+      promptInstruction = getLeadSummaryModeInstruction(
+        cleanMode,
+        startDate,
+        endDate,
+      );
     } else {
       // Default / Overall mode logic
       filteredMemory = memory.slice(-20);
       promptInstruction = getLeadSummaryModeInstruction(cleanMode, null, null);
     }
 
-    const SUMMARIZE_PROMPT = getLeadSummarizePrompt(promptInstruction, JSON.stringify(filteredMemory, null, 2));
+    const SUMMARIZE_PROMPT = getLeadSummarizePrompt(
+      promptInstruction,
+      JSON.stringify(filteredMemory, null, 2),
+    );
 
     // 6. Generate Summary
-    const aiSummary = await AiService("system", SUMMARIZE_PROMPT);
+    const aiSummary = await AiService(
+      "system",
+      SUMMARIZE_PROMPT,
+      tenant_id,
+      "lead_summary",
+    );
 
     // 7. DB UPDATE LOGIC (Strictly Lazy)
     //    We ONLY update the DB if we are in 'overall' mode.
     //    Date-filtered summaries are temporary/view-only and should NOT overwrite the main status.
     let summaryCreatedAt = null;
 
-    const isTodayFilter = (startDate === todayStr && endDate === todayStr);
+    const isTodayFilter = startDate === todayStr && endDate === todayStr;
 
-    if (lead_id && (resultingMode === "overall" || (isTodayFilter && currentLead?.summary_status === "new"))) {
+    if (
+      lead_id &&
+      (resultingMode === "overall" ||
+        (isTodayFilter && currentLead?.summary_status === "new"))
+    ) {
       try {
         // Update Summary + Set Status to 'old' + Set Timestamp
         await db.sequelize.query(
@@ -485,16 +528,20 @@ export const getLeadSummaryService = async (
            WHERE tenant_id = ? AND lead_id = ? AND is_deleted = false`,
           {
             replacements: [aiSummary, tenant_id, lead_id],
-            type: db.Sequelize.QueryTypes.UPDATE
-          }
+            type: db.Sequelize.QueryTypes.UPDATE,
+          },
         );
         summaryCreatedAt = new Date(); // Approximate timestamp for immediate return
-        console.log(`[AI-SUMMARY] Saved usage-based summary & marked as 'old' for lead: ${lead_id} (Mode: ${resultingMode})`);
+        console.log(
+          `[AI-SUMMARY] Saved usage-based summary & marked as 'old' for lead: ${lead_id} (Mode: ${resultingMode})`,
+        );
       } catch (saveErr) {
         console.error("[AI-SUMMARY] Error saving summary:", saveErr.message);
       }
     } else {
-      console.log(`[AI-SUMMARY] generated (Mode: ${resultingMode}, Status: ${currentLead?.summary_status}) - NOT saving to DB to preserve overall status.`);
+      console.log(
+        `[AI-SUMMARY] generated (Mode: ${resultingMode}, Status: ${currentLead?.summary_status}) - NOT saving to DB to preserve overall status.`,
+      );
     }
 
     return {
@@ -502,9 +549,9 @@ export const getLeadSummaryService = async (
       has_data: true,
       mode: resultingMode,
       date: startDate === endDate ? startDate : null,
-      summary_created_at: summaryCreatedAt || (currentLead?.ai_summary_created_at)
+      summary_created_at:
+        summaryCreatedAt || currentLead?.ai_summary_created_at,
     };
-
   } catch (err) {
     console.error("Error in getLeadSummaryService:", err);
     throw err;
@@ -521,19 +568,43 @@ export const updateLeadStatusService = async (
   priority = undefined,
   source = undefined,
   internal_notes = undefined,
-  summary_status = undefined
+  summary_status = undefined,
 ) => {
   const updates = [];
   const replacements = [];
 
-  if (status !== undefined) { updates.push("status = ?"); replacements.push(status); }
-  if (heat_state !== undefined) { updates.push("heat_state = ?"); replacements.push(heat_state); }
-  if (lead_stage !== undefined) { updates.push("lead_stage = ?"); replacements.push(lead_stage); }
-  if (assigned_to !== undefined) { updates.push("assigned_to = ?"); replacements.push(assigned_to); }
-  if (priority !== undefined) { updates.push("priority = ?"); replacements.push(priority); }
-  if (source !== undefined) { updates.push("source = ?"); replacements.push(source); }
-  if (internal_notes !== undefined) { updates.push("internal_notes = ?"); replacements.push(internal_notes); }
-  if (summary_status !== undefined) { updates.push("summary_status = ?"); replacements.push(summary_status); }
+  if (status !== undefined) {
+    updates.push("status = ?");
+    replacements.push(status);
+  }
+  if (heat_state !== undefined) {
+    updates.push("heat_state = ?");
+    replacements.push(heat_state);
+  }
+  if (lead_stage !== undefined) {
+    updates.push("lead_stage = ?");
+    replacements.push(lead_stage);
+  }
+  if (assigned_to !== undefined) {
+    updates.push("assigned_to = ?");
+    replacements.push(assigned_to);
+  }
+  if (priority !== undefined) {
+    updates.push("priority = ?");
+    replacements.push(priority);
+  }
+  if (source !== undefined) {
+    updates.push("source = ?");
+    replacements.push(source);
+  }
+  if (internal_notes !== undefined) {
+    updates.push("internal_notes = ?");
+    replacements.push(internal_notes);
+  }
+  if (summary_status !== undefined) {
+    updates.push("summary_status = ?");
+    replacements.push(summary_status);
+  }
 
   if (updates.length === 0) return null;
 
@@ -562,7 +633,6 @@ export const updateLeadStatusService = async (
   }
 };
 
-
 export const deleteLeadService = async (tenant_id, lead_id) => {
   const Query = `UPDATE ${tableNames?.LEADS} SET is_deleted = true, deleted_at = NOW() WHERE tenant_id = ? AND lead_id = ? AND is_deleted = false`;
 
@@ -576,7 +646,6 @@ export const deleteLeadService = async (tenant_id, lead_id) => {
   }
 };
 
-
 export const permanentDeleteLeadService = async (tenant_id, lead_id) => {
   const Query = `DELETE FROM ${tableNames?.LEADS} WHERE tenant_id = ? AND lead_id = ?`;
 
@@ -589,7 +658,6 @@ export const permanentDeleteLeadService = async (tenant_id, lead_id) => {
     throw err;
   }
 };
-
 
 export const getDeletedLeadListService = async (tenant_id) => {
   const dataQuery = `
@@ -633,7 +701,7 @@ export const getDeletedLeadListService = async (tenant_id) => {
     }
 
     // 2. Fetch last 4 messages for these leads for preview
-    const contactIds = leads.map(l => l.contact_id);
+    const contactIds = leads.map((l) => l.contact_id);
     const messagesQuery = `
       SELECT contact_id, sender, message, created_at
       FROM (
@@ -658,9 +726,9 @@ export const getDeletedLeadListService = async (tenant_id) => {
       return acc;
     }, {});
 
-    const leadsWithMessages = leads.map(lead => ({
+    const leadsWithMessages = leads.map((lead) => ({
       ...lead,
-      last_messages: messagesMap[lead.contact_id] || []
+      last_messages: messagesMap[lead.contact_id] || [],
     }));
 
     return {
@@ -671,7 +739,6 @@ export const getDeletedLeadListService = async (tenant_id) => {
     throw err;
   }
 };
-
 
 export const restoreLeadService = async (lead_id, tenant_id) => {
   const Query = `UPDATE ${tableNames?.LEADS} SET is_deleted = false, deleted_at = NULL WHERE tenant_id = ? AND lead_id = ? AND is_deleted = true`;
@@ -692,17 +759,36 @@ export const restoreLeadService = async (lead_id, tenant_id) => {
 };
 
 export const bulkUpdateLeadsService = async (tenant_id, lead_ids, updates) => {
-  if (!lead_ids || !Array.isArray(lead_ids) || lead_ids.length === 0) return null;
+  if (!lead_ids || !Array.isArray(lead_ids) || lead_ids.length === 0)
+    return null;
 
   const setClauses = [];
   const replacements = [];
 
-  if (updates.status) { setClauses.push("status = ?"); replacements.push(updates.status); }
-  if (updates.heat_state) { setClauses.push("heat_state = ?"); replacements.push(updates.heat_state); }
-  if (updates.lead_stage) { setClauses.push("lead_stage = ?"); replacements.push(updates.lead_stage); }
-  if (updates.assigned_to !== undefined) { setClauses.push("assigned_to = ?"); replacements.push(updates.assigned_to); }
-  if (updates.priority) { setClauses.push("priority = ?"); replacements.push(updates.priority); }
-  if (updates.source) { setClauses.push("source = ?"); replacements.push(updates.source); }
+  if (updates.status) {
+    setClauses.push("status = ?");
+    replacements.push(updates.status);
+  }
+  if (updates.heat_state) {
+    setClauses.push("heat_state = ?");
+    replacements.push(updates.heat_state);
+  }
+  if (updates.lead_stage) {
+    setClauses.push("lead_stage = ?");
+    replacements.push(updates.lead_stage);
+  }
+  if (updates.assigned_to !== undefined) {
+    setClauses.push("assigned_to = ?");
+    replacements.push(updates.assigned_to);
+  }
+  if (updates.priority) {
+    setClauses.push("priority = ?");
+    replacements.push(updates.priority);
+  }
+  if (updates.source) {
+    setClauses.push("source = ?");
+    replacements.push(updates.source);
+  }
 
   if (setClauses.length === 0) return null;
 
@@ -711,7 +797,7 @@ export const bulkUpdateLeadsService = async (tenant_id, lead_ids, updates) => {
     SET ${setClauses.join(", ")}, updated_at = NOW()
     WHERE tenant_id = ? AND lead_id IN (?) AND is_deleted = false
   `;
-  
+
   replacements.push(tenant_id, lead_ids);
 
   try {
@@ -722,12 +808,16 @@ export const bulkUpdateLeadsService = async (tenant_id, lead_ids, updates) => {
     // ─── SYNC WITH LIVECHAT ──────────────────────────────────────────────────
     if (updates.assigned_to !== undefined) {
       const leadsQuery = `SELECT contact_id FROM ${tableNames.LEADS} WHERE tenant_id = ? AND lead_id IN (?)`;
-      const [leads] = await db.sequelize.query(leadsQuery, { replacements: [tenant_id, lead_ids] });
-      const contactIds = leads.map(l => l.contact_id).filter(Boolean);
+      const [leads] = await db.sequelize.query(leadsQuery, {
+        replacements: [tenant_id, lead_ids],
+      });
+      const contactIds = leads.map((l) => l.contact_id).filter(Boolean);
 
       if (contactIds.length > 0) {
         const syncQuery = `UPDATE ${tableNames.LIVECHAT} SET assigned_admin_id = ? WHERE tenant_id = ? AND contact_id IN (?)`;
-        await db.sequelize.query(syncQuery, { replacements: [updates.assigned_to, tenant_id, contactIds] });
+        await db.sequelize.query(syncQuery, {
+          replacements: [updates.assigned_to, tenant_id, contactIds],
+        });
       }
     }
 

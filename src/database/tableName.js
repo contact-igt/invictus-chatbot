@@ -32,4 +32,8 @@ export const tableNames = {
   MESSAGE_USAGE: "message_usage",
   PRICING_TABLE: "pricing_table",
   BILLING_LEDGER: "billing_ledger",
+  WALLETS: "wallets",
+  WALLET_TRANSACTIONS: "wallet_transactions",
+  AI_TOKEN_USAGE: "ai_token_usage",
+  AI_PRICING: "ai_pricing",
 };

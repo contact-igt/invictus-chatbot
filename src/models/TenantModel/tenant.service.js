@@ -101,11 +101,17 @@ export const updateTenantService = async (
   owner_country_code,
   owner_mobile,
   type,
+  status,
+  subscription_start_date,
+  subscription_end_date,
   address,
+  city,
   country,
   state,
-  city,
   pincode,
+  max_users,
+  subscription_plan,
+  profile,
   tenant_id,
 ) => {
   const updateFields = [];
@@ -141,6 +147,24 @@ export const updateTenantService = async (
     updateValues.push(type);
   }
 
+  if (status !== undefined && status !== null) {
+    updateFields.push("status = ?");
+    updateValues.push(status);
+  }
+
+  if (
+    subscription_start_date !== undefined &&
+    subscription_start_date !== null
+  ) {
+    updateFields.push("subscription_start_date = ?");
+    updateValues.push(subscription_start_date);
+  }
+
+  if (subscription_end_date !== undefined && subscription_end_date !== null) {
+    updateFields.push("subscription_end_date = ?");
+    updateValues.push(subscription_end_date);
+  }
+
   if (address !== undefined && address !== null) {
     updateFields.push("address = ?");
     updateValues.push(address);
@@ -164,6 +188,21 @@ export const updateTenantService = async (
   if (pincode !== undefined && pincode !== null) {
     updateFields.push("pincode = ?");
     updateValues.push(pincode);
+  }
+
+  if (max_users !== undefined && max_users !== null) {
+    updateFields.push("max_users = ?");
+    updateValues.push(max_users);
+  }
+
+  if (subscription_plan !== undefined && subscription_plan !== null) {
+    updateFields.push("subscription_plan = ?");
+    updateValues.push(subscription_plan);
+  }
+
+  if (profile !== undefined && profile !== null) {
+    updateFields.push("profile = ?");
+    updateValues.push(profile);
   }
 
   if (updateFields.length === 0) return null;
@@ -260,15 +299,24 @@ export const getDeletedTenantListService = async () => {
 };
 
 export const restoreTenantService = async (tenant_id) => {
+  // Restore tenant — preserve original status if it was 'invited' or 'trial', otherwise default to 'active'
   const Query = `
     UPDATE ${tableNames.TENANTS}
-    SET is_deleted = ?, deleted_at = NULL, status = 'active'
+    SET is_deleted = ?, deleted_at = NULL,
+        status = CASE
+          WHEN status IN ('invited', 'trial', 'pending_setup') THEN status
+          ELSE 'active'
+        END
     WHERE tenant_id = ?
   `;
 
   const Query2 = `
     UPDATE ${tableNames.TENANT_USERS}
-    SET is_deleted = ?, deleted_at = NULL, status = 'active'
+    SET is_deleted = ?, deleted_at = NULL,
+        status = CASE
+          WHEN (SELECT status FROM ${tableNames.TENANTS} WHERE tenant_id = ?) IN ('active', 'trial', 'grace_period') THEN 'active'
+          ELSE 'inactive'
+        END
     WHERE tenant_id = ?
   `;
 
@@ -278,7 +326,7 @@ export const restoreTenantService = async (tenant_id) => {
     });
 
     const [result2] = await db.sequelize.query(Query2, {
-      replacements: [0, tenant_id],
+      replacements: [0, tenant_id, tenant_id],
     });
 
     return [result, result2];
@@ -300,7 +348,10 @@ export const activateTenantService = async (tenant_id) => {
   }
 };
 
-export const updateTenantVerifyTokenService = async (tenant_id, verify_token) => {
+export const updateTenantVerifyTokenService = async (
+  tenant_id,
+  verify_token,
+) => {
   const Query = `UPDATE ${tableNames?.TENANTS} SET verify_token = ? WHERE tenant_id = ? AND is_deleted = ?`;
 
   try {
@@ -368,14 +419,14 @@ export const getOnboardedTenantListService = async () => {
 };
 
 export const getTenantSettingsService = async (tenant_id) => {
-  const Query = `SELECT company_name, owner_email, owner_name, type, ai_settings FROM ${tableNames?.TENANTS} WHERE tenant_id = ? AND is_deleted = ?`;
+  const Query = `SELECT company_name, owner_email, owner_name, type, ai_settings, default_contact_name FROM ${tableNames?.TENANTS} WHERE tenant_id = ? AND is_deleted = ?`;
 
   try {
     const [result] = await db.sequelize.query(Query, {
       replacements: [tenant_id, 0],
     });
     const tenantData = result[0];
-    if (tenantData && typeof tenantData.ai_settings === 'string') {
+    if (tenantData && typeof tenantData.ai_settings === "string") {
       try {
         tenantData.ai_settings = JSON.parse(tenantData.ai_settings);
       } catch (e) {
@@ -391,10 +442,10 @@ export const getTenantSettingsService = async (tenant_id) => {
 export const updateTenantAiSettingsService = async (tenant_id, ai_settings) => {
   // Merge existing settings before updating
   const currentSettings = await getTenantSettingsService(tenant_id);
-  
+
   let parsedSettings = {};
   if (currentSettings && currentSettings.ai_settings) {
-    if (typeof currentSettings.ai_settings === 'string') {
+    if (typeof currentSettings.ai_settings === "string") {
       try {
         parsedSettings = JSON.parse(currentSettings.ai_settings);
       } catch (e) {
@@ -407,7 +458,7 @@ export const updateTenantAiSettingsService = async (tenant_id, ai_settings) => {
 
   const updatedSettings = {
     ...parsedSettings,
-    ...ai_settings
+    ...ai_settings,
   };
 
   const Query = `UPDATE ${tableNames?.TENANTS} SET ai_settings = ? WHERE tenant_id = ? AND is_deleted = ?`;
@@ -417,6 +468,22 @@ export const updateTenantAiSettingsService = async (tenant_id, ai_settings) => {
       replacements: [JSON.stringify(updatedSettings), tenant_id, 0],
     });
     return Object.keys(result).length > 0;
+  } catch (err) {
+    throw err;
+  }
+};
+
+export const updateTenantGeneralSettingsService = async (
+  tenant_id,
+  default_contact_name,
+) => {
+  const Query = `UPDATE ${tableNames?.TENANTS} SET default_contact_name = ? WHERE tenant_id = ? AND is_deleted = ?`;
+
+  try {
+    const [result] = await db.sequelize.query(Query, {
+      replacements: [default_contact_name || null, tenant_id, 0],
+    });
+    return result;
   } catch (err) {
     throw err;
   }

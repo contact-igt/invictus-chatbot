@@ -3,6 +3,8 @@ import { buildAiSystemPrompt } from "../../utils/ai/aiFlowHelper.js";
 import { searchKnowledgeChunks } from "../Knowledge/knowledge.search.js";
 import { processResponse } from "../../utils/ai/aiTagHandlers/index.js";
 import { classifyResponse } from "../../utils/ai/responseClassifier.js";
+import { getTenantAiModel } from "../../utils/ai/getTenantAiModel.js";
+import { trackAiTokenUsage } from "../../utils/ai/trackAiTokenUsage.js";
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -28,12 +30,8 @@ export const playgroundChatService = async (
     };
 
     // Use centralized AI flow helper for parity with production WhatsApp
-    const { systemPrompt, knowledgeSources, chunks, resolvedContext } = await buildAiSystemPrompt(
-      tenant_id,
-      contact_id,
-      languageInfo,
-      message
-    );
+    const { systemPrompt, knowledgeSources, chunks, resolvedContext } =
+      await buildAiSystemPrompt(tenant_id, contact_id, languageInfo, message);
 
     const sources = knowledgeSources;
 
@@ -53,8 +51,10 @@ export const playgroundChatService = async (
     // Add current user message
     messages.push({ role: "user", content: message });
 
+    const outputModel = await getTenantAiModel(tenant_id, "output");
+
     const response = await openai.chat.completions.create({
-      model: "gpt-4o",
+      model: outputModel,
       temperature: 0.1,
       top_p: 0.9,
       max_tokens: 500,
@@ -63,6 +63,13 @@ export const playgroundChatService = async (
 
     const rawReply = response?.choices?.[0]?.message?.content?.trim();
     const tokenUsage = response?.usage || {};
+
+    // Track token usage
+    if (tenant_id) {
+      await trackAiTokenUsage(tenant_id, "playground", response).catch((e) =>
+        console.error("[PLAYGROUND] Token tracking failed:", e.message),
+      );
+    }
 
     console.log("[PLAYGROUND-AI-RAW]", rawReply);
 
@@ -77,13 +84,19 @@ export const playgroundChatService = async (
 
     // If tags detected, simulate execution log (without actually persisting)
     if (processed.tagDetected) {
-      tagExecutionLog.push(`Detected tag: [${processed.tagDetected}${processed.tagPayload ? ': ' + processed.tagPayload : ''}]`);
-      
-      if (processed.tagDetected === "BOOK_APPOINTMENT" && processed.tagPayload) {
+      tagExecutionLog.push(
+        `Detected tag: [${processed.tagDetected}${processed.tagPayload ? ": " + processed.tagPayload : ""}]`,
+      );
+
+      if (
+        processed.tagDetected === "BOOK_APPOINTMENT" &&
+        processed.tagPayload
+      ) {
         tagExecutionLog.push("Simulating Appointment Booking Handler...");
         // If the AI's reply is empty after removing the tag, show a default confirmation
         if (!finalReply || !finalReply.trim()) {
-          finalReply = "✅ [SIMULATED] Your appointment has been booked! (Data not saved to DB)";
+          finalReply =
+            "✅ [SIMULATED] Your appointment has been booked! (Data not saved to DB)";
         }
       }
     }
@@ -91,8 +104,10 @@ export const playgroundChatService = async (
     // Classify response
     let classification = null;
     try {
-      classification = await classifyResponse(message, finalReply);
-      tagExecutionLog.push(`Classification: ${classification.category} (${classification.reason})`);
+      classification = await classifyResponse(message, finalReply, tenant_id);
+      tagExecutionLog.push(
+        `Classification: ${classification.category} (${classification.reason})`,
+      );
     } catch (err) {
       console.error("[PLAYGROUND-CLASSIFIER] Error:", err.message);
     }
@@ -105,20 +120,23 @@ export const playgroundChatService = async (
         rawAIResponse: rawReply,
         knowledgeChunksUsed: chunks || [],
         resolvedLogsUsed: resolvedContext || "",
-        detectedTags: processed.tagDetected ? {
-          tag: processed.tagDetected,
-          payload: processed.tagPayload
-        } : null,
+        detectedTags: processed.tagDetected
+          ? {
+              tag: processed.tagDetected,
+              payload: processed.tagPayload,
+            }
+          : null,
         tagExecutionHistory: tagExecutionLog,
         classification,
       },
       knowledgeSources: sources,
-      responseOrigin: chunks && chunks.length > 0 ? "knowledge_base" : "ai_generated",
+      responseOrigin:
+        chunks && chunks.length > 0 ? "knowledge_base" : "ai_generated",
       tokenUsage: {
         prompt_tokens: tokenUsage.prompt_tokens || 0,
         completion_tokens: tokenUsage.completion_tokens || 0,
         total_tokens: tokenUsage.total_tokens || 0,
-      }
+      },
     };
   } catch (err) {
     console.error("[PLAYGROUND] Error:", err.message);

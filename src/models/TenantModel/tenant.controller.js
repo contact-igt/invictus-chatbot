@@ -16,6 +16,9 @@ import {
   restoreTenantService,
   getTenantInvitationListService,
   getOnboardedTenantListService,
+  getTenantSettingsService,
+  updateTenantAiSettingsService,
+  updateTenantGeneralSettingsService,
 } from "./tenant.service.js";
 
 import {
@@ -106,7 +109,7 @@ export const createTenantController = async (req, res) => {
       cleanedCC,
       normalizedMobile,
       type,
-      subscriptionStatus || 'invited',
+      subscriptionStatus || "invited",
       subscription_start_date || null,
       subscription_end_date || null,
       address || null,
@@ -115,7 +118,7 @@ export const createTenantController = async (req, res) => {
       state || null,
       pincode || null,
       maxUsers || 10,
-      subscriptionPlan || 'basic',
+      subscriptionPlan || "basic",
       profile || null,
     );
 
@@ -135,8 +138,8 @@ export const createTenantController = async (req, res) => {
       normalizedMobile,
       profile || null,
       "tenant_admin",
-      null,        // password_hash — null until invitation is accepted
-      "inactive",  // user_status — inactive until invitation is accepted
+      null, // password_hash — null until invitation is accepted
+      "inactive", // user_status — inactive until invitation is accepted
     );
 
     await sendTenantInvitationService(
@@ -232,14 +235,23 @@ export const updateTenantController = async (req, res) => {
       : null;
 
     const trimmedEmail = owner_email?.trim()?.toLowerCase();
-    console.log(`[UPDATE TENANT] ID: ${id}, New Email: ${trimmedEmail}, Old Email: ${tenant.owner_email}`);
+    console.log(
+      `[UPDATE TENANT] ID: ${id}, New Email: ${trimmedEmail}, Old Email: ${tenant.owner_email}`,
+    );
 
     // Check for duplicate email if it's changing
     if (trimmedEmail && trimmedEmail !== tenant.owner_email) {
-      const existingUser = await findTenantUserByEmailOrMobileGloballyService(trimmedEmail, null);
+      const existingUser = await findTenantUserByEmailOrMobileGloballyService(
+        trimmedEmail,
+        null,
+      );
       if (existingUser) {
-        console.log(`[UPDATE TENANT] Duplicate email detected: ${trimmedEmail}`);
-        return res.status(400).json({ message: "Email already in use by another account" });
+        console.log(
+          `[UPDATE TENANT] Duplicate email detected: ${trimmedEmail}`,
+        );
+        return res
+          .status(400)
+          .json({ message: "Email already in use by another account" });
       }
     }
 
@@ -266,7 +278,9 @@ export const updateTenantController = async (req, res) => {
 
     // Sync changes to the primary tenant admin user
     const tenantAdmin = await findTenantAdminService(id);
-    console.log(`[UPDATE TENANT] Admin Found: ${tenantAdmin ? tenantAdmin.tenant_user_id : "NO"}`);
+    console.log(
+      `[UPDATE TENANT] Admin Found: ${tenantAdmin ? tenantAdmin.tenant_user_id : "NO"}`,
+    );
 
     if (tenantAdmin) {
       await updateTenantUserByIdService(tenantAdmin.tenant_user_id, {
@@ -280,7 +294,9 @@ export const updateTenantController = async (req, res) => {
     // If email changed and user hasn't registered yet, send a new invitation
     if (trimmedEmail && trimmedEmail !== tenant.owner_email) {
       if (tenantAdmin && !tenantAdmin.password_hash) {
-        console.log(`[UPDATE TENANT] Sending new invitation to: ${trimmedEmail}`);
+        console.log(
+          `[UPDATE TENANT] Sending new invitation to: ${trimmedEmail}`,
+        );
         await sendTenantInvitationService(
           id,
           tenantAdmin.tenant_user_id,
@@ -290,7 +306,9 @@ export const updateTenantController = async (req, res) => {
           req.user?.unique_id,
         );
       } else {
-        console.log(`[UPDATE TENANT] Skip invitation (User already has password or no admin found)`);
+        console.log(
+          `[UPDATE TENANT] Skip invitation (User already has password or no admin found)`,
+        );
       }
     }
 
@@ -340,14 +358,17 @@ export const updateTenantStatusController = async (req, res) => {
       });
     }
 
-    await updateTenantStatusService(status, id);
+    // Wrap in transaction to ensure atomic status sync
+    await db.sequelize.transaction(async (t) => {
+      await updateTenantStatusService(status, id);
 
-    // Sync status to the tenant's users
-    let userStatus = "inactive";
-    if (["active", "trial", "grace_period"].includes(status)) {
-       userStatus = "active";
-    }
-    await updateUsersStatusByTenantIdService(id, userStatus);
+      // Sync status to the tenant's users
+      let userStatus = "inactive";
+      if (["active", "trial", "grace_period"].includes(status)) {
+        userStatus = "active";
+      }
+      await updateUsersStatusByTenantIdService(id, userStatus);
+    });
 
     return res.status(200).send({
       message: "Tenant status updated successfully",
@@ -368,7 +389,7 @@ export const softDeleteTenantController = async (req, res) => {
     }
 
     await softDeleteTenantService(id);
-    await softDeleteUsersByTenantIdService(id);
+    // softDeleteTenantService already soft-deletes associated users
 
     return res.status(200).send({
       message: "Tenant and all associated users removed successfully",
@@ -477,12 +498,10 @@ export const getTenantWebhookStatusController = async (req, res) => {
 
     // 🔒 Security Check: A tenant user can only check their OWN webhook status
     if (loginUser.user_type === "tenant" && loginUser.tenant_id !== id) {
-      return res
-        .status(403)
-        .json({
-          message:
-            "Access denied: You can only check your own organization's status",
-        });
+      return res.status(403).json({
+        message:
+          "Access denied: You can only check your own organization's status",
+      });
     }
 
     const tenant = await findTenantByIdService(id);
@@ -501,8 +520,6 @@ export const getTenantWebhookStatusController = async (req, res) => {
     return res.status(500).json({ error: err.message });
   }
 };
-
-
 
 export const getTenantInvitationListController = async (req, res) => {
   try {
@@ -532,7 +549,7 @@ export const getOnboardedTenantListController = async (req, res) => {
 export const getTenantSettingsController = async (req, res) => {
   try {
     const tenant_id = req.user.tenant_id;
-    const { getTenantSettingsService } = await import("./tenant.service.js");
+    console.log(`[SETTINGS GET] tenant_id=${tenant_id}`);
     const settings = await getTenantSettingsService(tenant_id);
     if (!settings) return res.status(404).json({ message: "Tenant not found" });
     return res.status(200).json({ message: "success", data: settings });
@@ -545,9 +562,62 @@ export const updateTenantAiSettingsController = async (req, res) => {
   try {
     const tenant_id = req.user.tenant_id;
     const { ai_settings } = req.body;
-    const { updateTenantAiSettingsService } = await import("./tenant.service.js");
+
+    // Validate model selections if provided
+    if (ai_settings?.input_model || ai_settings?.output_model) {
+      const activeModels = await db.AiPricing.findAll({
+        where: { is_active: true },
+        attributes: ["model"],
+        raw: true,
+      });
+      const validModels = new Set(activeModels.map((m) => m.model));
+
+      if (
+        ai_settings.input_model &&
+        !validModels.has(ai_settings.input_model)
+      ) {
+        return res.status(400).json({
+          message: `Invalid input model: ${ai_settings.input_model}. Please select an active model.`,
+        });
+      }
+      if (
+        ai_settings.output_model &&
+        !validModels.has(ai_settings.output_model)
+      ) {
+        return res.status(400).json({
+          message: `Invalid output model: ${ai_settings.output_model}. Please select an active model.`,
+        });
+      }
+    }
+
     await updateTenantAiSettingsService(tenant_id, ai_settings);
     return res.status(200).json({ message: "Settings updated successfully" });
+  } catch (err) {
+    return res.status(500).json({ message: err.message });
+  }
+};
+
+export const updateTenantGeneralSettingsController = async (req, res) => {
+  try {
+    const tenant_id = req.user.tenant_id;
+    const { default_contact_name } = req.body;
+    console.log(
+      `[SETTINGS PATCH] tenant_id=${tenant_id}, default_contact_name=${default_contact_name}`,
+    );
+
+    if (!default_contact_name || default_contact_name.trim() === "") {
+      return res
+        .status(400)
+        .json({ message: "Default contact name is required." });
+    }
+
+    await updateTenantGeneralSettingsService(
+      tenant_id,
+      default_contact_name.trim(),
+    );
+    return res
+      .status(200)
+      .json({ message: "General Settings updated successfully" });
   } catch (err) {
     return res.status(500).json({ message: err.message });
   }

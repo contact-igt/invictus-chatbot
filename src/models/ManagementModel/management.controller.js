@@ -23,20 +23,25 @@ import {
   createPricingRuleService,
   updatePricingRuleService,
   deletePricingRuleService,
+  getAiPricingRulesService,
+  createAiPricingRuleService,
+  updateAiPricingRuleService,
+  deleteAiPricingRuleService,
 } from "./management.service.js";
 import db from "../../database/index.js";
 import { tableNames } from "../../database/tableName.js";
 import { generatePassword } from "../../utils/helpers/generatePassword.js";
 import { getTemplate } from "../../utils/email/templateLoader.js";
 import { sendEmail } from "../../utils/email/emailService.js";
-import { normalizeMobile, cleanCountryCode } from "../../utils/helpers/normalizeMobile.js";
+import {
+  normalizeMobile,
+  cleanCountryCode,
+} from "../../utils/helpers/normalizeMobile.js";
 import {
   generateOTPService,
   verifyOTPService,
   checkOTPVerificationService,
 } from "../OtpVerificationModel/otpverification.service.js";
-
-
 
 export const registerManagementController = async (req, res) => {
   try {
@@ -386,8 +391,6 @@ export const deleteManagmentByIdController = async (req, res) => {
   }
 };
 
-
-
 export const forgotManagementPasswordController = async (req, res) => {
   try {
     const { email } = req.body;
@@ -492,10 +495,56 @@ export const createPricingRuleController = async (req, res) => {
   try {
     const { category, country, rate, markup_percent } = req.body;
     if (!category || !country || rate === undefined) {
-      return res.status(400).json({ success: false, message: "category, country, and rate are required" });
+      return res.status(400).json({
+        success: false,
+        message: "category, country, and rate are required",
+      });
     }
-    await createPricingRuleService(category, country, rate, markup_percent || 0);
-    return res.status(201).json({ success: true, message: "Pricing rule created" });
+
+    const validCategories = [
+      "marketing",
+      "utility",
+      "authentication",
+      "service",
+    ];
+    if (!validCategories.includes(category)) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid category. Must be one of: ${validCategories.join(", ")}`,
+      });
+    }
+
+    const parsedRate = parseFloat(rate);
+    if (isNaN(parsedRate) || parsedRate < 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Rate must be a non-negative number",
+      });
+    }
+
+    const parsedMarkup = parseFloat(markup_percent || 0);
+    if (isNaN(parsedMarkup) || parsedMarkup < 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Markup percentage must be a non-negative number",
+      });
+    }
+
+    if (!country.trim()) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Country code cannot be empty" });
+    }
+
+    await createPricingRuleService(
+      category,
+      country.trim(),
+      parsedRate,
+      parsedMarkup,
+    );
+    return res
+      .status(201)
+      .json({ success: true, message: "Pricing rule created" });
   } catch (err) {
     return res.status(400).json({ success: false, message: err.message });
   }
@@ -505,8 +554,31 @@ export const updatePricingRuleController = async (req, res) => {
   try {
     const { id } = req.params;
     const { rate, markup_percent } = req.body;
+
+    if (rate !== undefined && rate !== null) {
+      const parsedRate = parseFloat(rate);
+      if (isNaN(parsedRate) || parsedRate < 0) {
+        return res.status(400).json({
+          success: false,
+          message: "Rate must be a non-negative number",
+        });
+      }
+    }
+
+    if (markup_percent !== undefined && markup_percent !== null) {
+      const parsedMarkup = parseFloat(markup_percent);
+      if (isNaN(parsedMarkup) || parsedMarkup < 0) {
+        return res.status(400).json({
+          success: false,
+          message: "Markup percentage must be a non-negative number",
+        });
+      }
+    }
+
     await updatePricingRuleService(id, rate, markup_percent);
-    return res.status(200).json({ success: true, message: "Pricing rule updated" });
+    return res
+      .status(200)
+      .json({ success: true, message: "Pricing rule updated" });
   } catch (err) {
     return res.status(400).json({ success: false, message: err.message });
   }
@@ -516,7 +588,199 @@ export const deletePricingRuleController = async (req, res) => {
   try {
     const { id } = req.params;
     await deletePricingRuleService(id);
-    return res.status(200).json({ success: true, message: "Pricing rule deleted" });
+    return res
+      .status(200)
+      .json({ success: true, message: "Pricing rule deleted" });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// ─── AI Model Pricing Controllers ─────────────────────────────
+
+export const getAiPricingRulesController = async (req, res) => {
+  try {
+    const rules = await getAiPricingRulesService();
+    return res.status(200).json({ success: true, data: rules });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+export const createAiPricingRuleController = async (req, res) => {
+  try {
+    const {
+      model,
+      input_rate,
+      output_rate,
+      markup_percent,
+      usd_to_inr_rate,
+      description,
+      recommended_for,
+      category,
+    } = req.body;
+
+    if (!model || input_rate === undefined || output_rate === undefined) {
+      return res.status(400).json({
+        success: false,
+        message: "model, input_rate, and output_rate are required",
+      });
+    }
+
+    const trimmedModel = model.trim().toLowerCase();
+    if (!trimmedModel) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Model name cannot be empty" });
+    }
+
+    const parsedInputRate = parseFloat(input_rate);
+    const parsedOutputRate = parseFloat(output_rate);
+    if (isNaN(parsedInputRate) || parsedInputRate < 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Input rate must be a non-negative number",
+      });
+    }
+    if (isNaN(parsedOutputRate) || parsedOutputRate < 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Output rate must be a non-negative number",
+      });
+    }
+
+    const parsedMarkup = parseFloat(markup_percent || 0);
+    if (isNaN(parsedMarkup) || parsedMarkup < 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Markup must be a non-negative number",
+      });
+    }
+
+    const parsedExchangeRate = parseFloat(usd_to_inr_rate || 85);
+    if (isNaN(parsedExchangeRate) || parsedExchangeRate <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Exchange rate must be a positive number",
+      });
+    }
+
+    const VALID_RECOMMENDED = ["input", "output", "both"];
+    const VALID_CATEGORY = ["premium", "mid-tier", "budget", "reasoning"];
+    const finalRecommendedFor = VALID_RECOMMENDED.includes(recommended_for)
+      ? recommended_for
+      : "both";
+    const finalCategory = VALID_CATEGORY.includes(category)
+      ? category
+      : "mid-tier";
+
+    const rule = await createAiPricingRuleService(
+      trimmedModel,
+      parsedInputRate,
+      parsedOutputRate,
+      parsedMarkup,
+      parsedExchangeRate,
+      description || null,
+      finalRecommendedFor,
+      finalCategory,
+    );
+    return res
+      .status(201)
+      .json({ success: true, message: "AI pricing rule created", data: rule });
+  } catch (err) {
+    return res.status(400).json({ success: false, message: err.message });
+  }
+};
+
+export const updateAiPricingRuleController = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const {
+      input_rate,
+      output_rate,
+      markup_percent,
+      usd_to_inr_rate,
+      is_active,
+      description,
+      recommended_for,
+      category,
+    } = req.body;
+
+    if (input_rate !== undefined) {
+      const parsed = parseFloat(input_rate);
+      if (isNaN(parsed) || parsed < 0) {
+        return res.status(400).json({
+          success: false,
+          message: "Input rate must be a non-negative number",
+        });
+      }
+    }
+    if (output_rate !== undefined) {
+      const parsed = parseFloat(output_rate);
+      if (isNaN(parsed) || parsed < 0) {
+        return res.status(400).json({
+          success: false,
+          message: "Output rate must be a non-negative number",
+        });
+      }
+    }
+    if (markup_percent !== undefined) {
+      const parsed = parseFloat(markup_percent);
+      if (isNaN(parsed) || parsed < 0) {
+        return res.status(400).json({
+          success: false,
+          message: "Markup must be a non-negative number",
+        });
+      }
+    }
+    if (usd_to_inr_rate !== undefined) {
+      const parsed = parseFloat(usd_to_inr_rate);
+      if (isNaN(parsed) || parsed <= 0) {
+        return res.status(400).json({
+          success: false,
+          message: "Exchange rate must be a positive number",
+        });
+      }
+    }
+
+    const VALID_RECOMMENDED = ["input", "output", "both"];
+    const VALID_CATEGORY = ["premium", "mid-tier", "budget", "reasoning"];
+
+    const rule = await updateAiPricingRuleService(id, {
+      input_rate: input_rate !== undefined ? parseFloat(input_rate) : undefined,
+      output_rate:
+        output_rate !== undefined ? parseFloat(output_rate) : undefined,
+      markup_percent:
+        markup_percent !== undefined ? parseFloat(markup_percent) : undefined,
+      usd_to_inr_rate:
+        usd_to_inr_rate !== undefined ? parseFloat(usd_to_inr_rate) : undefined,
+      is_active,
+      description: description !== undefined ? description : undefined,
+      recommended_for:
+        recommended_for !== undefined &&
+        VALID_RECOMMENDED.includes(recommended_for)
+          ? recommended_for
+          : undefined,
+      category:
+        category !== undefined && VALID_CATEGORY.includes(category)
+          ? category
+          : undefined,
+    });
+    return res
+      .status(200)
+      .json({ success: true, message: "AI pricing rule updated", data: rule });
+  } catch (err) {
+    return res.status(400).json({ success: false, message: err.message });
+  }
+};
+
+export const deleteAiPricingRuleController = async (req, res) => {
+  try {
+    const { id } = req.params;
+    await deleteAiPricingRuleService(id);
+    return res
+      .status(200)
+      .json({ success: true, message: "AI pricing rule deleted" });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }

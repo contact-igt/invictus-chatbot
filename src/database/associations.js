@@ -522,5 +522,45 @@ export const defineAssociations = (db) => {
     constraints: false,
   });
 
+  // MessageUsage → Messages (One-to-One via WAMID)
+  db.MessageUsage.belongsTo(db.Messages, {
+    foreignKey: "message_id",
+    targetKey: "wamid",
+    as: "messageDetails",
+    constraints: false,
+  });
+
+  // ========================================
+  // WALLET MODULE RELATIONSHIPS
+  // ========================================
+
+  // Tenant → Wallet (One-to-One)
+  db.Tenants.hasOne(db.Wallets, {
+    foreignKey: "tenant_id",
+    sourceKey: "tenant_id",
+    as: "wallet",
+    constraints: false,
+  });
+  db.Wallets.belongsTo(db.Tenants, {
+    foreignKey: "tenant_id",
+    targetKey: "tenant_id",
+    as: "tenant",
+    constraints: false,
+  });
+
+  // Tenant → WalletTransactions (One-to-Many)
+  db.Tenants.hasMany(db.WalletTransactions, {
+    foreignKey: "tenant_id",
+    sourceKey: "tenant_id",
+    as: "walletTransactions",
+    constraints: false,
+  });
+  db.WalletTransactions.belongsTo(db.Tenants, {
+    foreignKey: "tenant_id",
+    targetKey: "tenant_id",
+    as: "tenant",
+    constraints: false,
+  });
+
   return db;
 };

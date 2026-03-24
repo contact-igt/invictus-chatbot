@@ -56,7 +56,7 @@ export const TenantsTable = (sequelize, Sequelize) => {
         type: Sequelize.STRING,
         allowNull: true,
       },
-      
+
       country: {
         type: Sequelize.STRING,
         allowNull: true,
@@ -95,7 +95,7 @@ export const TenantsTable = (sequelize, Sequelize) => {
           "expired",
           "pending_setup",
           "grace_period",
-          "maintenance"
+          "maintenance",
         ),
         defaultValue: "invited",
         allowNull: false,
@@ -138,6 +138,11 @@ export const TenantsTable = (sequelize, Sequelize) => {
         allowNull: true,
       },
 
+      default_contact_name: {
+        type: Sequelize.STRING,
+        allowNull: true,
+      },
+
       ai_settings: {
         type: Sequelize.JSON,
         allowNull: true,
@@ -145,8 +150,10 @@ export const TenantsTable = (sequelize, Sequelize) => {
           auto_responder: true,
           smart_reply: true,
           neural_summary: true,
-          content_generation: true
-        }
+          content_generation: true,
+          input_model: "gpt-4o-mini",
+          output_model: "gpt-4o",
+        },
       },
 
       createdAt: {

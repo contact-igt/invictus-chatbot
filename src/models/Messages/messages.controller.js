@@ -122,8 +122,12 @@ export const sendAdminMessage = async (req, res) => {
       phone: formattedPhone,
       id: savedMsg?.id,
       contact_id,
+      phone_number_id: msgResponse.phone_number_id,
       name,
       message,
+      message_type: "text",
+      media_url: null,
+      status: "sent",
       sender: "admin",
       created_at: new Date(),
     });
@@ -164,13 +168,15 @@ export const markSeenMessage = async (req, res) => {
 export const suggestReplyController = async (req, res) => {
   const { phone } = req.body;
   const tenant_id = req.user.tenant_id;
-  const { getTenantSettingsService } = await import("../TenantModel/tenant.service.js");
+  const { getTenantSettingsService } =
+    await import("../TenantModel/tenant.service.js");
   const tenantSettings = await getTenantSettingsService(tenant_id);
 
   if (tenantSettings?.ai_settings?.smart_reply === false) {
     return res.status(403).json({
       success: false,
-      message: "Smart Reply is disabled for your organization. Please enable it in Settings.",
+      message:
+        "Smart Reply is disabled for your organization. Please enable it in Settings.",
     });
   }
 
@@ -219,6 +225,24 @@ export const sendTemplateMessageController = async (req, res) => {
     // 2. Render content for DB
     const messageContent = await renderTemplateContent(template_id, components);
 
+    // Extract media_url and type from header component if present
+    const headerComp = components?.find((c) => c.type === "header");
+    let templateMediaUrl = null;
+    let templateMediaType = "template";
+    if (headerComp?.parameters?.[0]) {
+      const p = headerComp.parameters[0];
+      if (p.image?.link) {
+        templateMediaUrl = p.image.link;
+        templateMediaType = "image";
+      } else if (p.video?.link) {
+        templateMediaUrl = p.video.link;
+        templateMediaType = "video";
+      } else if (p.document?.link) {
+        templateMediaUrl = p.document.link;
+        templateMediaType = "document";
+      }
+    }
+
     if (!template) {
       return res.status(404).send({ message: "Template not found" });
     }
@@ -244,8 +268,8 @@ export const sendTemplateMessageController = async (req, res) => {
       "admin",
       null,
       messageContent,
-      "template",
-      null,
+      templateMediaType,
+      templateMediaUrl,
       null,
       "sent",
       template.template_name,
@@ -262,16 +286,29 @@ export const sendTemplateMessageController = async (req, res) => {
       await updateLiveChatTimestampService(tenant_id, contact_id);
     }
 
+    // Fetch contact name for socket emit
+    let templateContactName = formattedPhone;
+    try {
+      const templateContact = await db.Contacts.findOne({
+        where: { contact_id, tenant_id },
+        attributes: ["name"],
+        raw: true,
+      });
+      if (templateContact?.name) templateContactName = templateContact.name;
+    } catch (_) {}
+
     const io = getIO();
     io.to(`tenant-${tenant_id}`).emit("new-message", {
       tenant_id,
       phone: formattedPhone,
       id: savedMsg?.id,
       contact_id,
-      name: contact?.name || formattedPhone,
+      name: templateContactName,
       message: messageContent,
       sender: "admin",
-      message_type: "template",
+      message_type: templateMediaType,
+      media_url: templateMediaUrl,
+      status: "sent",
       created_at: new Date(),
     });
 
@@ -295,9 +332,9 @@ export const sendTemplateMessageController = async (req, res) => {
 // ─── Send Test Message ───
 export const sendTestMessageController = async (req, res) => {
   const { phone, message_type, message, template_id, components } = req.body;
-  console.log("req.body", JSON.stringify(req.body, null, 2))
+  console.log("req.body", JSON.stringify(req.body, null, 2));
   const tenant_id = req.user.tenant_id;
-  console.log("components", JSON.stringify(components, null, 2))
+  console.log("components", JSON.stringify(components, null, 2));
   if (!tenant_id) {
     return res.status(400).send({ message: "Invalid tenant context" });
   }
@@ -440,7 +477,10 @@ export const sendTestMessageController = async (req, res) => {
       else await updateLiveChatTimestampService(tenant_id, contact?.contact_id);
 
       // 1. Render message content
-      const messageContent = await renderTemplateContent(template_id, components || []);
+      const messageContent = await renderTemplateContent(
+        template_id,
+        components || [],
+      );
 
       const savedMsg = await createUserMessageService(
         tenant_id,

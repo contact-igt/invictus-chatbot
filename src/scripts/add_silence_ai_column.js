@@ -1,4 +1,4 @@
-import db from "../src/database/index.js";
+import db from "../database/index.js";
 
 async function run() {
   try {
@@ -6,7 +6,10 @@ async function run() {
     await db.sequelize.query(Query);
     console.log("Column is_ai_silenced added to contacts table successfully.");
   } catch (err) {
-    if (err.message.includes("Duplicate column name") || err.message.includes("already exists")) {
+    if (
+      err.message.includes("Duplicate column name") ||
+      err.message.includes("already exists")
+    ) {
       console.log("Column is_ai_silenced already exists.");
     } else {
       console.error("Error adding column:", err.message);

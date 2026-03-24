@@ -2,6 +2,8 @@ import OpenAI from "openai";
 import db from "../../database/index.js";
 import { tableNames } from "../../database/tableName.js";
 import { SEARCH_REFINE_PROMPT } from "../../utils/ai/prompts/index.js";
+import { getTenantAiModel } from "../../utils/ai/getTenantAiModel.js";
+import { trackAiTokenUsage } from "../../utils/ai/trackAiTokenUsage.js";
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -10,16 +12,26 @@ const openai = new OpenAI({
 /**
  * Uses a fast LLM to refine a user's question into optimized search keywords.
  */
-export const analyzeQuestionForSearch = async (question) => {
+export const analyzeQuestionForSearch = async (question, tenant_id = null) => {
   try {
     const prompt = SEARCH_REFINE_PROMPT.replace("{QUESTION}", question);
 
+    const inputModel = await getTenantAiModel(tenant_id, "input");
+
     const response = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
+      model: inputModel,
       messages: [{ role: "user", content: prompt }],
       temperature: 0,
       max_tokens: 50,
     });
+
+    // Track token usage
+    if (tenant_id) {
+      await trackAiTokenUsage(tenant_id, "knowledge_search", response).catch(
+        (e) =>
+          console.error("[AI-SEARCH-REFINE] Token tracking failed:", e.message),
+      );
+    }
 
     return response.choices[0].message.content.trim();
   } catch (err) {
@@ -32,11 +44,22 @@ export const searchKnowledgeChunks = async (tenant_id, question) => {
   if (!tenant_id || !question) return [];
 
   // Step 1: AI-Refined Keywords (Query Expansion)
-  const aiKeywords = await analyzeQuestionForSearch(question);
+  const aiKeywords = await analyzeQuestionForSearch(question, tenant_id);
 
   // Step 2: Traditional Keyword Extraction
   const STOP_WORDS = [
-    "who", "what", "is", "are", "the", "this", "that", "about", "tell", "me", "please", "explain",
+    "who",
+    "what",
+    "is",
+    "are",
+    "the",
+    "this",
+    "that",
+    "about",
+    "tell",
+    "me",
+    "please",
+    "explain",
   ];
 
   const manualKeywords = question
@@ -47,10 +70,10 @@ export const searchKnowledgeChunks = async (tenant_id, question) => {
 
   const refinedKeywords = aiKeywords
     ? aiKeywords
-      .toLowerCase()
-      .replace(/[^\w\s]/g, " ")
-      .split(/\s+/)
-      .filter((w) => w.length > 2)
+        .toLowerCase()
+        .replace(/[^\w\s]/g, " ")
+        .split(/\s+/)
+        .filter((w) => w.length > 2)
     : [];
 
   // Combine both (favoring unique terms)
@@ -80,9 +103,11 @@ export const searchKnowledgeChunks = async (tenant_id, question) => {
   });
 
   /* 2️⃣ Search Resolved AI Logs (Real-time Feedback Loop) */
-  const logConditions = keywords.map(() => "(user_message LIKE ? OR resolution LIKE ? OR payload LIKE ?)").join(" OR ");
+  const logConditions = keywords
+    .map(() => "(user_message LIKE ? OR resolution LIKE ? OR payload LIKE ?)")
+    .join(" OR ");
   const logValues = [];
-  keywords.forEach(k => {
+  keywords.forEach((k) => {
     logValues.push(`%${k}%`);
     logValues.push(`%${k}%`);
     logValues.push(`%${k}%`);
@@ -103,7 +128,8 @@ export const searchKnowledgeChunks = async (tenant_id, question) => {
   });
 
   const logsFormatted = logRows.map(
-    (r) => `[Previous Question]: ${r.user_message}\n[Admin Resolution]: ${r.resolution}`,
+    (r) =>
+      `[Previous Question]: ${r.user_message}\n[Admin Resolution]: ${r.resolution}`,
   );
 
   // Group chunks by source for UI transparency

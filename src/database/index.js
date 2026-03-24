@@ -34,6 +34,10 @@ import { AppointmentTable } from "./tables/AppointmentTable/index.js";
 import { PricingTable } from "./tables/PricingTableTable/index.js";
 import { MessageUsageTable } from "./tables/MessageUsageTable/index.js";
 import { BillingLedgerTable } from "./tables/BillingLedgerTable/index.js";
+import { WalletTable } from "./tables/WalletTable/index.js";
+import { WalletTransactionTable } from "./tables/WalletTransactionTable/index.js";
+import { AiTokenUsageTable } from "./tables/AiTokenUsageTable/index.js";
+import { AiPricingTable } from "./tables/AiPricingTable/index.js";
 
 const dbconfig =
   ServerEnvironmentConfig?.server?.line === "production"
@@ -116,6 +120,10 @@ db.Appointments = AppointmentTable(sequelize, Sequelize);
 db.PricingTable = PricingTable(sequelize, Sequelize);
 db.MessageUsage = MessageUsageTable(sequelize, Sequelize);
 db.BillingLedger = BillingLedgerTable(sequelize, Sequelize);
+db.Wallets = WalletTable(sequelize, Sequelize);
+db.WalletTransactions = WalletTransactionTable(sequelize, Sequelize);
+db.AiTokenUsage = AiTokenUsageTable(sequelize, Sequelize);
+db.AiPricing = AiPricingTable(sequelize, Sequelize);
 
 // ========================================
 // IMPORT AND DEFINE ASSOCIATIONS
@@ -124,6 +132,3 @@ import { defineAssociations } from "./associations.js";
 defineAssociations(db);
 
 export default db;
-
-
-

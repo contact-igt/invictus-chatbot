@@ -147,13 +147,19 @@ export const createWhatsappTemplateService = async (
       );
     }
 
-    if (components.buttons && Array.isArray(components.buttons) && components.buttons.length > 0) {
+    if (
+      components.buttons &&
+      Array.isArray(components.buttons) &&
+      components.buttons.length > 0
+    ) {
       // Validate phone numbers before saving
       for (const btn of components.buttons) {
-        if (btn.type === 'PHONE_NUMBER') {
+        if (btn.type === "PHONE_NUMBER") {
           const phone = (btn.value || "").replace(/\s+/g, "");
           if (!/^\+[1-9]\d{10,14}$/.test(phone)) {
-            throw new Error(`Invalid phone number for button "${btn.text}": Include + country code and 10 to 14 digits`);
+            throw new Error(
+              `Invalid phone number for button "${btn.text}": Include + country code and 10 to 14 digits`,
+            );
           }
         }
       }
@@ -194,7 +200,11 @@ export const createWhatsappTemplateService = async (
         VALUES (?, ?, ?)
         `,
         {
-          replacements: [template_id, varKey, variable.sample || variable.value],
+          replacements: [
+            template_id,
+            varKey,
+            variable.sample || variable.value,
+          ],
           transaction,
         },
       );
@@ -230,12 +240,13 @@ export const submitWhatsappTemplateService = async ({
     // ─────────────────────────────────────────
     // AUTHENTICATION TEMPLATE — special Meta payload
     // ─────────────────────────────────────────
-    if (template.category === 'authentication') {
+    if (template.category === "authentication") {
       // Authentication templates use exactly {{1}} for the OTP.
       // Meta does NOT apply the normal word-density rules here.
       // We build the payload directly and bypass the normal component builder.
 
-      const otpSampleValue = (variables && variables[0]?.sample_value) || "123456";
+      const otpSampleValue =
+        (variables && variables[0]?.sample_value) || "123456";
 
       const authMetaComponents = [
         {
@@ -268,7 +279,10 @@ export const submitWhatsappTemplateService = async ({
         components: authMetaComponents,
       };
 
-      console.log("🔐 Auth Template Meta Payload:", JSON.stringify(authPayload, null, 2));
+      console.log(
+        "🔐 Auth Template Meta Payload:",
+        JSON.stringify(authPayload, null, 2),
+      );
 
       let authResponse;
       try {
@@ -349,9 +363,9 @@ export const submitWhatsappTemplateService = async ({
     ) {
       throw new Error(
         `Template text is too short. You have ${variableCount} variable(s) with only ${bodyWordCount} word(s). ` +
-        `Meta requires either: (a) at least ${minWordsPerVariable} words per variable (${minRequiredWords} total for your template), OR ` +
-        `(b) a minimum of ${minTotalWords} words total. ` +
-        `Please add more descriptive text to your template.`,
+          `Meta requires either: (a) at least ${minWordsPerVariable} words per variable (${minRequiredWords} total for your template), OR ` +
+          `(b) a minimum of ${minTotalWords} words total. ` +
+          `Please add more descriptive text to your template.`,
       );
     }
 
@@ -385,16 +399,24 @@ export const submitWhatsappTemplateService = async ({
         const defaultSamples = {
           IMAGE: "https://www.facebook.com/images/fb_icon_325x325.png",
           VIDEO: "https://www.w3schools.com/html/mov_bbb.mp4",
-          DOCUMENT: "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf"
+          DOCUMENT:
+            "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
         };
         const sampleUrl = header.media_url || defaultSamples[format];
         if (sampleUrl) {
           try {
-            const { uploadMediaToMetaForTemplate } = await import("../../utils/whatsapp/metaMediaUpload.js");
-            const headerHandle = await uploadMediaToMetaForTemplate(whatsappAccount.tenant_id, sampleUrl, format);
+            const { uploadMediaToMetaForTemplate } =
+              await import("../../utils/whatsapp/metaMediaUpload.js");
+            const headerHandle = await uploadMediaToMetaForTemplate(
+              whatsappAccount.tenant_id,
+              sampleUrl,
+              format,
+            );
             headerObj.example = { header_handle: [headerHandle] };
           } catch (uploadError) {
-            throw new Error(`Failed to upload media sample to Meta: ${uploadError.message}`);
+            throw new Error(
+              `Failed to upload media sample to Meta: ${uploadError.message}`,
+            );
           }
         }
       }
@@ -484,44 +506,56 @@ export const submitWhatsappTemplateService = async ({
     }
 
     // CAROUSEL (optional)
-    const carouselComp = components.find((c) => c.component_type === "carousel");
+    const carouselComp = components.find(
+      (c) => c.component_type === "carousel",
+    );
     if (carouselComp && carouselComp.text_content) {
       try {
         const carouselData = JSON.parse(carouselComp.text_content);
         if (carouselData && Array.isArray(carouselData.cards)) {
-          const { uploadMediaToMetaForTemplate } = await import("../../utils/whatsapp/metaMediaUpload.js");
+          const { uploadMediaToMetaForTemplate } =
+            await import("../../utils/whatsapp/metaMediaUpload.js");
           const cardPromises = carouselData.cards.map(async (card) => {
             const format = carouselData.mediaType || "IMAGE";
             const defaultSamples = {
               IMAGE: "https://www.facebook.com/images/fb_icon_325x325.png",
               VIDEO: "https://www.w3schools.com/html/mov_bbb.mp4",
             };
-            const sampleUrl = card.media_url || defaultSamples[format] || defaultSamples.IMAGE;
+            const sampleUrl =
+              card.media_url || defaultSamples[format] || defaultSamples.IMAGE;
 
             // Upload the media using media API
-            const headerHandle = await uploadMediaToMetaForTemplate(whatsappAccount.tenant_id, sampleUrl, format);
+            const headerHandle = await uploadMediaToMetaForTemplate(
+              whatsappAccount.tenant_id,
+              sampleUrl,
+              format,
+            );
 
             const cardComponents = [
               {
                 type: "HEADER",
                 format: format,
                 example: {
-                  header_handle: [headerHandle]
-                }
+                  header_handle: [headerHandle],
+                },
               },
               {
                 type: "BODY",
-                text: card.bodyText || "Sample Card Body"
-              }
+                text: card.bodyText || "Sample Card Body",
+              },
             ];
 
-            if (card.buttons && Array.isArray(card.buttons) && card.buttons.length > 0) {
+            if (
+              card.buttons &&
+              Array.isArray(card.buttons) &&
+              card.buttons.length > 0
+            ) {
               cardComponents.push({
                 type: "BUTTONS",
-                buttons: card.buttons.slice(0, 2).map(btn => ({
+                buttons: card.buttons.slice(0, 2).map((btn) => ({
                   type: "QUICK_REPLY",
-                  text: btn.text || "Quick Reply"
-                }))
+                  text: btn.text || "Quick Reply",
+                })),
               });
             }
 
@@ -532,7 +566,7 @@ export const submitWhatsappTemplateService = async ({
 
           metaComponents.push({
             type: "CAROUSEL",
-            cards: resolvedCards
+            cards: resolvedCards,
           });
         }
       } catch (e) {
@@ -555,7 +589,10 @@ export const submitWhatsappTemplateService = async ({
 
               // Text is only allowed/required for certain types
               if (btn.type !== "CATALOG" && btn.type !== "COPY_CODE") {
-                b.text = btn.text || btn.label || (btn.type === 'URL' ? 'Visit Website' : 'Call');
+                b.text =
+                  btn.text ||
+                  btn.label ||
+                  (btn.type === "URL" ? "Visit Website" : "Call");
               }
 
               if (btn.type === "PHONE_NUMBER") {
@@ -563,16 +600,20 @@ export const submitWhatsappTemplateService = async ({
                 const phone = rawPhone.replace(/\s+/g, "");
                 // Match frontend: Must start with +, follow by 11-15 digits total.
                 if (!/^\+[1-9]\d{10,14}$/.test(phone)) {
-                  throw new Error(`Invalid phone number for button "${btn.text}": Include + country code and 10 to 14 digits`);
+                  throw new Error(
+                    `Invalid phone number for button "${btn.text}": Include + country code and 10 to 14 digits`,
+                  );
                 }
                 // Meta API accepts the leading + sign, space stripping is already done above.
-                b.phone_number = phone; 
+                b.phone_number = phone;
               }
               if (btn.type === "URL") {
                 b.url = btn.url || btn.value;
                 // Handle dynamic URL if {{1}} is present
                 if (b.url && b.url.includes("{{1}}")) {
-                  const urlVar = variables.find(v => v.variable_key === "url_1" || v.variable_key === "1");
+                  const urlVar = variables.find(
+                    (v) => v.variable_key === "url_1" || v.variable_key === "1",
+                  );
                   if (urlVar) {
                     b.example = [urlVar.sample_value];
                   }
@@ -872,13 +913,17 @@ export const getTemplateListService = async (tenant_id) => {
       );
       const variables = allVariables
         .filter((v) => v.template_id === t.template_id)
-        .map(v => ({ ...v, key: v.variable_key, value: v.sample_value }));
+        .map((v) => ({ ...v, key: v.variable_key, value: v.sample_value }));
 
       return {
         ...t,
         is_submitted: !!t.meta_template_id,
-        can_edit: ["draft", "rejected", "paused", "approved"].includes(t.status),
-        can_submit: ["draft", "rejected", "paused", "approved"].includes(t.status),
+        can_edit: ["draft", "rejected", "paused", "approved"].includes(
+          t.status,
+        ),
+        can_submit: ["draft", "rejected", "paused", "approved"].includes(
+          t.status,
+        ),
         display_status: t.status.charAt(0).toUpperCase() + t.status.slice(1),
         components,
         variables,
@@ -921,12 +966,20 @@ export const getTemplateByIdService = async (template_id, tenant_id) => {
     return {
       ...template,
       is_submitted: !!template.meta_template_id,
-      can_edit: ["draft", "rejected", "paused", "approved"].includes(template.status),
-      can_submit: ["draft", "rejected", "paused", "approved"].includes(template.status),
+      can_edit: ["draft", "rejected", "paused", "approved"].includes(
+        template.status,
+      ),
+      can_submit: ["draft", "rejected", "paused", "approved"].includes(
+        template.status,
+      ),
       display_status:
         template.status.charAt(0).toUpperCase() + template.status.slice(1),
       components,
-      variables: variables.map(v => ({ ...v, key: v.variable_key, value: v.sample_value })),
+      variables: variables.map((v) => ({
+        ...v,
+        key: v.variable_key,
+        value: v.sample_value,
+      })),
       logs,
     };
   } catch (err) {
@@ -1019,7 +1072,12 @@ export const pullTemplatesFromMetaService = async (tenant_id) => {
           let format = comp.format ? comp.format.toLowerCase() : null;
           let type = comp.type.toLowerCase();
 
-          if (type === "body" || type === "footer" || type === "header" || type === "buttons") {
+          if (
+            type === "body" ||
+            type === "footer" ||
+            type === "header" ||
+            type === "buttons"
+          ) {
             let contentValue = text;
             if (type === "buttons") {
               contentValue = JSON.stringify(comp.buttons);
@@ -1226,7 +1284,9 @@ export const updateWhatsappTemplateService = async (
     }
 
     // Only allow editing draft, rejected, paused, approved
-    if (!["draft", "rejected", "paused", "approved"].includes(template.status)) {
+    if (
+      !["draft", "rejected", "paused", "approved"].includes(template.status)
+    ) {
       throw new Error(
         `Cannot edit template with status: ${template.status}. Only draft, rejected, paused, or approved templates can be edited.`,
       );
@@ -1234,13 +1294,17 @@ export const updateWhatsappTemplateService = async (
 
     // If template is already submitted to Meta, name, category, and language cannot change
     if (template.status !== "draft") {
-      const isNameChanged = template_name && template_name.toLowerCase() !== template.template_name.toLowerCase();
-      const isLanguageChanged = language && language.toLowerCase() !== template.language.toLowerCase();
-      const isCategoryChanged = category && category.toLowerCase() !== template.category.toLowerCase();
+      const isNameChanged =
+        template_name &&
+        template_name.toLowerCase() !== template.template_name.toLowerCase();
+      const isLanguageChanged =
+        language && language.toLowerCase() !== template.language.toLowerCase();
+      const isCategoryChanged =
+        category && category.toLowerCase() !== template.category.toLowerCase();
 
       if (isNameChanged || isLanguageChanged || isCategoryChanged) {
         throw new Error(
-          "Template name, category, and language cannot be changed after the template has been submitted to Meta. You may only edit the message content."
+          "Template name, category, and language cannot be changed after the template has been submitted to Meta. You may only edit the message content.",
         );
       }
     }
@@ -1308,7 +1372,11 @@ export const updateWhatsappTemplateService = async (
         {
           replacements: [
             template_id,
-            (components.header.format || components.header.type || "text").toLowerCase(),
+            (
+              components.header.format ||
+              components.header.type ||
+              "text"
+            ).toLowerCase(),
             components.header.text || null,
             components.header.media_url || null,
           ],
@@ -1333,7 +1401,11 @@ export const updateWhatsappTemplateService = async (
     }
 
     // Insert buttons if provided
-    if (components.buttons && Array.isArray(components.buttons) && components.buttons.length > 0) {
+    if (
+      components.buttons &&
+      Array.isArray(components.buttons) &&
+      components.buttons.length > 0
+    ) {
       await db.sequelize.query(
         `
         INSERT INTO ${tableNames.WHATSAPP_TEMPLATE_COMPONENTS}
@@ -1453,6 +1525,7 @@ export const updateWhatsappTemplateService = async (
  * Uses AI to help user generate or fix a template's content
  */
 export const generateTemplateContentService = async ({
+  tenant_id,
   focus,
   style,
   optimization,
@@ -1465,13 +1538,18 @@ export const generateTemplateContentService = async ({
     style,
     optimization,
     previousContent: previous_content,
-    rejectionReason: rejection_reason
+    rejectionReason: rejection_reason,
   });
 
   const userPrompt = `User Request: ${prompt}`;
 
   try {
-    const aiResponse = await AiService("system", `${systemPrompt}\n\n${userPrompt}`);
+    const aiResponse = await AiService(
+      "system",
+      `${systemPrompt}\n\n${userPrompt}`,
+      tenant_id,
+      "template_content",
+    );
     return aiResponse;
   } catch (err) {
     throw new Error(`AI Generation failed: ${err.message}`);
@@ -1506,7 +1584,7 @@ export const getDeletedTemplateListService = async (tenant_id) => {
 export const restoreTemplateService = async (template_id, tenant_id) => {
   try {
     const template = await db.WhatsappTemplates.findOne({
-      where: { template_id, tenant_id, is_deleted: true }
+      where: { template_id, tenant_id, is_deleted: true },
     });
 
     if (!template) {
@@ -1515,7 +1593,7 @@ export const restoreTemplateService = async (template_id, tenant_id) => {
 
     await template.update({
       is_deleted: false,
-      deleted_at: null
+      deleted_at: null,
     });
 
     return { message: "Template restored successfully" };

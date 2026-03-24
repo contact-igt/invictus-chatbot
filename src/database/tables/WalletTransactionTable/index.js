@@ -1,8 +1,8 @@
 import { tableNames } from "../../tableName.js";
 
-export const PricingTable = (sequelize, Sequelize) => {
+export const WalletTransactionTable = (sequelize, Sequelize) => {
   return sequelize.define(
-    tableNames.PRICING_TABLE,
+    tableNames.WALLET_TRANSACTIONS,
     {
       id: {
         type: Sequelize.INTEGER,
@@ -11,30 +11,30 @@ export const PricingTable = (sequelize, Sequelize) => {
         primaryKey: true,
       },
 
-      category: {
-        type: Sequelize.ENUM(
-          "marketing",
-          "utility",
-          "authentication",
-          "service",
-        ),
-        allowNull: false,
-      },
-
-      country: {
+      tenant_id: {
         type: Sequelize.STRING,
         allowNull: false,
       },
 
-      rate: {
-        type: Sequelize.DECIMAL(10, 4),
+      type: {
+        type: Sequelize.ENUM("credit", "debit"),
         allowNull: false,
       },
 
-      markup_percent: {
-        type: Sequelize.DECIMAL(5, 2),
+      amount: {
+        type: Sequelize.DECIMAL(15, 4),
+        allowNull: false,
+      },
+
+      reference_id: {
+        type: Sequelize.STRING,
         allowNull: true,
-        defaultValue: 0,
+        comment: "Payment ID or Ledger ID",
+      },
+
+      description: {
+        type: Sequelize.TEXT,
+        allowNull: true,
       },
 
       createdAt: {
@@ -52,16 +52,19 @@ export const PricingTable = (sequelize, Sequelize) => {
       },
     },
     {
-      tableName: tableNames.PRICING_TABLE,
+      tableName: tableNames.WALLET_TRANSACTIONS,
       timestamps: true,
       underscored: true,
       indexes: [
         {
-          name: "idx_pricing_category_country",
-          unique: true,
-          fields: ["category", "country"],
+          name: "idx_wallet_transactions_tenant",
+          fields: ["tenant_id"],
+        },
+        {
+          name: "idx_wallet_transactions_type",
+          fields: ["type"],
         },
       ],
-    },
+    }
   );
 };

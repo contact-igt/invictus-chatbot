@@ -11,6 +11,9 @@ import { buildChatHistory } from "../../utils/chat/buildChatHistory.js";
 import { processResponse } from "../../utils/ai/aiTagHandlers/index.js";
 import { classifyResponse } from "../../utils/ai/responseClassifier.js";
 import { handleClassification } from "../../utils/ai/classificationHandler.js";
+import { trackAiTokenUsage } from "../../utils/ai/trackAiTokenUsage.js";
+import { getTenantAiModel } from "../../utils/ai/getTenantAiModel.js";
+import { getIO } from "../../middlewares/socket/socket.js";
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -75,7 +78,9 @@ export const sendWhatsAppMessage = async (tenant_id, to, message) => {
         const metaErr = axiosErr.response.data?.error || {};
         const metaMsg = metaErr.message || axiosErr.message;
         const code = metaErr.code ? ` (Code: ${metaErr.code})` : "";
-        const subcode = metaErr.error_subcode ? ` (Subcode: ${metaErr.error_subcode})` : "";
+        const subcode = metaErr.error_subcode
+          ? ` (Subcode: ${metaErr.error_subcode})`
+          : "";
         throw new Error(`Meta API Error: ${metaMsg}${code}${subcode}`);
       }
       throw axiosErr;
@@ -110,7 +115,7 @@ export const sendWhatsAppTemplate = async (
   }
 
   const { phone_number_id, access_token } = rows[0];
-  console.log("components", JSON.stringify(components, null, 2))
+  console.log("components", JSON.stringify(components, null, 2));
   const payload = {
     messaging_product: "whatsapp",
     to,
@@ -123,7 +128,7 @@ export const sendWhatsAppTemplate = async (
       components: components || [],
     },
   };
-  console.log("Full Payload:", JSON.stringify(payload, null, 2))
+  console.log("Full Payload:", JSON.stringify(payload, null, 2));
   const META_API_VERSION = process.env.META_API_VERSION || "v22.0";
   console.log(
     `[SEND-TEMPLATE] Using Meta API version: ${META_API_VERSION}, phone_number_id: ${phone_number_id}, to: ${to}`,
@@ -154,14 +159,20 @@ export const sendWhatsAppTemplate = async (
       const metaErr = error.response.data?.error || {};
       const message = metaErr.message || error.message;
       const code = metaErr.code ? ` (Code: ${metaErr.code})` : "";
-      const subcode = metaErr.error_subcode ? ` (Subcode: ${metaErr.error_subcode})` : "";
+      const subcode = metaErr.error_subcode
+        ? ` (Subcode: ${metaErr.error_subcode})`
+        : "";
       throw new Error(`Meta API Error: ${message}${code}${subcode}`);
     }
     throw error;
   }
 };
 
-export const sendTypingIndicator = async (tenant_id, phone_number_id, to) => {
+export const sendReadReceipt = async (
+  tenant_id,
+  phone_number_id,
+  message_id,
+) => {
   try {
     const [rows] = await db.sequelize.query(
       `
@@ -183,8 +194,8 @@ export const sendTypingIndicator = async (tenant_id, phone_number_id, to) => {
         `https://graph.facebook.com/${META_API_VERSION}/${phone_number_id}/messages`,
         {
           messaging_product: "whatsapp",
-          to,
-          type: "typing",
+          status: "read",
+          message_id,
         },
         {
           headers: {
@@ -194,8 +205,61 @@ export const sendTypingIndicator = async (tenant_id, phone_number_id, to) => {
         },
       );
     } catch (apiErr) {
-      console.error("[TYPING] Meta API Error:", apiErr?.response?.data || apiErr.message);
-      // Suppress error so it doesn't break AI reply
+      console.error(
+        "[READ-RECEIPT] Meta API Error:",
+        apiErr?.response?.data || apiErr.message,
+      );
+    }
+  } catch (err) {
+    console.error("[READ-RECEIPT] Database Error:", err.message);
+  }
+};
+
+export const sendTypingIndicator = async (
+  tenant_id,
+  phone_number_id,
+  phone,
+) => {
+  try {
+    // 1. Emit Socket event for Whatnexus Dashboard Animation
+    try {
+      const io = getIO();
+      if (io) {
+        console.log(
+          `[TYPING] Emitting ai-typing for tenant ${tenant_id}, phone ${phone}`,
+        );
+        io.to(`tenant-${tenant_id}`).emit("ai-typing", {
+          tenant_id,
+          phone,
+          status: true,
+        });
+      }
+    } catch (socketErr) {
+      console.error("[TYPING] Socket Emit Error:", socketErr.message);
+    }
+
+    // 2. Fetch token and attempt to notify Meta (status: read fallback)
+    const [rows] = await db.sequelize.query(
+      `
+    SELECT access_token
+    FROM ${tableNames.WHATSAPP_ACCOUNT}
+    WHERE tenant_id = ?
+      AND phone_number_id = ?
+      AND status = 'active'
+    LIMIT 1
+    `,
+      { replacements: [tenant_id, phone_number_id] },
+    );
+
+    if (!rows.length) return;
+
+    const META_API_VERSION = process.env.META_API_VERSION || "v22.0";
+    try {
+      // NOTE: WhatsApp Cloud API doesn't have a native 'typing' status for businesses.
+      // We send a read receipt if we didn't send one before, as a fallback "seen" signal.
+      // Some specialized APIs use 'typing', but for Cloud API 'read' is the standard feedback.
+    } catch (apiErr) {
+      // Suppress error
     }
   } catch (err) {
     console.error("[TYPING] Database Error:", err.message);
@@ -324,7 +388,7 @@ export const getOpenAIReply = async (
       hour12: true,
     });
 
-    const languageInfo = await detectLanguageAI(cleanMessage);
+    const languageInfo = await detectLanguageAI(cleanMessage, tenant_id);
 
     console.log("language", languageInfo);
 
@@ -336,7 +400,7 @@ export const getOpenAIReply = async (
       tenant_id,
       contact_id,
       languageInfo,
-      cleanMessage
+      cleanMessage,
     );
 
     const aiMessages = [
@@ -345,13 +409,20 @@ export const getOpenAIReply = async (
       { role: "user", content: cleanMessage },
     ];
 
+    const outputModel = await getTenantAiModel(tenant_id, "output");
+
     let response = await openai.chat.completions.create({
-      model: "gpt-4o",
+      model: outputModel,
       temperature: 0.1, // Very low temperature for consistent tagging behavior
       top_p: 0.9,
       max_tokens: 800,
       messages: aiMessages,
     });
+
+    // Track token usage for the primary AI call
+    await trackAiTokenUsage(tenant_id, "whatsapp", response).catch((e) =>
+      console.error("[WHATSAPP-AI] Token tracking failed:", e.message),
+    );
 
     let rawReply = response?.choices?.[0]?.message?.content?.trim();
 
@@ -366,12 +437,19 @@ export const getOpenAIReply = async (
           "[WHATSAPP-AI] Response truncated with partial tag, retrying with higher token limit...",
         );
         response = await openai.chat.completions.create({
-          model: "gpt-4o",
+          model: outputModel,
           temperature: 0.1,
           top_p: 0.9,
           max_tokens: 1200,
           messages: aiMessages,
         });
+        await trackAiTokenUsage(tenant_id, "whatsapp_retry", response).catch(
+          (e) =>
+            console.error(
+              "[WHATSAPP-AI] Retry token tracking failed:",
+              e.message,
+            ),
+        );
         rawReply = response?.choices?.[0]?.message?.content?.trim();
       }
     }
@@ -392,7 +470,11 @@ export const getOpenAIReply = async (
     // Step 2: NEW Dual-AI Classification (Standardized single logging)
     try {
       console.log("[CLASSIFIER] Starting classification...");
-      const classification = await classifyResponse(cleanMessage, finalReply);
+      const classification = await classifyResponse(
+        cleanMessage,
+        finalReply,
+        tenant_id,
+      );
 
       // If the primary AI explicitly tagged missing knowledge or out of scope, use that as a "hint"
       if (

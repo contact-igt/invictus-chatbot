@@ -146,11 +146,11 @@ export const createCampaignService = async (tenant_id, data, created_by) => {
             const [usedRow] = await db.sequelize.query(`
                 SELECT COUNT(DISTINCT contact_id) as used
                 FROM messages
-                WHERE tenant_id = :tenantId
+                WHERE tenant_id = :tenant_id
                   AND sender IN ('bot', 'admin')
                   AND created_at >= :targetTime
             `, {
-                replacements: { tenantId, targetTime: twentyFourHoursAgo.toISOString() },
+                replacements: { tenant_id, targetTime: twentyFourHoursAgo.toISOString() },
                 type: db.sequelize.QueryTypes.SELECT
             });
             

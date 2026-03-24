@@ -20,6 +20,7 @@ const SUPER_ADMIN_DEFAULT = {
 const seedSuperAdmin = async () => {
   try {
     console.log("🌱 Starting Super Admin seeding...");
+    await db.sequelize.sync();
 
     // Check if any super admin exists
     const checkQuery = `SELECT * FROM ${tableNames.MANAGEMENT} WHERE role = 'super_admin' LIMIT 1`;
