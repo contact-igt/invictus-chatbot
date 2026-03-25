@@ -10,8 +10,14 @@ const VALID_STATUSES = [
 
 export const createAppointment = async (req, res) => {
   try {
-    const { patient_name, age, country_code, contact_number, appointment_date, appointment_time } =
-      req.body;
+    const {
+      patient_name,
+      age,
+      country_code,
+      contact_number,
+      appointment_date,
+      appointment_time,
+    } = req.body;
 
     // Validate required fields
     if (!patient_name || !appointment_date || !appointment_time) {
@@ -25,7 +31,8 @@ export const createAppointment = async (req, res) => {
     if ((!contact_number || !country_code) && !req.body.contact_id) {
       return res.status(400).json({
         success: false,
-        message: "Either (country_code + contact_number) or contact_id is required.",
+        message:
+          "Either (country_code + contact_number) or contact_id is required.",
       });
     }
 
@@ -148,5 +155,27 @@ export const deleteAppointment = async (req, res) => {
     });
   } catch (err) {
     return res.status(400).json({ success: false, message: err.message });
+  }
+};
+
+export const getAvailableSlots = async (req, res) => {
+  try {
+    const { doctor_id, date } = req.query;
+
+    if (!doctor_id || !date) {
+      return res.status(400).json({
+        success: false,
+        message: "doctor_id and date query parameters are required.",
+      });
+    }
+
+    const result = await AppointmentService.getAvailableSlotsService(
+      req.user.tenant_id,
+      doctor_id,
+      date,
+    );
+    return res.status(200).json({ success: true, data: result });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
   }
 };

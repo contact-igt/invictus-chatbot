@@ -26,6 +26,7 @@ router.get(
   "/appointment/availability",
   AppointmentController.checkAvailability,
 );
+router.get("/appointment/slots", AppointmentController.getAvailableSlots);
 router.put(
   "/appointment/:appointment_id",
   AppointmentController.updateAppointment,

@@ -46,15 +46,14 @@ export const execute = async (payload, context, cleanMessage) => {
     }
 
     // Strictly validate all required fields before proceeding
+    // Note: email and problem are OPTIONAL - not required for WhatsApp bookings
     const requiredFields = [
       { key: "patient_name", label: "full name" },
       { key: "contact_number", label: "contact number" },
-      { key: "email", label: "email address" },
       { key: "age", label: "age" },
       { key: "date", label: "preferred date" },
       { key: "time", label: "preferred time" },
       { key: "doctor_id", label: "doctor selection" },
-      { key: "problem", label: "reason for visit" },
     ];
     // Fix: If contact_number is missing or a placeholder, use phone from context if available
     if (
@@ -323,7 +322,7 @@ Please provide these details.`;
       doctor_id: data.doctor_id || null,
       status: "Confirmed",
       email: data.email || null,
-      notes: data.problem || null,
+      notes: data.notes || data.problem || null, // Accept both "notes" and "problem" fields
     };
 
     console.log(
@@ -382,10 +381,7 @@ Please provide these details.`;
         );
       }
     } catch (err) {
-      console.error(
-        "[TAG-HANDLER-APPOINTMENT] Error:",
-        err.message,
-      );
+      console.error("[TAG-HANDLER-APPOINTMENT] Error:", err.message);
     }
 
     // Send WhatsApp confirmation message
