@@ -22,8 +22,18 @@ export const buildAiSystemPrompt = async (
   languageInfo,
   userMessage,
 ) => {
+  // Fetch tenant settings including timezone and company name
+  let businessName = "our clinic";
+  let tenantTimezone = "Asia/Kolkata"; // Default for backward compatibility
+  try {
+    const tenantSettings = await getTenantSettingsService(tenant_id);
+    if (tenantSettings?.company_name)
+      businessName = tenantSettings.company_name;
+    if (tenantSettings?.timezone) tenantTimezone = tenantSettings.timezone;
+  } catch (_) {}
+
   const now = new Date(
-    new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }),
+    new Date().toLocaleString("en-US", { timeZone: tenantTimezone }),
   );
 
   const currentDateFormatted = now.toLocaleDateString("en-GB", {
@@ -45,14 +55,6 @@ export const buildAiSystemPrompt = async (
   // 1. Fetch Prompts & Knowledge
   const hospitalPrompt =
     (await getActivePromptService(tenant_id)) || DEFAULT_SYSTEM_PROMPT;
-
-  // Fetch business name from tenant settings
-  let businessName = "our clinic";
-  try {
-    const tenantSettings = await getTenantSettingsService(tenant_id);
-    if (tenantSettings?.company_name)
-      businessName = tenantSettings.company_name;
-  } catch (_) {}
 
   const commonBasePrompt = getCommonBasePrompt(languageInfo, businessName);
 

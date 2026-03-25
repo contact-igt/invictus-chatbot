@@ -368,8 +368,14 @@ export const getOpenAIReply = async (
     const cleanMessage = userMessage.trim();
     if (!cleanMessage) return null;
 
+    // Fetch tenant timezone from settings (default to Asia/Kolkata for backward compatibility)
+    const { getTenantSettingsService } =
+      await import("../TenantModel/tenant.service.js");
+    const tenantSettings = await getTenantSettingsService(tenant_id);
+    const tenantTimezone = tenantSettings?.timezone || "Asia/Kolkata";
+
     const now = new Date(
-      new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }),
+      new Date().toLocaleString("en-US", { timeZone: tenantTimezone }),
     );
 
     const currentDateFormatted = now.toLocaleDateString("en-GB", {

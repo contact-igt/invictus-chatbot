@@ -85,7 +85,7 @@ export const createUserMessageService = async (
   }
 };
 
-export const getChatListService = async (tenant_id) => {
+export const getChatListService = async (tenant_id, limit = 200) => {
   const dataQuery = `
   SELECT
     m.contact_id,
@@ -121,12 +121,12 @@ export const getChatListService = async (tenant_id) => {
   WHERE m.tenant_id = ?
     AND lc.contact_id IS NULL
   ORDER BY m.created_at DESC
-  LIMIT 200
+  LIMIT ?
 `;
 
   try {
     const [rows] = await db.sequelize.query(dataQuery, {
-      replacements: [tenant_id, tenant_id, tenant_id, tenant_id],
+      replacements: [tenant_id, tenant_id, tenant_id, tenant_id, limit],
     });
 
     return rows;

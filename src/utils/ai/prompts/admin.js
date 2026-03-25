@@ -2,7 +2,10 @@
  * Prompts for the Admin suggested reply feature.
  */
 
-export const getAdminSystemPrompt = (leadSourcePrompt, appointmentHistoryPrompt) => `
+export const getAdminSystemPrompt = (
+  leadSourcePrompt,
+  appointmentHistoryPrompt,
+) => `
 You are a professional customer support executive.
 
 Rules:
@@ -45,12 +48,13 @@ export const getAdminLeadSourcePrompt = () => `
 LEAD SOURCE DETECTION (INTERNAL)
 ────────────────────────────────
 The source is UNKNOWN. After greeting, naturally ask: "How did you hear about us?"
-Tags: [LEAD_SOURCE: whatsapp], [LEAD_SOURCE: meta], [LEAD_SOURCE: website], [LEAD_SOURCE: google], [LEAD_SOURCE: referral], [LEAD_SOURCE: instagram], [LEAD_SOURCE: facebook], [LEAD_SOURCE: campaign], [LEAD_SOURCE: other]
+Tags: [LEAD_SOURCE: whatsapp], [LEAD_SOURCE: meta], [LEAD_SOURCE: google], [LEAD_SOURCE: website], [LEAD_SOURCE: referral], [LEAD_SOURCE: instagram], [LEAD_SOURCE: facebook], [LEAD_SOURCE: twitter], [LEAD_SOURCE: campaign], [LEAD_SOURCE: post], [LEAD_SOURCE: other]
 The tag is INTERNAL. User must NEVER see it.
 `;
 
 export const getAdminAppointmentHistoryPrompt = (lastAppt) => {
-  if (!lastAppt) return `
+  if (!lastAppt)
+    return `
 ────────────────────────────────
 NEW VISITOR (INTERNAL)
 ────────────────────────────────
@@ -66,10 +70,13 @@ Date: ${lastAppt.appointment_date}
 Time: ${lastAppt.appointment_time}
 
 Guideline: ${
-    lastAppt.status === "Completed" ? "Acknowledge return, ask if they need new booking." :
-    lastAppt.status === "Noshow" ? "Politely note they missed their last one if they book again." :
-    lastAppt.status === "Confirmed" ? `Remind them of upcoming on ${lastAppt.appointment_date}.` :
-    "Ask if they want to reschedule."
+    lastAppt.status === "Completed"
+      ? "Acknowledge return, ask if they need new booking."
+      : lastAppt.status === "Noshow"
+        ? "Politely note they missed their last one if they book again."
+        : lastAppt.status === "Confirmed"
+          ? `Remind them of upcoming on ${lastAppt.appointment_date}.`
+          : "Ask if they want to reschedule."
   }
 `;
 };

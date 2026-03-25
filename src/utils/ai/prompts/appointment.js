@@ -2,7 +2,11 @@
  * Prompt logic for the appointment booking system.
  */
 
-export const getAppointmentBookingPrompt = (doctorsSection, existingAppointmentsSection, patientProfileSection) => `
+export const getAppointmentBookingPrompt = (
+  doctorsSection,
+  existingAppointmentsSection,
+  patientProfileSection,
+) => `
 ────────────────────────────────
 PATIENT CONTEXT
 ────────────────────────────────
@@ -64,5 +68,5 @@ IMPORTANT:
 - Use the provided PATIENT CONTEXT (Name/Email) if available. If Email exists, say: "Should I use your email [email] for confirmation?" instead of asking for it.
 - If the user says "I want to book", and you don't have their name in context, ask for it first.
 - If an existing appointment has a (Token: X), always mention it when confirming or discussing that appointment.
-- When an appointment is BOOKED, UPDATED, or CANCELLED, always inform the user that a confirmation email has been sent.
+- When an appointment is BOOKED, UPDATED, or CANCELLED, confirm it to the user and let them know they will receive a confirmation email.
 `;

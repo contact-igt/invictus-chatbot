@@ -105,7 +105,7 @@ export const sendAdminMessage = async (req, res) => {
       msgResponse.wamid,
       name,
       "admin",
-      null,
+      req.user.tenant_user_id || null,
       message,
       "text",
       null,
@@ -222,10 +222,14 @@ export const sendTemplateMessageController = async (req, res) => {
       { replacements: [template_id, tenant_id] },
     );
 
+    if (!template) {
+      return res.status(404).send({ message: "Template not found" });
+    }
+
     // 2. Render content for DB
     const messageContent = await renderTemplateContent(template_id, components);
 
-    // Extract media_url and type from header component if present
+    // Extract media_url and type from header component if present in request
     const headerComp = components?.find((c) => c.type === "header");
     let templateMediaUrl = null;
     let templateMediaType = "template";
@@ -243,8 +247,21 @@ export const sendTemplateMessageController = async (req, res) => {
       }
     }
 
-    if (!template) {
-      return res.status(404).send({ message: "Template not found" });
+    // If no media provided in request, fetch from template definition
+    if (!templateMediaUrl) {
+      const [headerComponents] = await db.sequelize.query(
+        `SELECT header_format, media_url FROM ${tableNames.WHATSAPP_TEMPLATE_COMPONENTS} 
+         WHERE template_id = ? AND component_type = 'header'`,
+        { replacements: [template_id] },
+      );
+      const templateHeader = headerComponents?.[0];
+      if (templateHeader?.media_url) {
+        templateMediaUrl = templateHeader.media_url;
+        const headerFormat = templateHeader.header_format?.toLowerCase();
+        if (headerFormat === "image") templateMediaType = "image";
+        else if (headerFormat === "video") templateMediaType = "video";
+        else if (headerFormat === "document") templateMediaType = "document";
+      }
     }
 
     const formattedPhone = formatPhoneNumber(phone);
@@ -295,7 +312,12 @@ export const sendTemplateMessageController = async (req, res) => {
         raw: true,
       });
       if (templateContact?.name) templateContactName = templateContact.name;
-    } catch (_) {}
+    } catch (dbErr) {
+      console.error(
+        "[DB] Failed to fetch contact name for template emit:",
+        dbErr.message,
+      );
+    }
 
     const io = getIO();
     io.to(`tenant-${tenant_id}`).emit("new-message", {

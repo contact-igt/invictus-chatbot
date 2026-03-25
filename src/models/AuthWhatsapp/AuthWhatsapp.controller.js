@@ -27,6 +27,7 @@ import db from "../../database/index.js";
 import {
   createContactService,
   getContactByPhoneAndTenantIdService,
+  getOrCreateContactService,
   updateContactService,
 } from "../ContactsModel/contacts.service.js";
 import {
@@ -211,7 +212,12 @@ export const receiveMessage = async (req, res) => {
             "campaign-status-update",
             campaignUpdatePayload,
           );
-        } catch (_) {}
+        } catch (socketErr) {
+          console.error(
+            "[SOCKET] Campaign status emit failed:",
+            socketErr.message,
+          );
+        }
       }
 
       // Also update the regular messages table status using wamid
@@ -241,7 +247,12 @@ export const receiveMessage = async (req, res) => {
                     status,
                   },
                 );
-              } catch (_) {}
+              } catch (socketErr) {
+                console.error(
+                  "[SOCKET] Message status emit failed:",
+                  socketErr.message,
+                );
+              }
             }
           }
         }
@@ -331,23 +342,26 @@ export const receiveMessage = async (req, res) => {
     const defaultNameConfig = tenantSettings?.default_contact_name || null;
     const finalName = defaultNameConfig ? defaultNameConfig : name || null;
 
-    let contactsaved = await getContactByPhoneAndTenantIdService(
-      tenant_id,
-      phone,
-    );
-    if (!contactsaved) {
-      await createContactService(tenant_id, phone, finalName, null);
-      contactsaved = await getContactByPhoneAndTenantIdService(
-        tenant_id,
-        phone,
-      );
+    // Use atomic getOrCreate to prevent duplicate contacts from race conditions
+    const {
+      contact: contactsaved,
+      created: isNewContact,
+      restored,
+    } = await getOrCreateContactService(tenant_id, phone, finalName, null);
+
+    if (isNewContact) {
       io.to(`tenant-${tenant_id}`).emit("contact-created", {
         tenant_id,
         phone,
         name: finalName,
         contact_id: contactsaved?.contact_id,
       });
+    } else if (restored) {
+      console.log(
+        `[WEBHOOK] Contact ${contactsaved?.contact_id} auto-restored`,
+      );
     } else {
+      // Update name if needed for existing contact
       if (
         finalName &&
         (!contactsaved.name ||
@@ -390,6 +404,7 @@ export const receiveMessage = async (req, res) => {
       type,
       media_url,
       media_mime_type,
+      "received",
     );
 
     // 7. Emit Real-time Event to Frontend
@@ -413,6 +428,7 @@ export const receiveMessage = async (req, res) => {
       message_type: type,
       media_url,
       media_mime_type,
+      status: "received",
       created_at: new Date(),
     });
 
@@ -608,22 +624,44 @@ export const receiveMessage = async (req, res) => {
           message: messageToSend,
           message_type: "text",
           media_url: null,
-          status: null,
+          status: "sent",
           sender: "bot",
           created_at: new Date(),
         });
 
-        await sendWhatsAppMessage(tenant_id, phone, messageToSend).catch(
-          (err) => {
-            console.error("[WHATSAPP-SEND] Failed to send reply:", err.message);
-            import("fs").then((fs) => {
-              fs.appendFileSync(
-                "whatsapp_send_error.log",
-                `[${new Date().toISOString()}] To: ${phone} | Msg: ${messageToSend} | Error: ${err.message}\n`,
-              );
-            });
-          },
-        );
+        // Send to WhatsApp and capture WAMID
+        const botMsgResponse = await sendWhatsAppMessage(
+          tenant_id,
+          phone,
+          messageToSend,
+        ).catch((err) => {
+          console.error("[WHATSAPP-SEND] Failed to send reply:", err.message);
+          import("fs").then((fs) => {
+            fs.appendFileSync(
+              "whatsapp_send_error.log",
+              `[${new Date().toISOString()}] To: ${phone} | Msg: ${messageToSend} | Error: ${err.message}\n`,
+            );
+          });
+          return null;
+        });
+
+        // Update bot message with WAMID for status tracking
+        if (botMsgResponse?.wamid && savedBotMsg?.id) {
+          try {
+            await db.sequelize.query(
+              `UPDATE messages SET wamid = ?, status = 'sent' WHERE id = ?`,
+              { replacements: [botMsgResponse.wamid, savedBotMsg.id] },
+            );
+            console.log(
+              `[WEBHOOK] Bot message ${savedBotMsg.id} updated with wamid: ${botMsgResponse.wamid}`,
+            );
+          } catch (updateErr) {
+            console.error(
+              "[WEBHOOK] Failed to update bot message wamid:",
+              updateErr.message,
+            );
+          }
+        }
 
         // Execute tag handler AFTER sending the AI reply
         // This ensures correct message ordering (e.g., "Let me check..." before slots list)
@@ -659,7 +697,9 @@ export const receiveMessage = async (req, res) => {
               status: false,
             });
           }
-        } catch (_) {}
+        } catch (socketErr) {
+          console.error("[SOCKET] AI typing emit failed:", socketErr.message);
+        }
       }
     });
   } catch (err) {
