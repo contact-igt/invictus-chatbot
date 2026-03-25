@@ -30,6 +30,7 @@ export const createUserMessageService = async (
   media_mime_type = null,
   status = null,
   template_name = null,
+  media_filename = null,
 ) => {
   const Query = `INSERT INTO ${tableNames?.MESSAGES} (  
   tenant_id,
@@ -46,8 +47,9 @@ export const createUserMessageService = async (
   media_url,
   media_mime_type,
   status,
-  template_name )
-   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) `;
+  template_name,
+  media_filename )
+   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) `;
 
   try {
     let cleanPhone = phone ? phone.toString().replace(/\D/g, "") : "";
@@ -76,6 +78,7 @@ export const createUserMessageService = async (
       media_mime_type,
       status,
       template_name,
+      media_filename,
     ];
 
     const [result] = await db.sequelize.query(Query, { replacements: values });
@@ -154,7 +157,7 @@ export const getChatByPhoneService = async (phone, tenant_id) => {
     }
 
     const Query = `
-    SELECT id, contact_id, sender, message, message_type, media_url, media_mime_type, seen, status, created_at
+    SELECT id, contact_id, sender, message, message_type, media_url, media_mime_type, media_filename, seen, status, created_at
     FROM ${tableNames?.MESSAGES}
     WHERE ${whereClause} AND is_deleted = false
     ORDER BY created_at ASC

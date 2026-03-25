@@ -35,6 +35,7 @@ export const createCampaignService = async (tenant_id, data, created_by) => {
       audience_data, // Array of recipients OR group_id
       scheduled_at,
       header_media_url,
+      header_file_name,
       location_params,
       card_media_urls,
     } = data;
@@ -195,6 +196,7 @@ export const createCampaignService = async (tenant_id, data, created_by) => {
         total_audience: recipients.length,
         scheduled_at,
         header_media_url,
+        header_file_name,
         location_params,
         card_media_urls,
         created_by,
@@ -534,14 +536,16 @@ export const executeCampaignBatchService = async (
             ["IMAGE", "VIDEO", "DOCUMENT"].includes(hFormat) &&
             campaignHeaderMediaUrl
           ) {
+            const mediaObj = { link: campaignHeaderMediaUrl };
+            if (hFormat === "DOCUMENT") {
+              mediaObj.filename = campaign.header_file_name || "document.pdf";
+            }
             components.push({
               type: "header",
               parameters: [
                 {
                   type: hFormat.toLowerCase(),
-                  [hFormat.toLowerCase()]: {
-                    link: campaignHeaderMediaUrl,
-                  },
+                  [hFormat.toLowerCase()]: mediaObj,
                 },
               ],
             });
@@ -704,6 +708,7 @@ export const executeCampaignBatchService = async (
             null,
             "sent",
             campaign.template.template_name,
+            finalMessageType === "document" ? (campaign.header_file_name || null) : null,
           );
 
           // 7. Activate Live Chat

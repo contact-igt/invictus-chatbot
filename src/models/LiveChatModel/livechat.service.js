@@ -127,6 +127,7 @@ export const getHistoryChatListService = async (tenant_id, limit = 200) => {
       c.name,
       c.is_ai_silenced,
       m.message,
+      m.message_type,
       m.created_at AS last_message_at,
       COALESCE(uc.cnt, 0) AS unread_count
     FROM messages m

@@ -291,6 +291,7 @@ export const receiveMessage = async (req, res) => {
 
     let media_url = null;
     let media_mime_type = null;
+    let media_filename = null;
 
     if (type === "text") text = msg.text?.body || "";
     else if (type === "interactive") {
@@ -313,6 +314,7 @@ export const receiveMessage = async (req, res) => {
       text = msg.document?.caption || msg.document?.filename || "";
       media_url = msg.document?.id ? `meta_media_id:${msg.document.id}` : null;
       media_mime_type = msg.document?.mime_type || "application/octet-stream";
+      media_filename = msg.document?.filename || null;
     } else if (type === "audio") {
       text = "";
       media_url = msg.audio?.id ? `meta_media_id:${msg.audio.id}` : null;
@@ -405,6 +407,8 @@ export const receiveMessage = async (req, res) => {
       media_url,
       media_mime_type,
       "received",
+      null,
+      media_filename,
     );
 
     // 7. Emit Real-time Event to Frontend
@@ -428,6 +432,7 @@ export const receiveMessage = async (req, res) => {
       message_type: type,
       media_url,
       media_mime_type,
+      media_filename,
       status: "received",
       created_at: new Date(),
     });

@@ -72,6 +72,11 @@ export const WhatsappCampaignTable = (sequelize, Sequelize) => {
                 allowNull: true,
             },
 
+            header_file_name: {
+                type: Sequelize.STRING,
+                allowNull: true,
+            },
+
             location_params: {
                 type: Sequelize.JSON,
                 allowNull: true,

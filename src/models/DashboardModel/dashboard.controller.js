@@ -99,7 +99,7 @@ export const getDashboardController = async (req, res) => {
                 revenueToday:     `₹${stats.header.revenueToday}`,
                 newLeadsToday:     stats.header.newLeadsToday,
                 resolvedToday:     stats.header.resolvedToday,
-                messagesSentToday: stats.header.messagesSent,
+                messagesSentToday: stats.header.messagesSentToday,
                 needsAttention:    stats.header.needsAttention
             },
             kpis: {
@@ -239,6 +239,7 @@ export const getDashboardController = async (req, res) => {
                 marketing:       stats.billingSummary.marketingSpent,
                 utility:         stats.billingSummary.utilitySpent,
                 authentication:  stats.billingSummary.authSpent,
+                service:         stats.billingSummary.serviceSpent,
                 totalMessages:   stats.billingSummary.totalMessagesSent,
                 billable:        stats.billingSummary.billableConversations,
                 free:            stats.billingSummary.freeConversations

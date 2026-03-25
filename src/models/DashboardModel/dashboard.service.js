@@ -550,19 +550,23 @@ export const getDashboardStatsService = async (tenantId, period = "30days") => {
         `, { replacements: { tenantId }, type: db.sequelize.QueryTypes.SELECT });
 
         // §N7 — Billing summary (inline query — no separate API call)
-        const billingDateFilter = periodStart ? { created_at: { [Op.gte]: periodStart } } : {};
-        const [billingKpi] = await db.sequelize.query(`
+        const billingKpiRows = await db.sequelize.query(`
             SELECT
                 COALESCE(SUM(total_cost), 0) as total_spent,
                 COALESCE(SUM(CASE WHEN category = 'marketing' THEN total_cost ELSE 0 END), 0) as marketing_spent,
                 COALESCE(SUM(CASE WHEN category = 'utility' THEN total_cost ELSE 0 END), 0) as utility_spent,
-                COALESCE(SUM(CASE WHEN category = 'authentication' THEN total_cost ELSE 0 END), 0) as auth_spent
+                COALESCE(SUM(CASE WHEN category = 'authentication' THEN total_cost ELSE 0 END), 0) as auth_spent,
+                COALESCE(SUM(CASE WHEN category = 'service' THEN total_cost ELSE 0 END), 0) as service_spent
             FROM ${tableNames.BILLING_LEDGER}
             WHERE tenant_id = :tenantId
             ${periodStart ? 'AND created_at >= :periodStart' : ''}
-        `, { replacements: { tenantId, ...(periodStart ? { periodStart: periodStart.toISOString() } : {}) }, type: db.sequelize.QueryTypes.SELECT });
+        `, {
+            replacements: { tenantId, periodStart: periodStart },
+            type: db.sequelize.QueryTypes.SELECT
+        });
+        const billingKpi = billingKpiRows[0] || {};
 
-        const [msgUsageStats] = await db.sequelize.query(`
+        const msgUsageStatsRows = await db.sequelize.query(`
             SELECT
                 COUNT(*) as total_messages,
                 SUM(CASE WHEN billable = true THEN 1 ELSE 0 END) as billable,
@@ -570,7 +574,22 @@ export const getDashboardStatsService = async (tenantId, period = "30days") => {
             FROM ${tableNames.MESSAGE_USAGE}
             WHERE tenant_id = :tenantId
             ${periodStart ? 'AND timestamp >= :periodStart' : ''}
-        `, { replacements: { tenantId, ...(periodStart ? { periodStart: periodStart.toISOString() } : {}) }, type: db.sequelize.QueryTypes.SELECT });
+        `, {
+            replacements: { tenantId, periodStart: periodStart },
+            type: db.sequelize.QueryTypes.SELECT
+        });
+        const msgUsageStats = msgUsageStatsRows[0] || {};
+
+        const revenueTodayRows = await db.sequelize.query(`
+            SELECT COALESCE(SUM(total_cost), 0) as revenue
+            FROM ${tableNames.BILLING_LEDGER}
+            WHERE tenant_id = :tenantId
+              AND created_at >= :targetTime
+        `, {
+            replacements: { tenantId, targetTime: todayAtStart },
+            type: db.sequelize.QueryTypes.SELECT
+        });
+        const revenueTodayRow = revenueTodayRows[0] || {};
 
         // ═══════════════════════════════════════════════════════════════════
         // RETURN ALL DATA
@@ -579,11 +598,11 @@ export const getDashboardStatsService = async (tenantId, period = "30days") => {
             waba: wabaInfo,
             periodLabel,
             header: {
-                revenueToday: '₹0',
+                revenueToday: parseFloat(revenueTodayRow?.revenue || 0).toFixed(2),
                 newLeadsToday,
                 resolvedToday,
-                messagesSent: messagesSentToday,
-                needsAttention
+                messagesSentToday,
+                needsAttention: unassignedCount
             },
             kpis: {
                 totalLeads: { current: totalLeadsNow, previous: totalLeadsYesterday },
@@ -653,6 +672,7 @@ export const getDashboardStatsService = async (tenantId, period = "30days") => {
                 marketingSpent: parseFloat(billingKpi?.marketing_spent || 0),
                 utilitySpent: parseFloat(billingKpi?.utility_spent || 0),
                 authSpent: parseFloat(billingKpi?.auth_spent || 0),
+                serviceSpent: parseFloat(billingKpi?.service_spent || 0),
                 totalMessagesSent: parseInt(msgUsageStats?.total_messages || 0),
                 billableConversations: parseInt(msgUsageStats?.billable || 0),
                 freeConversations: parseInt(msgUsageStats?.free_tier || 0)

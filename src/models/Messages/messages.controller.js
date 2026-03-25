@@ -274,6 +274,12 @@ export const sendTemplateMessageController = async (req, res) => {
       components,
     );
 
+    // Extract document filename from header component if present
+    let templateMediaFilename = null;
+    if (templateMediaType === "document" && headerComp?.parameters?.[0]?.document?.filename) {
+      templateMediaFilename = headerComp.parameters[0].document.filename;
+    }
+
     // 3. Log to Messages
     const savedMsg = await createUserMessageService(
       tenant_id,
@@ -290,6 +296,7 @@ export const sendTemplateMessageController = async (req, res) => {
       null,
       "sent",
       template.template_name,
+      templateMediaFilename,
     );
 
     await updateAdminLeadService(tenant_id, contact_id);
@@ -330,6 +337,7 @@ export const sendTemplateMessageController = async (req, res) => {
       sender: "admin",
       message_type: templateMediaType,
       media_url: templateMediaUrl,
+      media_filename: templateMediaFilename,
       status: "sent",
       created_at: new Date(),
     });

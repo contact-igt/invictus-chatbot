@@ -88,6 +88,12 @@ export const MessagesTable = (sequelize, Sequelize) => {
         allowNull: true,
       },
 
+      media_filename: {
+        type: Sequelize.STRING,
+        allowNull: true,
+        comment: "Original filename for document/media messages",
+      },
+
       template_name: {
         type: Sequelize.STRING,
         allowNull: true,
