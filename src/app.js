@@ -35,6 +35,7 @@ import PlaygroundRouter from "./models/Playground/playground.routes.js";
 import BillingRouter from "./models/BillingModel/billing.routes.js";
 import WhatsappOtpRouter from "./models/OtpVerificationModel/otpverification.routes.js";
 import PaymentRouter from "./models/PaymentModel/payment.routes.js";
+import SuperAdminDashboardRouter from "./models/SuperAdminDashboardModel/superAdminDashboard.routes.js";
 
 
 dns.setDefaultResultOrder("ipv4first");
@@ -66,7 +67,7 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use("/api/management", ManagementRouter);
+app.use("/api/management", SuperAdminDashboardRouter, ManagementRouter);
 
 app.use(
   "/api/tenant",

@@ -450,8 +450,9 @@ export const sendTestMessageController = async (req, res) => {
 
       const [[template]] = await db.sequelize.query(
         `SELECT template_name, language, status FROM ${tableNames.WHATSAPP_TEMPLATE}
-         WHERE template_id = ? AND tenant_id = ? AND is_deleted = false`,
-        { replacements: [template_id, tenant_id] },
+         WHERE (template_id = ? OR template_name = ?) AND tenant_id = ? AND is_deleted = false
+         LIMIT 1`,
+        { replacements: [template_id, template_id, tenant_id] },
       );
 
       if (!template) {
