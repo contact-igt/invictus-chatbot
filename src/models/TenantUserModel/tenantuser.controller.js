@@ -70,7 +70,7 @@ export const getLoggedTenantUserController = async (req, res) => {
         subscription_plan: tenant.subscription_plan,
         subscription_start_date: tenant.subscription_start_date,
         subscription_end_date: tenant.subscription_end_date,
-        max_users: tenant.max_users
+        max_users: tenant.max_users,
       };
       user.webhook_verified = !!tenant.webhook_verified;
     }
@@ -88,18 +88,16 @@ export const updateTenantOrganizationController = async (req, res) => {
   const loginUser = req.user;
 
   try {
-    const {
-      company_name,
-      type,
-      address,
-      country,
-      state,
-      city,
-      pincode
-    } = req.body;
+    const { company_name, type, address, country, state, city, pincode } =
+      req.body;
 
-    if (loginUser.role !== 'tenant_admin') {
-      return res.status(403).json({ message: "Access denied: Only tenant admins can update organization details" });
+    if (loginUser.role !== "tenant_admin") {
+      return res
+        .status(403)
+        .json({
+          message:
+            "Access denied: Only tenant admins can update organization details",
+        });
     }
 
     const tenant = await findTenantByIdService(loginUser.tenant_id);
@@ -119,11 +117,11 @@ export const updateTenantOrganizationController = async (req, res) => {
       state,
       city,
       pincode,
-      loginUser.tenant_id
+      loginUser.tenant_id,
     );
 
     return res.status(200).json({
-      message: "Organization details updated successfully"
+      message: "Organization details updated successfully",
     });
   } catch (err) {
     return res.status(500).json({ message: err.message });
@@ -133,7 +131,8 @@ export const updateTenantOrganizationController = async (req, res) => {
 export const updateLoggedTenantOrganizationController = async (req, res) => {
   try {
     const { tenant_id } = req.user;
-    const { company_name, type, address, city, state, country, pincode } = req.body;
+    const { company_name, type, address, city, state, country, pincode } =
+      req.body;
 
     if (!tenant_id) {
       return res.status(400).json({ message: "Tenant ID required" });
@@ -158,10 +157,12 @@ export const updateLoggedTenantOrganizationController = async (req, res) => {
       null, // max_users (PROTECTED)
       null, // sub_plan (PROTECTED)
       null, // profile
-      tenant_id
+      tenant_id,
     );
 
-    return res.status(200).json({ message: "Organization updated successfully" });
+    return res
+      .status(200)
+      .json({ message: "Organization updated successfully" });
   } catch (err) {
     return res.status(500).json({ message: err.message });
   }
@@ -356,8 +357,12 @@ export const loginTenantUserController = async (req, res) => {
       });
     }
 
-    if (["inactive", "suspended", "expired", "rejected"].includes(tenant.status)) {
-      console.log(`[LOGIN-DEBUG] Tenant ${tenant.tenant_id} is ${tenant.status}`);
+    if (
+      ["inactive", "suspended", "expired", "rejected"].includes(tenant.status)
+    ) {
+      console.log(
+        `[LOGIN-DEBUG] Tenant ${tenant.tenant_id} is ${tenant.status}`,
+      );
       return res.status(403).send({
         message: `Your organization is ${tenant.status}. Please contact administration.`,
       });
@@ -399,9 +404,9 @@ export const getAllTenantUsersController = async (req, res) => {
 export const getTenantUserByIdController = async (req, res) => {
   try {
     const loginUser = req.user;
-    const { id } = req.params;
+    const { tenant_user_id } = req.params;
 
-    const user = await findTenantUserByIdService(id);
+    const user = await findTenantUserByIdService(tenant_user_id);
 
     if (!user) {
       return res.status(404).send({ message: "User not found" });
@@ -409,11 +414,9 @@ export const getTenantUserByIdController = async (req, res) => {
 
     // 🔒 Security Check: Ensure the requested user belongs to the same tenant
     if (user.tenant_id !== loginUser.tenant_id) {
-      return res
-        .status(403)
-        .send({
-          message: "Access denied: User belongs to a different organization",
-        });
+      return res.status(403).send({
+        message: "Access denied: User belongs to a different organization",
+      });
     }
 
     // Remove sensitive data
@@ -437,9 +440,9 @@ export const getTenantUserByIdController = async (req, res) => {
 export const updateTenantUserByIdController = async (req, res) => {
   try {
     const loginUser = req.user;
-    const { id } = req.params;
+    const { tenant_user_id } = req.params;
 
-    const user = await findTenantUserByIdService(id);
+    const user = await findTenantUserByIdService(tenant_user_id);
 
     if (!user) {
       return res.status(404).send({ message: "User not found" });
@@ -447,15 +450,16 @@ export const updateTenantUserByIdController = async (req, res) => {
 
     // 🔒 Security Check: Ensure the target user belongs to the same tenant
     if (user.tenant_id !== loginUser.tenant_id) {
-      return res
-        .status(403)
-        .send({
-          message: "Access denied: User belongs to a different organization",
-        });
+      return res.status(403).send({
+        message: "Access denied: User belongs to a different organization",
+      });
     }
 
     // 🔒 Security Check: Only admins or the user themselves can update
-    if (loginUser.role !== "tenant_admin" && loginUser.unique_id !== id) {
+    if (
+      loginUser.role !== "tenant_admin" &&
+      loginUser.unique_id !== tenant_user_id
+    ) {
       return res.status(403).send({ message: "Access denied" });
     }
 
@@ -476,7 +480,7 @@ export const updateTenantUserByIdController = async (req, res) => {
       req.body.mobile = normalizeMobile(req.body.country_code, req.body.mobile);
     }
 
-    await updateTenantUserByIdService(id, req.body);
+    await updateTenantUserByIdService(tenant_user_id, req.body);
 
     return res.status(200).send({
       message: "Tenant user updated successfully",
@@ -489,9 +493,9 @@ export const updateTenantUserByIdController = async (req, res) => {
 export const softDeleteTenantUserController = async (req, res) => {
   try {
     const loginUser = req.user;
-    const { id } = req.params;
+    const { tenant_user_id } = req.params;
 
-    const user = await findTenantUserByIdService(id);
+    const user = await findTenantUserByIdService(tenant_user_id);
 
     if (!user) {
       return res.status(404).send({ message: "User not found" });
@@ -499,20 +503,18 @@ export const softDeleteTenantUserController = async (req, res) => {
 
     // 🔒 Security Check: Ensure target user belongs to the same tenant
     if (user.tenant_id !== loginUser.tenant_id) {
-      return res
-        .status(403)
-        .send({
-          message: "Access denied: User belongs to a different organization",
-        });
+      return res.status(403).send({
+        message: "Access denied: User belongs to a different organization",
+      });
     }
 
-    if (loginUser.tenant_user_id === id) {
+    if (loginUser.tenant_user_id === tenant_user_id) {
       return res.status(400).send({
         message: "Tenant user cannot delete himself",
       });
     }
 
-    await softDeleteTenantUserService(id);
+    await softDeleteTenantUserService(tenant_user_id);
 
     return res.status(200).send({
       message: "Tenant user deleted successfully",
@@ -525,9 +527,9 @@ export const softDeleteTenantUserController = async (req, res) => {
 export const permanentDeleteTenantUserController = async (req, res) => {
   try {
     const loginUser = req.user;
-    const { id } = req.params;
+    const { tenant_user_id } = req.params;
 
-    const user = await findTenantUserByIdIgnoringDeleteService(id);
+    const user = await findTenantUserByIdIgnoringDeleteService(tenant_user_id);
 
     if (!user) {
       return res.status(404).send({ message: "User not found" });
@@ -535,14 +537,12 @@ export const permanentDeleteTenantUserController = async (req, res) => {
 
     // 🔒 Security Check: Ensure target user belongs to the same tenant
     if (user.tenant_id !== loginUser.tenant_id) {
-      return res
-        .status(403)
-        .send({
-          message: "Access denied: User belongs to a different organization",
-        });
+      return res.status(403).send({
+        message: "Access denied: User belongs to a different organization",
+      });
     }
 
-    await permanentDeleteTenantUserService(id);
+    await permanentDeleteTenantUserService(tenant_user_id);
 
     return res.status(200).send({
       message: "Tenant user permanently deleted",
@@ -567,10 +567,10 @@ export const getDeletedTenantUserListController = async (req, res) => {
 };
 
 export const restoreTenantUserController = async (req, res) => {
-  const { id } = req.params;
+  const { tenant_user_id } = req.params;
 
   try {
-    await restoreTenantUserService(id);
+    await restoreTenantUserService(tenant_user_id);
 
     return res.status(200).send({
       message: "Tenant user restored successfully",

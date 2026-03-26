@@ -263,7 +263,7 @@ export const getContactByIdAndTenantIdService = async (id, tenant_id) => {
   try {
     const Values = [id, tenant_id];
 
-    const Query = `SELECT * FROM ${tableNames?.CONTACTS} WHERE id = ? AND tenant_id = ? AND is_deleted = false LIMIT 1 `;
+    const Query = `SELECT * FROM ${tableNames?.CONTACTS} WHERE contact_id = ? AND tenant_id = ? AND is_deleted = false LIMIT 1 `;
 
     const [result] = await db.sequelize.query(Query, { replacements: Values });
 

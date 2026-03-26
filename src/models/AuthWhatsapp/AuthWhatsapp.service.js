@@ -33,7 +33,7 @@ export const sendWhatsAppMessage = async (tenant_id, to, message) => {
     SELECT phone_number_id, access_token
     FROM ${tableNames.WHATSAPP_ACCOUNT}
     WHERE tenant_id = ?
-      AND status = 'active'
+      AND status IN ('active', 'verified')
     LIMIT 1
     `,
       { replacements: [tenant_id] },
@@ -104,7 +104,7 @@ export const sendWhatsAppTemplate = async (
     SELECT phone_number_id, access_token
     FROM ${tableNames.WHATSAPP_ACCOUNT}
     WHERE tenant_id = ?
-      AND status = 'active'
+      AND status IN ('active', 'verified')
     LIMIT 1
     `,
     { replacements: [tenant_id] },
@@ -180,7 +180,7 @@ export const sendReadReceipt = async (
     FROM ${tableNames.WHATSAPP_ACCOUNT}
     WHERE tenant_id = ?
       AND phone_number_id = ?
-      AND status = 'active'
+      AND status IN ('active', 'verified')
     LIMIT 1
     `,
       { replacements: [tenant_id, phone_number_id] },
@@ -245,7 +245,7 @@ export const sendTypingIndicator = async (
     FROM ${tableNames.WHATSAPP_ACCOUNT}
     WHERE tenant_id = ?
       AND phone_number_id = ?
-      AND status = 'active'
+      AND status IN ('active', 'verified')
     LIMIT 1
     `,
       { replacements: [tenant_id, phone_number_id] },

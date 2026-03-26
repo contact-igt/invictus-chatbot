@@ -18,7 +18,6 @@ import {
   getOnboardedTenantListService,
   getTenantSettingsService,
   updateTenantAiSettingsService,
-  updateTenantGeneralSettingsService,
 } from "./tenant.service.js";
 
 import {
@@ -37,6 +36,8 @@ import {
   findTenantAdminService,
   updateUsersStatusByTenantIdService,
 } from "../TenantUserModel/tenantuser.service.js";
+
+import { getComprehensiveWebhookStatusService } from "../WhatsappAccountModel/whatsappAccount.service.js";
 
 export const createTenantController = async (req, res) => {
   const loginUSer = req.user;
@@ -60,6 +61,7 @@ export const createTenantController = async (req, res) => {
       maxUsers,
       subscriptionPlan,
       profile,
+      ai_settings,
     } = req.body;
 
     const requiredFields = {
@@ -120,6 +122,8 @@ export const createTenantController = async (req, res) => {
       maxUsers || 10,
       subscriptionPlan || "basic",
       profile || null,
+      null, // verify_token
+      ai_settings || null,
     );
 
     const tenant_user_id = await generateReadableIdFromLast(
@@ -219,6 +223,7 @@ export const updateTenantController = async (req, res) => {
       maxUsers,
       subscriptionPlan,
       profile,
+      ai_settings,
     } = req.body;
 
     const tenant = await findTenantByIdService(id);
@@ -273,6 +278,7 @@ export const updateTenantController = async (req, res) => {
       maxUsers,
       subscriptionPlan,
       profile,
+      ai_settings,
       id,
     );
 
@@ -504,17 +510,12 @@ export const getTenantWebhookStatusController = async (req, res) => {
       });
     }
 
-    const tenant = await findTenantByIdService(id);
-
-    if (!tenant) {
-      return res.status(404).json({ message: "Tenant not found" });
-    }
+    // Use comprehensive status check
+    const status = await getComprehensiveWebhookStatusService(id);
 
     return res.status(200).json({
       message: "success",
-      data: {
-        webhook_verified: !!tenant.webhook_verified,
-      },
+      data: status,
     });
   } catch (err) {
     return res.status(500).json({ error: err.message });
@@ -592,32 +593,6 @@ export const updateTenantAiSettingsController = async (req, res) => {
 
     await updateTenantAiSettingsService(tenant_id, ai_settings);
     return res.status(200).json({ message: "Settings updated successfully" });
-  } catch (err) {
-    return res.status(500).json({ message: err.message });
-  }
-};
-
-export const updateTenantGeneralSettingsController = async (req, res) => {
-  try {
-    const tenant_id = req.user.tenant_id;
-    const { default_contact_name } = req.body;
-    console.log(
-      `[SETTINGS PATCH] tenant_id=${tenant_id}, default_contact_name=${default_contact_name}`,
-    );
-
-    if (!default_contact_name || default_contact_name.trim() === "") {
-      return res
-        .status(400)
-        .json({ message: "Default contact name is required." });
-    }
-
-    await updateTenantGeneralSettingsService(
-      tenant_id,
-      default_contact_name.trim(),
-    );
-    return res
-      .status(200)
-      .json({ message: "General Settings updated successfully" });
   } catch (err) {
     return res.status(500).json({ message: err.message });
   }

@@ -339,10 +339,8 @@ export const receiveMessage = async (req, res) => {
     });
 
     // 5. Manage Contact and LiveChat
-
-    const tenantSettings = await getTenantSettingsService(tenant_id);
-    const defaultNameConfig = tenantSettings?.default_contact_name || null;
-    const finalName = defaultNameConfig ? defaultNameConfig : name || null;
+    // Use WhatsApp profile name directly
+    const finalName = name || null;
 
     // Use atomic getOrCreate to prevent duplicate contacts from race conditions
     const {
@@ -364,12 +362,7 @@ export const receiveMessage = async (req, res) => {
       );
     } else {
       // Update name if needed for existing contact
-      if (
-        finalName &&
-        (!contactsaved.name ||
-          contactsaved.name === phone ||
-          (defaultNameConfig && contactsaved.name !== defaultNameConfig))
-      ) {
+      if (finalName && (!contactsaved.name || contactsaved.name === phone)) {
         await updateContactService(
           contactsaved.contact_id,
           tenant_id,
@@ -591,6 +584,13 @@ export const receiveMessage = async (req, res) => {
           contactsaved?.contact_id,
           phone_number_id,
         );
+
+        // Log AI result for debugging UPDATE/CANCEL issues
+        console.log(`[WEBHOOK] AI Result:`, {
+          tagDetected: aiResult?.tagDetected || "NONE",
+          tagPayloadPreview: aiResult?.tagPayload?.substring(0, 150) || "N/A",
+          messagePreview: aiResult?.message?.substring(0, 200) || "N/A",
+        });
 
         const finalReply = aiResult?.message;
         const fallback = aiResult?.tagDetected

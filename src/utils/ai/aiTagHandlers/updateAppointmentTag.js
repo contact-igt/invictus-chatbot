@@ -1,13 +1,6 @@
 import * as AppointmentService from "../../../models/AppointmentModel/appointment.service.js";
 import { sendWhatsAppMessage } from "../../../models/AuthWhatsapp/AuthWhatsapp.service.js";
 import { createUserMessageService } from "../../../models/Messages/messages.service.js";
-import { sendEmail } from "../../email/emailService.js";
-import {
-  buildAppointmentEmailHtml,
-  buildAppointmentEmailSubject,
-  formatAppointmentDate,
-} from "../../email/appointmentEmailTemplate.js";
-import db from "../../../database/index.js";
 
 export const execute = async (payload, context) => {
   try {
@@ -57,10 +50,18 @@ export const execute = async (payload, context) => {
 
     console.log("[TAG-HANDLER-UPDATE-APPOINTMENT] Parsed data:", data);
 
-    if (!data.appointment_id) {
-      console.error("[TAG-HANDLER-UPDATE-APPOINTMENT] Missing appointment_id");
+    // Check for placeholder values that AI might incorrectly use
+    const placeholders = ["ID", "YYYY-MM-DD", "HH:MM AM/PM", "HH:MM", "DOC_ID"];
+    if (
+      !data.appointment_id ||
+      placeholders.includes(String(data.appointment_id).toUpperCase())
+    ) {
+      console.error(
+        "[TAG-HANDLER-UPDATE-APPOINTMENT] Missing or placeholder appointment_id:",
+        data.appointment_id,
+      );
       const errMsg =
-        "❌ Could not identify which appointment to update. Please provide your appointment ID.";
+        "❌ I need your appointment ID to update it. Please tell me which appointment you want to update (e.g., AP001).";
       await sendWhatsAppMessage(tenant_id, phone, errMsg).catch(() => {});
       try {
         await createUserMessageService(
@@ -85,19 +86,55 @@ export const execute = async (payload, context) => {
     if (data.doctor_id) updateFields.doctor_id = data.doctor_id;
     if (data.age) updateFields.age = data.age;
 
-    // Fetch existing appointment to fill in missing values for availability check
-    let existingAppt = null;
-    if (data.date || data.time || data.doctor_id) {
+    console.log(
+      "[TAG-HANDLER-UPDATE-APPOINTMENT] Update fields:",
+      updateFields,
+    );
+
+    // Check if there's anything to update
+    if (Object.keys(updateFields).length === 0) {
+      console.error(
+        "[TAG-HANDLER-UPDATE-APPOINTMENT] No update fields provided",
+      );
+      const errMsg =
+        "❌ I didn't receive any changes to make. Please tell me what you'd like to update (date, time, or doctor).";
+      await sendWhatsAppMessage(tenant_id, phone, errMsg).catch(() => {});
       try {
-        const activeAppts =
-          await AppointmentService.getActiveAppointmentsByContactService(
-            tenant_id,
-            contact_id,
-          );
-        existingAppt = activeAppts?.find(
-          (a) => a.appointment_id === data.appointment_id,
+        await createUserMessageService(
+          tenant_id,
+          contact_id,
+          phone_number_id,
+          phone,
+          null,
+          null,
+          "bot",
+          null,
+          errMsg,
         );
       } catch (_) {}
+      return;
+    }
+
+    // Fetch existing appointment to fill in missing values for availability check
+    let existingAppt = null;
+    try {
+      const activeAppts =
+        await AppointmentService.getActiveAppointmentsByContactService(
+          tenant_id,
+          contact_id,
+        );
+      existingAppt = activeAppts?.find(
+        (a) => a.appointment_id === data.appointment_id,
+      );
+      console.log(
+        "[TAG-HANDLER-UPDATE-APPOINTMENT] Existing appointment found:",
+        existingAppt?.appointment_id || "NOT FOUND",
+      );
+    } catch (fetchErr) {
+      console.error(
+        "[TAG-HANDLER-UPDATE-APPOINTMENT] Failed to fetch existing appointment:",
+        fetchErr.message,
+      );
     }
 
     // Timezone-safe date extraction (avoids UTC shift with toISOString)
@@ -114,11 +151,13 @@ export const execute = async (payload, context) => {
     const checkDoctorId = data.doctor_id || existingAppt?.doctor_id;
 
     if (checkDate && checkTime && checkDoctorId) {
+      // Pass the appointment_id to exclude it from availability check (since we're updating it)
       const isAvailable = await AppointmentService.checkAvailabilityService(
         tenant_id,
         checkDoctorId,
         checkDate,
         checkTime,
+        data.appointment_id, // Exclude this appointment from conflict check
       );
 
       if (!isAvailable) {
@@ -183,6 +222,21 @@ export const execute = async (payload, context) => {
         "[TAG-HANDLER-UPDATE-APPOINTMENT] Appointment not found:",
         data.appointment_id,
       );
+      const notFoundMsg = `❌ I couldn't find appointment *${data.appointment_id}*. Please check the ID and try again.`;
+      await sendWhatsAppMessage(tenant_id, phone, notFoundMsg).catch(() => {});
+      try {
+        await createUserMessageService(
+          tenant_id,
+          contact_id,
+          phone_number_id,
+          phone,
+          null,
+          null,
+          "bot",
+          null,
+          notFoundMsg,
+        );
+      } catch (_) {}
       return;
     }
 
@@ -204,11 +258,17 @@ export const execute = async (payload, context) => {
     if (data.time) changes.push(`🕐 New Time: ${data.time}`);
     if (data.doctor_id) changes.push(`👨‍⚕️ New Doctor: Updated`);
 
+    // Add email notification note if email exists
+    const emailNote = updated.email
+      ? `\n📧 Update confirmation sent to: ${updated.email}`
+      : "";
+
     const whatsappMsg =
       `✅ *Appointment Updated!*\n\n` +
       `🎟️ Appointment: *${data.appointment_id}*\n` +
       `${changes.join("\n")}\n\n` +
-      `Your appointment has been successfully updated. See you soon! 😊`;
+      `Your appointment has been successfully updated. See you soon! 😊` +
+      emailNote;
 
     await sendWhatsAppMessage(tenant_id, phone, whatsappMsg).catch((err) =>
       console.error(

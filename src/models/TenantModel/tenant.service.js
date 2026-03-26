@@ -21,8 +21,23 @@ export const createTenantService = async (
   subscription_plan,
   profile,
   verify_token = null,
+  ai_settings = null,
 ) => {
   try {
+    // Merge default AI settings with provided ones
+    const defaultAiSettings = {
+      auto_responder: true,
+      smart_reply: true,
+      neural_summary: true,
+      content_generation: true,
+      input_model: "gpt-4o-mini",
+      output_model: "gpt-4o",
+    };
+
+    const mergedAiSettings = ai_settings
+      ? { ...defaultAiSettings, ...ai_settings }
+      : defaultAiSettings;
+
     const result = await db.Tenants.create({
       tenant_id,
       company_name,
@@ -43,6 +58,7 @@ export const createTenantService = async (
       subscription_plan,
       profile,
       verify_token,
+      ai_settings: mergedAiSettings,
     });
 
     return result;
@@ -112,6 +128,7 @@ export const updateTenantService = async (
   max_users,
   subscription_plan,
   profile,
+  ai_settings,
   tenant_id,
 ) => {
   const updateFields = [];
@@ -203,6 +220,33 @@ export const updateTenantService = async (
   if (profile !== undefined && profile !== null) {
     updateFields.push("profile = ?");
     updateValues.push(profile);
+  }
+
+  // Handle AI settings - merge with existing settings to preserve other fields
+  if (ai_settings !== undefined && ai_settings !== null) {
+    // Fetch existing ai_settings to merge
+    const existingTenant = await db.Tenants.findOne({
+      where: { tenant_id },
+      attributes: ["ai_settings"],
+      raw: true,
+    });
+
+    let existingAiSettings = {};
+    if (existingTenant?.ai_settings) {
+      try {
+        existingAiSettings =
+          typeof existingTenant.ai_settings === "string"
+            ? JSON.parse(existingTenant.ai_settings)
+            : existingTenant.ai_settings;
+      } catch (e) {
+        existingAiSettings = {};
+      }
+    }
+
+    // Merge: keep existing settings, update only provided fields
+    const mergedAiSettings = { ...existingAiSettings, ...ai_settings };
+    updateFields.push("ai_settings = ?");
+    updateValues.push(JSON.stringify(mergedAiSettings));
   }
 
   if (updateFields.length === 0) return null;
@@ -401,25 +445,39 @@ export const getTenantInvitationListService = async () => {
 };
 
 export const getOnboardedTenantListService = async () => {
+  // Only return tenants that have completed full onboarding:
+  // 1. Tenant exists (email set)
+  // 2. Password set (tenant_users.password_hash is not null AND status = 'active')
+  // 3. WhatsApp connected (whatsapp_accounts entry exists with status 'active' or 'verified')
   const query = `
     SELECT 
-      t.*
+      t.*,
+      wa.status as whatsapp_status,
+      wa.whatsapp_number,
+      tu.status as admin_status
     FROM ${tableNames.TENANTS} t
-    WHERE t.status IN ('active', 'trial', 'expired', 'suspended', 'inactive', 'maintenance', 'grace_period', 'pending_setup', 'invited') AND t.is_deleted = ?
+    INNER JOIN ${tableNames.TENANT_USERS} tu ON t.tenant_id = tu.tenant_id 
+      AND tu.role = 'tenant_admin' 
+      AND tu.password_hash IS NOT NULL 
+      AND tu.status = 'active'
+      AND tu.is_deleted = false
+    INNER JOIN ${tableNames.WHATSAPP_ACCOUNT} wa ON t.tenant_id = wa.tenant_id 
+      AND wa.status IN ('active', 'verified')
+      AND wa.is_deleted = false
+    WHERE t.is_deleted = false
     ORDER BY t.created_at DESC`;
 
   try {
-    const [rows] = await db.sequelize.query(query, {
-      replacements: [0],
-    });
+    const [rows] = await db.sequelize.query(query);
     return rows;
   } catch (err) {
+    console.error("[getOnboardedTenantListService] Error:", err);
     throw err;
   }
 };
 
 export const getTenantSettingsService = async (tenant_id) => {
-  const Query = `SELECT company_name, owner_email, owner_name, type, ai_settings, default_contact_name FROM ${tableNames?.TENANTS} WHERE tenant_id = ? AND is_deleted = ?`;
+  const Query = `SELECT company_name, owner_email, owner_name, type, ai_settings FROM ${tableNames?.TENANTS} WHERE tenant_id = ? AND is_deleted = ?`;
 
   try {
     const [result] = await db.sequelize.query(Query, {
@@ -468,22 +526,6 @@ export const updateTenantAiSettingsService = async (tenant_id, ai_settings) => {
       replacements: [JSON.stringify(updatedSettings), tenant_id, 0],
     });
     return Object.keys(result).length > 0;
-  } catch (err) {
-    throw err;
-  }
-};
-
-export const updateTenantGeneralSettingsService = async (
-  tenant_id,
-  default_contact_name,
-) => {
-  const Query = `UPDATE ${tableNames?.TENANTS} SET default_contact_name = ? WHERE tenant_id = ? AND is_deleted = ?`;
-
-  try {
-    const [result] = await db.sequelize.query(Query, {
-      replacements: [default_contact_name || null, tenant_id, 0],
-    });
-    return result;
   } catch (err) {
     throw err;
   }

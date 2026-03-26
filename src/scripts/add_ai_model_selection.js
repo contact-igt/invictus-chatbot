@@ -3,7 +3,7 @@ import { tableNames } from "../database/tableName.js";
 
 /**
  * Migration script to add input_model and output_model to existing tenants' ai_settings.
- * Run this AFTER running seed_ai_pricing.js to ensure models are available.
+ * Run this AFTER running seed_all_pricing.js to ensure models are available.
  */
 async function run() {
   try {

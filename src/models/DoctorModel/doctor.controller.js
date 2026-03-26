@@ -37,7 +37,10 @@ export const createDoctorController = async (req, res) => {
 
   // Map frontend field names to backend service names
   const finalStatus = (status || currentStatus || "").replace("-", "_");
-  const finalConsultationDuration = (consultation_duration !== undefined) ? consultation_duration : consultationDuration;
+  const finalConsultationDuration =
+    consultation_duration !== undefined
+      ? consultation_duration
+      : consultationDuration;
   const finalTitle = (title || "").replace(".", "");
 
   const requiredFields = { name, mobile, email };
@@ -48,7 +51,10 @@ export const createDoctorController = async (req, res) => {
       .send({ message: `Missing fields: ${missing.join(", ")}` });
   }
 
-  if (finalConsultationDuration !== undefined && finalConsultationDuration !== null) {
+  if (
+    finalConsultationDuration !== undefined &&
+    finalConsultationDuration !== null
+  ) {
     if (
       typeof finalConsultationDuration !== "number" ||
       finalConsultationDuration < 5 ||
@@ -108,10 +114,10 @@ export const getDoctorListController = async (req, res) => {
 
 export const getDoctorByIdController = async (req, res) => {
   const tenant_id = req.user.tenant_id;
-  const { id } = req.params;
+  const { doctor_id } = req.params;
 
   try {
-    const result = await getDoctorByIdService(id, tenant_id);
+    const result = await getDoctorByIdService(doctor_id, tenant_id);
     if (!result) {
       return res.status(404).send({ message: "Doctor not found" });
     }
@@ -126,7 +132,7 @@ export const getDoctorByIdController = async (req, res) => {
 
 export const updateDoctorController = async (req, res) => {
   const tenant_id = req.user.tenant_id;
-  const { id } = req.params;
+  const { doctor_id } = req.params;
   const {
     title,
     consultation_duration,
@@ -135,12 +141,18 @@ export const updateDoctorController = async (req, res) => {
     currentStatus,
   } = req.body;
 
-  const finalConsultationDuration = (consultation_duration !== undefined) ? consultation_duration : consultationDuration;
+  const finalConsultationDuration =
+    consultation_duration !== undefined
+      ? consultation_duration
+      : consultationDuration;
   const finalStatus = (status || currentStatus || "").replace("-", "_");
   const finalTitle = (title || "").replace(".", "");
 
   // Validate consultation duration if provided
-  if (finalConsultationDuration !== undefined && finalConsultationDuration !== null) {
+  if (
+    finalConsultationDuration !== undefined &&
+    finalConsultationDuration !== null
+  ) {
     if (
       typeof finalConsultationDuration !== "number" ||
       finalConsultationDuration < 5 ||
@@ -154,9 +166,12 @@ export const updateDoctorController = async (req, res) => {
   }
 
   // Update body with final values for service
-  if (finalConsultationDuration !== undefined) req.body.consultation_duration = finalConsultationDuration;
-  if (finalStatus !== undefined && finalStatus !== "") req.body.status = finalStatus;
-  if (finalTitle !== undefined && finalTitle !== "") req.body.title = finalTitle;
+  if (finalConsultationDuration !== undefined)
+    req.body.consultation_duration = finalConsultationDuration;
+  if (finalStatus !== undefined && finalStatus !== "")
+    req.body.status = finalStatus;
+  if (finalTitle !== undefined && finalTitle !== "")
+    req.body.title = finalTitle;
 
   try {
     // Normalize mobile and country_code if provided
@@ -167,7 +182,7 @@ export const updateDoctorController = async (req, res) => {
       req.body.mobile = normalizeMobile(req.body.country_code, req.body.mobile);
     }
 
-    const result = await updateDoctorService(id, tenant_id, req.body);
+    const result = await updateDoctorService(doctor_id, tenant_id, req.body);
     return res.status(200).send(result);
   } catch (err) {
     if (err.message === "Doctor not found") {
@@ -179,10 +194,10 @@ export const updateDoctorController = async (req, res) => {
 
 export const softDeleteDoctorController = async (req, res) => {
   const tenant_id = req.user.tenant_id;
-  const { id } = req.params;
+  const { doctor_id } = req.params;
 
   try {
-    const result = await softDeleteDoctorService(id, tenant_id);
+    const result = await softDeleteDoctorService(doctor_id, tenant_id);
     return res.status(200).send(result);
   } catch (err) {
     if (err.message === "Doctor not found") {
@@ -194,10 +209,10 @@ export const softDeleteDoctorController = async (req, res) => {
 
 export const permanentDeleteDoctorController = async (req, res) => {
   const tenant_id = req.user.tenant_id;
-  const { id } = req.params;
+  const { doctor_id } = req.params;
 
   try {
-    const result = await permanentDeleteDoctorService(id, tenant_id);
+    const result = await permanentDeleteDoctorService(doctor_id, tenant_id);
     return res.status(200).send(result);
   } catch (err) {
     if (err.message === "Doctor not found") {
@@ -209,10 +224,10 @@ export const permanentDeleteDoctorController = async (req, res) => {
 
 export const restoreDoctorController = async (req, res) => {
   const tenant_id = req.user.tenant_id;
-  const { id } = req.params;
+  const { doctor_id } = req.params;
 
   try {
-    const result = await restoreDoctorService(id, tenant_id);
+    const result = await restoreDoctorService(doctor_id, tenant_id);
     return res.status(200).send(result);
   } catch (err) {
     if (err.message === "Doctor not found or not deleted") {

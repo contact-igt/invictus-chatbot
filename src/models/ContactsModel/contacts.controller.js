@@ -14,7 +14,6 @@ import {
   toggleSilenceAiService,
 } from "./contacts.service.js";
 
-
 export const getDeletedContactListController = async (req, res) => {
   const tenant_id = req.user.tenant_id;
   try {
@@ -29,10 +28,10 @@ export const getDeletedContactListController = async (req, res) => {
 };
 
 export const restoreContactController = async (req, res) => {
-  const { id } = req.params;
+  const { contact_id } = req.params;
   const tenant_id = req.user.tenant_id;
   try {
-    const result = await restoreContactService(id, tenant_id);
+    const result = await restoreContactService(contact_id, tenant_id);
     return res.status(200).send(result);
   } catch (err) {
     if (err.message === "Contact not found or not deleted") {
@@ -54,7 +53,7 @@ export const createContactController = async (req, res) => {
 
   // Clean phone
   phone = phone.toString().replace(/\D/g, "");
-  
+
   // Auto-handling for country code
   if (!country_code) {
     if (phone.length === 10) {
@@ -71,15 +70,15 @@ export const createContactController = async (req, res) => {
   }
 
   // Clean country code (ensure starts with +)
-  country_code = country_code.toString().startsWith("+") 
-    ? country_code 
+  country_code = country_code.toString().startsWith("+")
+    ? country_code
     : `+${country_code.toString().replace(/\D/g, "")}`;
 
   try {
     const existingContact = await getContactByPhoneAndTenantIdService(
       tenant_id,
       phone,
-      country_code
+      country_code,
     );
 
     if (existingContact) {
@@ -95,7 +94,7 @@ export const createContactController = async (req, res) => {
       profile_pic || null,
       country_code,
       null, // wa_id
-      email || null
+      email || null,
     );
 
     return res.status(201).send({
@@ -107,7 +106,6 @@ export const createContactController = async (req, res) => {
     });
   }
 };
-
 
 export const getAllContactsController = async (req, res) => {
   const tenant_id = req.user.tenant_id;
@@ -134,14 +132,17 @@ export const getAllContactsController = async (req, res) => {
 
 export const getContactByIdController = async (req, res) => {
   const tenant_id = req.user.tenant_id;
-  const { id } = req.params;
+  const { contact_id } = req.params;
 
   if (!tenant_id) {
     return res.status(400).send({ message: "Tenant id missing" });
   }
 
   try {
-    const response = await getContactByIdAndTenantIdService(id, tenant_id);
+    const response = await getContactByIdAndTenantIdService(
+      contact_id,
+      tenant_id,
+    );
     if (!response) {
       return res.status(404).send({ message: "Contact not found" });
     }
@@ -158,7 +159,7 @@ export const getContactByIdController = async (req, res) => {
 
 export const updateContactController = async (req, res) => {
   const tenant_id = req.user.tenant_id;
-  const { id } = req.params;
+  const { contact_id } = req.params;
   const { name, email, profile_pic, is_blocked, phone } = req.body;
 
   if (!tenant_id) {
@@ -174,13 +175,30 @@ export const updateContactController = async (req, res) => {
   }
 
   try {
-    await updateContactService(
-      id,
+    // Fetch existing contact to preserve fields not provided in update
+    const existingContact = await getContactByIdAndTenantIdService(
+      contact_id,
       tenant_id,
-      name,
-      email,
-      profile_pic,
-      is_blocked,
+    );
+    if (!existingContact) {
+      return res.status(404).send({ message: "Contact not found" });
+    }
+
+    // Merge: use new value if provided, otherwise keep existing
+    const finalName = name !== undefined ? name : existingContact.name;
+    const finalEmail = email !== undefined ? email : existingContact.email;
+    const finalProfilePic =
+      profile_pic !== undefined ? profile_pic : existingContact.profile_pic;
+    const finalIsBlocked =
+      is_blocked !== undefined ? is_blocked : existingContact.is_blocked;
+
+    await updateContactService(
+      contact_id,
+      tenant_id,
+      finalName,
+      finalEmail,
+      finalProfilePic,
+      finalIsBlocked,
     );
     return res.status(200).send({
       message: "Contact updated successfully",
@@ -194,14 +212,14 @@ export const updateContactController = async (req, res) => {
 
 export const deleteContactController = async (req, res) => {
   const tenant_id = req.user.tenant_id;
-  const { id } = req.params;
+  const { contact_id } = req.params;
 
   if (!tenant_id) {
     return res.status(400).send({ message: "Tenant id missing" });
   }
 
   try {
-    await deleteContactService(id, tenant_id);
+    await deleteContactService(contact_id, tenant_id);
     return res.status(200).send({
       message: "Contact deleted successfully",
     });
@@ -214,14 +232,14 @@ export const deleteContactController = async (req, res) => {
 
 export const permanentDeleteContactController = async (req, res) => {
   const tenant_id = req.user.tenant_id;
-  const { id } = req.params;
+  const { contact_id } = req.params;
 
   if (!tenant_id) {
     return res.status(400).send({ message: "Tenant id missing" });
   }
 
   try {
-    await permanentDeleteContactService(id, tenant_id);
+    await permanentDeleteContactService(contact_id, tenant_id);
     return res.status(200).send({
       message: "Contact and related data permanently deleted",
     });
@@ -242,27 +260,29 @@ export const importContactsController = async (req, res) => {
   const file = req.files.file;
 
   // Check if it's a CSV
-  if (!file.name.endsWith('.csv')) {
+  if (!file.name.endsWith(".csv")) {
     return res.status(400).send({ message: "Please upload a valid CSV file" });
   }
 
   try {
     const csvData = file.data.toString("utf8");
-    const lines = csvData.split(/\r?\n/).filter(line => line.trim() !== "");
-    
+    const lines = csvData.split(/\r?\n/).filter((line) => line.trim() !== "");
+
     if (lines.length < 2) {
-      return res.status(400).send({ message: "CSV file is empty or missing data" });
+      return res
+        .status(400)
+        .send({ message: "CSV file is empty or missing data" });
     }
 
     // Parse headers
-    const headers = lines[0].split(",").map(h => h.trim().toLowerCase());
+    const headers = lines[0].split(",").map((h) => h.trim().toLowerCase());
     const nameIndex = headers.indexOf("name");
     const phoneIndex = headers.indexOf("phone");
     const emailIndex = headers.indexOf("email");
 
     if (nameIndex === -1 || phoneIndex === -1) {
-      return res.status(400).send({ 
-        message: "CSV must contain 'name' and 'phone' columns" 
+      return res.status(400).send({
+        message: "CSV must contain 'name' and 'phone' columns",
       });
     }
 
@@ -280,7 +300,7 @@ export const importContactsController = async (req, res) => {
         const char = line[j];
         if (char === '"') {
           inQuotes = !inQuotes;
-        } else if (char === ',' && !inQuotes) {
+        } else if (char === "," && !inQuotes) {
           // Process field before pushing
           let val = currentField.trim();
           // Remove ="..." (Excel format) or "..." (Quoted format)
@@ -300,7 +320,7 @@ export const importContactsController = async (req, res) => {
         contactsToImport.push({
           name: values[nameIndex],
           phone: values[phoneIndex],
-          email: emailIndex !== -1 ? values[emailIndex] : null
+          email: emailIndex !== -1 ? values[emailIndex] : null,
         });
       }
     }
@@ -309,29 +329,30 @@ export const importContactsController = async (req, res) => {
 
     return res.status(200).send({
       message: `Import complete: ${result.success} succeeded, ${result.skipped} skipped/duplicate.`,
-      data: result
+      data: result,
     });
   } catch (err) {
     return res.status(500).send({
-      message: "An error occurred during CSV import: " + err.message
+      message: "An error occurred during CSV import: " + err.message,
     });
   }
 };
 
 export const toggleSilenceAiController = async (req, res) => {
   const tenant_id = req.user.tenant_id;
-  const { id } = req.params; // contact_id
+  const { contact_id } = req.params;
   const { is_ai_silenced } = req.body;
 
   try {
-    await toggleSilenceAiService(id, tenant_id, is_ai_silenced);
-    
+    await toggleSilenceAiService(contact_id, tenant_id, is_ai_silenced);
+
     // Attempting to emit socket event if possible here, but usually socket is handled in messages/webhook
     // We will just do a fast update. Frontend handles it optimism.
-    
-    return res.status(200).send({ message: "AI silence status updated successfully" });
+
+    return res
+      .status(200)
+      .send({ message: "AI silence status updated successfully" });
   } catch (err) {
     return res.status(500).send({ message: err?.message });
   }
 };
-

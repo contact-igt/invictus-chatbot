@@ -1,14 +1,10 @@
 import * as AppointmentService from "../../../models/AppointmentModel/appointment.service.js";
 import { sendWhatsAppMessage } from "../../../models/AuthWhatsapp/AuthWhatsapp.service.js";
-import { sendEmail } from "../../email/emailService.js";
-import {
-  buildAppointmentEmailHtml,
-  buildAppointmentEmailSubject,
-  formatAppointmentDate,
-} from "../../email/appointmentEmailTemplate.js";
 import { createUserMessageService } from "../../../models/Messages/messages.service.js";
-import { findDoctorByNameService } from "../../../models/DoctorModel/doctor.service.js";
-import db from "../../../database/index.js";
+import {
+  findDoctorByNameService,
+  getDoctorAvailabilityService,
+} from "../../../models/DoctorModel/doctor.service.js";
 
 export const execute = async (payload, context, cleanMessage) => {
   try {
@@ -281,10 +277,31 @@ Please provide these details.`;
             `Here are the available slots for that day:\n${slotList}\n\n` +
             `Please choose one of these times and I'll book it for you.`;
         } else {
+          // Get doctor's available days to help user pick
+          let availableDaysText = "";
+          try {
+            const availability = await getDoctorAvailabilityService(
+              tenant_id,
+              data.doctor_id,
+            );
+            if (availability && availability.length > 0) {
+              const daysFormatted = availability
+                .map((a) => {
+                  const dayCapitalized =
+                    a.day_of_week.charAt(0).toUpperCase() +
+                    a.day_of_week.slice(1);
+                  return `  📅 ${dayCapitalized}: ${a.start_time} – ${a.end_time}`;
+                })
+                .join("\n");
+              availableDaysText = `\n\nThe doctor is available on:\n${daysFormatted}`;
+            }
+          } catch (_) {}
+
           altMessage =
             `❌ Sorry, the ${data.time} slot on ${data.date} is already booked, ` +
-            `and there are no other available slots on this date.\n` +
-            `Please choose a different date.`;
+            `and there are no other available slots on this date.` +
+            availableDaysText +
+            `\n\nPlease choose a different date.`;
         }
 
         await sendWhatsAppMessage(tenant_id, phone, altMessage).catch((err) =>
@@ -343,52 +360,17 @@ Please provide these details.`;
       `[TAG-HANDLER-APPOINTMENT] Successfully booked. ID: ${appointment.appointment_id}, Token: ${appointment.token_number}`,
     );
 
-    // Send email confirmation
-    try {
-      const contact = await db.Contacts.findOne({
-        where: { contact_id, tenant_id },
-        attributes: ["email"],
-      });
-
-      const emailTo = data.email || contact?.email;
-      if (emailTo) {
-        let doctorName = null;
-        if (appointment.doctor_id) {
-          // Fetch doctor name from DB
-          try {
-            const doctor = await db.Doctors.findOne({
-              where: { doctor_id: appointment.doctor_id, tenant_id },
-              attributes: ["name", "title"],
-            });
-            if (doctor) {
-              doctorName = doctor.title
-                ? `${doctor.title} ${doctor.name}`
-                : doctor.name;
-            }
-          } catch (err) {
-            console.error(
-              "[TAG-HANDLER-APPOINTMENT] Could not fetch doctor name for email:",
-              err.message,
-            );
-          }
-        }
-        // fallback to data.doctor_name or null
-        if (!doctorName) doctorName = data.doctor_name || null;
-        const formattedDate = formatAppointmentDate(data.date);
-
-        console.log(
-          `[TAG-HANDLER-APPOINTMENT] Created appointment: ${appointment.appointment_id}`,
-        );
-      }
-    } catch (err) {
-      console.error("[TAG-HANDLER-APPOINTMENT] Error:", err.message);
-    }
+    // Note: Email confirmation is sent automatically by createAppointmentService
+    // The email will be sent to: data.email or contact.email (looked up by service)
 
     // Send WhatsApp confirmation message
     const contactPhone = phone;
     if (contactPhone) {
       try {
         const problemNote = data.problem ? `\nReason: ${data.problem}` : "";
+        const emailNote = data.email
+          ? `\n📧 Confirmation sent to: ${data.email}`
+          : "";
         const whatsappMsg =
           `✅ *Appointment Confirmed!*\n\n` +
           `👤 Patient: ${appointmentData.patient_name}\n` +
@@ -396,7 +378,7 @@ Please provide these details.`;
           `🕐 Time: ${data.time}\n` +
           `${data.age ? `🔢 Age: ${data.age}\n` : ""}` +
           `🎟️ Token: *#${appointment.token_number}*` +
-          `${problemNote}\n\n` +
+          `${problemNote}${emailNote}\n\n` +
           `Please arrive 10 minutes before your scheduled time. See you soon! 😊`;
 
         await sendWhatsAppMessage(tenant_id, contactPhone, whatsappMsg);

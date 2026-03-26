@@ -62,7 +62,7 @@ Router.get(
 );
 
 Router.get(
-  "/user/:id",
+  "/user/:tenant_user_id",
   authenticate,
   authorize({
     user_type: "tenant",
@@ -72,7 +72,7 @@ Router.get(
 );
 
 Router.put(
-  "/user/:id",
+  "/user/:tenant_user_id",
   authenticate,
   authorize({
     user_type: "tenant",
@@ -82,7 +82,7 @@ Router.put(
 );
 
 Router.delete(
-  "/user/:id/soft",
+  "/user/:tenant_user_id/soft",
   authenticate,
   authorize({
     user_type: "tenant",
@@ -102,7 +102,7 @@ Router.get(
 );
 
 Router.put(
-  "/user/:id/restore",
+  "/user/:tenant_user_id/restore",
   authenticate,
   authorize({
     user_type: "tenant",
@@ -113,7 +113,7 @@ Router.put(
 
 /* ⚠️ PERMANENT DELETE – USE CAREFULLY */
 Router.delete(
-  "/user/:id/permanent",
+  "/user/:tenant_user_id/permanent",
   authenticate,
   authorize({
     user_type: "tenant",

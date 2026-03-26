@@ -1,7 +1,10 @@
 import { getAvailableSlotsService } from "../../../models/AppointmentModel/appointment.service.js";
 import { sendWhatsAppMessage } from "../../../models/AuthWhatsapp/AuthWhatsapp.service.js";
 import { createUserMessageService } from "../../../models/Messages/messages.service.js";
-import { findDoctorByNameService } from "../../../models/DoctorModel/doctor.service.js";
+import {
+  findDoctorByNameService,
+  getDoctorAvailabilityService,
+} from "../../../models/DoctorModel/doctor.service.js";
 
 export const execute = async (payload, context, cleanMessage) => {
   try {
@@ -51,7 +54,10 @@ export const execute = async (payload, context, cleanMessage) => {
         doctor_name &&
         !placeholders.includes(doctor_name.toUpperCase())
       ) {
-        const resolvedDoc = await findDoctorByNameService(tenant_id, doctor_name);
+        const resolvedDoc = await findDoctorByNameService(
+          tenant_id,
+          doctor_name,
+        );
         if (resolvedDoc) {
           data.doctor_id = resolvedDoc.doctor_id;
           // Re-assign local doctor_id for the rest of the function
@@ -59,7 +65,11 @@ export const execute = async (payload, context, cleanMessage) => {
           console.log(
             `[TAG-HANDLER-CHECK_AVAILABILITY] Resolved doctor_id to ${newDocId} for ${doctor_name}`,
           );
-          return execute(JSON.stringify({ ...data, doctor_id: newDocId }), context, cleanMessage);
+          return execute(
+            JSON.stringify({ ...data, doctor_id: newDocId }),
+            context,
+            cleanMessage,
+          );
         }
       }
 
@@ -93,25 +103,72 @@ export const execute = async (payload, context, cleanMessage) => {
 
     let message;
     if (!result.available && result.reason) {
-      // Doctor doesn't work on this day
+      // Doctor doesn't work on this day - show their actual available days
+      const availability = await getDoctorAvailabilityService(
+        tenant_id,
+        doctor_id,
+      );
+      let availableDaysText = "";
+      if (availability && availability.length > 0) {
+        const daysFormatted = availability
+          .map((a) => {
+            const dayCapitalized =
+              a.day_of_week.charAt(0).toUpperCase() + a.day_of_week.slice(1);
+            return `  📅 ${dayCapitalized}: ${a.start_time} – ${a.end_time}`;
+          })
+          .join("\n");
+        availableDaysText = `\n\n*Available Days:*\n${daysFormatted}\n\nPlease choose one of these days.`;
+      }
+
       message =
         `📅 *Availability Check*\n\n` +
         `${doctor_name ? `Doctor: ${doctor_name}\n` : ""}` +
-        `Date: ${date} (${result.day || ""})\n\n` +
-        `❌ The doctor is not available on this day.\n` +
-        `Please choose a different date when the doctor is scheduled.`;
+        `Requested Date: ${date} (${result.day || ""})\n\n` +
+        `❌ The doctor is not available on this day.` +
+        availableDaysText;
     } else if (!result.available) {
-      // All slots booked
+      // All slots booked - show doctor's available days to help user pick another date
+      const availability = await getDoctorAvailabilityService(
+        tenant_id,
+        doctor_id,
+      );
+      let availableDaysText = "";
+      if (availability && availability.length > 0) {
+        const daysFormatted = availability
+          .map((a) => {
+            const dayCapitalized =
+              a.day_of_week.charAt(0).toUpperCase() + a.day_of_week.slice(1);
+            return `  📅 ${dayCapitalized}: ${a.start_time} – ${a.end_time}`;
+          })
+          .join("\n");
+        availableDaysText = `\n\n*Doctor's Available Days:*\n${daysFormatted}`;
+      }
+
       message =
         `📅 *Availability Check*\n\n` +
         `${doctor_name ? `Doctor: ${doctor_name}\n` : ""}` +
         `Date: ${date}\n\n` +
-        `❌ All slots are fully booked for this date.\n` +
-        `Please choose a different date.`;
+        `❌ All slots are fully booked for this date.` +
+        availableDaysText +
+        `\n\nPlease choose a different date.`;
     } else {
-      // Show available slots
-      const slotList = result.slots.map((s) => `  🕐 ${s}`).join("\n");
-      
+      // Show available slots with numbers for easy selection
+      const numberEmojis = [
+        "1️⃣",
+        "2️⃣",
+        "3️⃣",
+        "4️⃣",
+        "5️⃣",
+        "6️⃣",
+        "7️⃣",
+        "8️⃣",
+        "9️⃣",
+        "🔟",
+      ];
+      const slotList = result.slots
+        .map((s, i) => `  ${numberEmojis[i] || `${i + 1}.`} ${s}`)
+        .join("\n");
+
       if (preferred_time && result.slots.includes(preferred_time)) {
         message =
           `📅 *Time Available!*\n\n` +
@@ -122,7 +179,7 @@ export const execute = async (payload, context, cleanMessage) => {
           `📅 *Slot Unavailable*\n\n` +
           `I'm sorry, but *${preferred_time}* is not available on ${date}.\n\n` +
           `*Available Slots:*\n${slotList}\n\n` +
-          `Please choose a different time from the list above.`;
+          `Please reply with the slot number or time you prefer.`;
       } else {
         message =
           `📅 *Available Slots*\n\n` +
@@ -130,7 +187,7 @@ export const execute = async (payload, context, cleanMessage) => {
           `Date: ${date} (${result.day})\n` +
           `Available: ${result.slots.length} of ${result.totalSlots} slots\n\n` +
           `${slotList}\n\n` +
-          `Please choose a time from the available slots above.`;
+          `Reply with the slot number (1, 2, 3...) or time (e.g., "09:00 AM") to book.`;
       }
     }
 

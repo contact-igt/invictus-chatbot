@@ -73,7 +73,7 @@ export const getLiveChatListService = async (tenant_id, limit = 200) => {
       c.name,
       m.message,
       m.message_type,
-      m.created_at AS last_message_at,
+      m.created_at AS last_message_time,
       lc.assigned_admin_id,
       agent.username AS assigned_agent_name,
       c.is_ai_silenced,
@@ -128,7 +128,7 @@ export const getHistoryChatListService = async (tenant_id, limit = 200) => {
       c.is_ai_silenced,
       m.message,
       m.message_type,
-      m.created_at AS last_message_at,
+      m.created_at AS last_message_time,
       COALESCE(uc.cnt, 0) AS unread_count
     FROM messages m
     INNER JOIN (

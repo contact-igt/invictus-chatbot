@@ -95,10 +95,10 @@ ${resolvedContext}
     try {
       const contact = await db.Contacts.findOne({
         where: { contact_id, tenant_id },
-        attributes: ["name", "email", "mobile"],
+        attributes: ["name", "email", "phone"],
       });
       if (contact) {
-        patientProfileSection = `PATIENT PROFILE:\n- Name: ${contact.name || "Unknown"}\n- Email: ${contact.email || "Missing"}\n- Mobile: ${contact.mobile || "Known"}`;
+        patientProfileSection = `PATIENT PROFILE:\n- Name: ${contact.name || "Unknown"}\n- Email: ${contact.email || "Missing"}\n- Phone: ${contact.phone || "Known"}`;
       }
 
       const lead = await getLeadByContactIdService(tenant_id, contact_id);

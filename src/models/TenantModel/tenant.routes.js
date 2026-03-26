@@ -15,7 +15,6 @@ import {
   getOnboardedTenantListController,
   getTenantSettingsController,
   updateTenantAiSettingsController,
-  updateTenantGeneralSettingsController,
 } from "./tenant.controller.js";
 import {
   authenticate,
@@ -63,8 +62,6 @@ Router.post(
   }),
   createTenantController,
 );
-
-
 
 Router.get(
   "/list",
@@ -144,16 +141,6 @@ Router.get(
     roles: ["tenant_admin", "staff", "doctor", "agent"],
   }),
   getTenantSettingsController,
-);
-
-Router.patch(
-  "/settings/general",
-  authenticate,
-  authorize({
-    user_type: "tenant",
-    roles: ["tenant_admin"],
-  }),
-  updateTenantGeneralSettingsController,
 );
 
 Router.patch(

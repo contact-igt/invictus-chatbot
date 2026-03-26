@@ -1,7 +1,10 @@
 import db from "../../database/index.js";
 import { Op, fn, col, where as seqWhere } from "sequelize";
 import { generateReadableIdFromLast } from "../../utils/helpers/generateReadableIdFromLast.js";
-import { formatTimeToAMPM, timeToMinutes } from "../../utils/helpers/formatTime.js";
+import {
+  formatTimeToAMPM,
+  timeToMinutes,
+} from "../../utils/helpers/formatTime.js";
 import { tableNames } from "../../database/tableName.js";
 import { formatPhoneNumber } from "../../utils/helpers/formatPhoneNumber.js";
 import {
@@ -48,24 +51,24 @@ export const createAppointmentService = async (data) => {
   let { appointment_time } = data;
 
   // Auto-split phone
-  let phone = contact_number ? contact_number.toString().replace(/\D/g, "") : "";
+  let phone = contact_number
+    ? contact_number.toString().replace(/\D/g, "")
+    : "";
   let cc = country_code || "+91";
 
   if (!country_code && phone.length > 10) {
-      cc = `+${phone.slice(0, -10)}`;
-      phone = phone.slice(-10);
+    cc = `+${phone.slice(0, -10)}`;
+    phone = phone.slice(-10);
   } else if (country_code && !cc.startsWith("+")) {
-      cc = `+${country_code.replace(/\D/g, "")}`;
+    cc = `+${country_code.replace(/\D/g, "")}`;
   }
-  
+
   contact_number = phone;
   country_code = cc;
 
   // Validate mobile is exactly 10 digits
   if (contact_number && contact_number.length !== 10) {
-    throw new Error(
-      "Mobile number must be exactly 10 digits.",
-    );
+    throw new Error("Mobile number must be exactly 10 digits.");
   }
 
   // Normalize time to consistent format (e.g. "09:00 AM" not "9:00 AM")
@@ -220,8 +223,12 @@ export const createAppointmentService = async (data) => {
     await transaction.commit();
 
     // 4. Send Confirmation Email (Async, outside transaction)
-    sendAppointmentNotificationEmail(tenant_id, appointment_id, "Confirmed").catch(
-      (err) => console.error("[APPOINTMENT-EMAIL] Initial send failed:", err.message)
+    sendAppointmentNotificationEmail(
+      tenant_id,
+      appointment_id,
+      "Confirmed",
+    ).catch((err) =>
+      console.error("[APPOINTMENT-EMAIL] Initial send failed:", err.message),
     );
 
     return appointment;
@@ -262,14 +269,17 @@ export const getActiveAppointmentsByContactService = async (
 };
 
 /**
- * Fetches recent active and recently cancelled/deleted appointments 
+ * Fetches recent active and recently cancelled/deleted appointments
  * for AI context to prevent "memory vs reality" disparity.
  */
-export const getRecentAppointmentsForAIService = async (tenant_id, contact_id) => {
+export const getRecentAppointmentsForAIService = async (
+  tenant_id,
+  contact_id,
+) => {
   try {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    
+
     // Also include appointments cancelled in the last 24 hours
     const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
@@ -282,17 +292,16 @@ export const getRecentAppointmentsForAIService = async (tenant_id, contact_id) =
           {
             is_deleted: false,
             status: { [Op.in]: ["Pending", "Confirmed", "Completed"] },
-            appointment_date: { [Op.gte]: new Date(today.getTime() - 3 * 24 * 60 * 60 * 1000) }
+            appointment_date: {
+              [Op.gte]: new Date(today.getTime() - 3 * 24 * 60 * 60 * 1000),
+            },
           },
           // Recently cancelled/deleted appointments
           {
-            [Op.or]: [
-              { status: "Cancelled" },
-              { is_deleted: true }
-            ],
-            updated_at: { [Op.gte]: yesterday }
-          }
-        ]
+            [Op.or]: [{ status: "Cancelled" }, { is_deleted: true }],
+            updated_at: { [Op.gte]: yesterday },
+          },
+        ],
       },
       include: [
         {
@@ -384,6 +393,7 @@ export const checkAvailabilityService = async (
   doctor_id,
   date,
   time,
+  excludeAppointmentId = null, // Optional: exclude this appointment from check (for updates)
 ) => {
   try {
     if (!doctor_id || !date || !time) {
@@ -403,14 +413,21 @@ export const checkAvailabilityService = async (
     const requestedStart = timeToMinutes(formattedTime);
     const requestedEnd = requestedStart + duration;
 
+    // Build where clause, optionally excluding a specific appointment (for updates)
+    const whereClause = {
+      tenant_id,
+      doctor_id,
+      is_deleted: false,
+      [Op.and]: [seqWhere(fn("DATE", col("appointment_date")), date)],
+      status: { [Op.in]: ["Pending", "Confirmed"] },
+    };
+
+    if (excludeAppointmentId) {
+      whereClause.appointment_id = { [Op.ne]: excludeAppointmentId };
+    }
+
     const existingAppointments = await db.Appointments.findAll({
-      where: {
-        tenant_id,
-        doctor_id,
-        is_deleted: false,
-        [Op.and]: [seqWhere(fn("DATE", col("appointment_date")), date)],
-        status: { [Op.in]: ["Pending", "Confirmed"] },
-      },
+      where: whereClause,
       attributes: ["appointment_time"],
     });
 
@@ -443,7 +460,7 @@ const sendAppointmentNotificationEmail = async (
       ],
     });
     if (!appointment) return;
-    
+
     // Check both appointment and contact for email
     const emailTo = appointment.email || appointment.contact?.email;
     if (!emailTo) return;
@@ -514,6 +531,11 @@ export const updateAppointmentService = async (
   appointment_id,
   data,
 ) => {
+  console.log(
+    `[UPDATE-APPOINTMENT-SERVICE] Starting update for ${appointment_id}`,
+    { tenant_id, data },
+  );
+
   const transaction = await db.sequelize.transaction();
 
   try {
@@ -522,9 +544,19 @@ export const updateAppointmentService = async (
       transaction,
       lock: transaction.LOCK.UPDATE,
     });
+
     if (!appointment) {
+      console.error(
+        `[UPDATE-APPOINTMENT-SERVICE] Appointment not found: ${appointment_id}`,
+      );
       throw new Error("Appointment not found");
     }
+
+    console.log(`[UPDATE-APPOINTMENT-SERVICE] Found appointment:`, {
+      id: appointment.appointment_id,
+      current_date: appointment.appointment_date,
+      current_time: appointment.appointment_time,
+    });
 
     const updateFields = {};
     if (data.patient_name !== undefined)
@@ -543,6 +575,20 @@ export const updateAppointmentService = async (
       );
     }
 
+    console.log(
+      `[UPDATE-APPOINTMENT-SERVICE] Built updateFields:`,
+      updateFields,
+    );
+
+    // Check if there's anything to update
+    if (Object.keys(updateFields).length === 0) {
+      console.error(
+        `[UPDATE-APPOINTMENT-SERVICE] No fields to update - rolling back`,
+      );
+      await transaction.rollback();
+      return appointment; // Return existing appointment without changes
+    }
+
     if (data.country_code !== undefined) {
       let cc = data.country_code.toString().replace(/\D/g, "");
       updateFields.country_code = `+${cc}`;
@@ -551,9 +597,7 @@ export const updateAppointmentService = async (
     if (data.contact_number !== undefined) {
       let contact_number = data.contact_number.toString().replace(/\D/g, "");
       if (contact_number && contact_number.length !== 10) {
-        throw new Error(
-          "Mobile number must be exactly 10 digits.",
-        );
+        throw new Error("Mobile number must be exactly 10 digits.");
       }
       updateFields.contact_number = contact_number;
     }
@@ -593,7 +637,9 @@ export const updateAppointmentService = async (
       });
 
       if (patientConflict) {
-        throw new Error("You already have another appointment booked for this time.");
+        throw new Error(
+          "You already have another appointment booked for this time.",
+        );
       }
     }
 
@@ -645,10 +691,19 @@ export const updateAppointmentService = async (
       }
     }
 
-    await db.Appointments.update(updateFields, {
+    console.log(
+      `[UPDATE-APPOINTMENT-SERVICE] Executing DB update with fields:`,
+      updateFields,
+    );
+
+    const [affectedRows] = await db.Appointments.update(updateFields, {
       where: { appointment_id, tenant_id },
       transaction,
     });
+
+    console.log(
+      `[UPDATE-APPOINTMENT-SERVICE] DB update affected ${affectedRows} rows`,
+    );
 
     // 3. Handle doctor appointment count synchronization if doctor changed
     if (doctorChanged && updateFields.doctor_id !== undefined) {
@@ -673,9 +728,18 @@ export const updateAppointmentService = async (
     }
 
     await transaction.commit();
+    console.log(
+      `[UPDATE-APPOINTMENT-SERVICE] Transaction committed successfully`,
+    );
 
     const updatedAppointment = await db.Appointments.findOne({
       where: { appointment_id, tenant_id },
+    });
+
+    console.log(`[UPDATE-APPOINTMENT-SERVICE] Updated appointment:`, {
+      id: updatedAppointment?.appointment_id,
+      date: updatedAppointment?.appointment_date,
+      time: updatedAppointment?.appointment_time,
     });
 
     // Build list of what changed for the email

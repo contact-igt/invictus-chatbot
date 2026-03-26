@@ -19,14 +19,19 @@ export const createDoctorService = async (tenant_id, data) => {
 
   try {
     // Check if email or mobile already exists
-    const existingUser = await findTenantUserByEmailOrMobileGloballyService(data.email, data.mobile);
+    const existingUser = await findTenantUserByEmailOrMobileGloballyService(
+      data.email,
+      data.mobile,
+    );
 
     if (existingUser) {
       if (existingUser.email === data.email) {
         throw new Error("User with this email already exists in the system.");
       }
       if (existingUser.mobile === data.mobile) {
-        throw new Error("User with this mobile number already exists in the system.");
+        throw new Error(
+          "User with this mobile number already exists in the system.",
+        );
       }
     }
 
@@ -124,11 +129,7 @@ export const createDoctorService = async (tenant_id, data) => {
         const slots = slot.slots || [
           { start_time: slot.start_time, end_time: slot.end_time },
         ];
-        const day_of_week = (
-          slot.day_of_week ||
-          slot.day ||
-          ""
-        ).toLowerCase();
+        const day_of_week = (slot.day_of_week || slot.day || "").toLowerCase();
 
         for (const timeSlot of slots) {
           await db.DoctorAvailability.create(
@@ -375,11 +376,7 @@ export const updateDoctorService = async (doctor_id, tenant_id, data) => {
         const slots = slot.slots || [
           { start_time: slot.start_time, end_time: slot.end_time },
         ];
-        const day_of_week = (
-          slot.day_of_week ||
-          slot.day ||
-          ""
-        ).toLowerCase();
+        const day_of_week = (slot.day_of_week || slot.day || "").toLowerCase();
 
         for (const timeSlot of slots) {
           await db.DoctorAvailability.create(
@@ -568,6 +565,23 @@ export const getDoctorsForAIService = async (tenant_id) => {
     }
 
     return result.join("\n\n");
+  } catch (error) {
+    throw error;
+  }
+};
+
+// ─── Get Doctor's Weekly Availability Schedule ───
+export const getDoctorAvailabilityService = async (tenant_id, doctor_id) => {
+  try {
+    const [availability] = await db.sequelize.query(
+      `SELECT day_of_week, start_time, end_time
+       FROM ${tableNames.DOCTOR_AVAILABILITY}
+       WHERE doctor_id = ? AND tenant_id = ?
+       ORDER BY FIELD(day_of_week,'monday','tuesday','wednesday','thursday','friday','saturday','sunday'), start_time`,
+      { replacements: [doctor_id, tenant_id] },
+    );
+
+    return availability || [];
   } catch (error) {
     throw error;
   }

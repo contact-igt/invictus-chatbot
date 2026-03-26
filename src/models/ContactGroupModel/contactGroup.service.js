@@ -115,9 +115,7 @@ export const getContactGroupByIdService = async (group_id, tenant_id) => {
     }
 };
 
-/**
- * Add contacts to a group
- */
+
 export const addContactsToGroupService = async (group_id, tenant_id, contact_ids) => {
     const transaction = await db.sequelize.transaction();
     try {

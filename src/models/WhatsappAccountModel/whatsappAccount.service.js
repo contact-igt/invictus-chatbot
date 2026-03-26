@@ -311,7 +311,7 @@ export const updateAccessTokenService = async (tenant_id, access_token) => {
 };
 
 export const getTenantByPhoneNumberIdService = async (phone_number_id) => {
-  const Query = `SELECT * FROM ${tableNames?.WHATSAPP_ACCOUNT} WHERE phone_number_id = ? AND status = 'active' AND is_deleted = false LIMIT 1 `;
+  const Query = `SELECT * FROM ${tableNames?.WHATSAPP_ACCOUNT} WHERE phone_number_id = ? AND status IN ('active', 'verified') AND is_deleted = false LIMIT 1 `;
 
   try {
     const [result] = await db.sequelize.query(Query, {
@@ -320,5 +320,196 @@ export const getTenantByPhoneNumberIdService = async (phone_number_id) => {
     return result[0];
   } catch (err) {
     throw err;
+  }
+};
+
+/**
+ * Validates if Meta Graph API access_token is still valid
+ * by calling GET /me endpoint
+ */
+export const validateAccessTokenService = async (access_token) => {
+  try {
+    const response = await axios.get("https://graph.facebook.com/v19.0/me", {
+      params: { access_token },
+      timeout: 8000,
+    });
+    return {
+      valid: true,
+      app_id: response.data?.id,
+      name: response.data?.name,
+    };
+  } catch (err) {
+    return {
+      valid: false,
+      error: err?.response?.data?.error?.message || err.message,
+    };
+  }
+};
+
+/**
+ * Checks if app is subscribed to webhooks for the WABA
+ * Meta API: GET /{waba_id}/subscribed_apps
+ *
+ * NOTE: This API only tells us IF an app is subscribed to the WABA,
+ * not which specific webhook fields are subscribed. The field subscriptions
+ * (messages, message_template_status_update, etc.) are configured in
+ * Meta's App Dashboard and aren't returned by this API.
+ *
+ * If webhook_verified is true, Meta has already validated the webhook setup.
+ */
+export const validateMetaSubscriptionService = async (
+  waba_id,
+  access_token,
+) => {
+  try {
+    const response = await axios.get(
+      `https://graph.facebook.com/v19.0/${waba_id}/subscribed_apps`,
+      {
+        params: { access_token },
+        timeout: 8000,
+      },
+    );
+
+    const apps = response.data?.data || [];
+    if (apps.length === 0) {
+      return {
+        subscribed: false,
+        message: "No apps subscribed to this WhatsApp Business Account",
+      };
+    }
+
+    // App is subscribed to this WABA - webhook fields are configured in Meta Dashboard
+    // We can't verify specific fields via API, but if webhook_verified is true, setup is working
+    const appSub = apps[0];
+
+    return {
+      subscribed: true,
+      app_id: appSub?.id,
+      app_name: appSub?.whatsapp_business_api_data?.name || appSub?.name,
+      // Note: Field subscriptions are configured in Meta Dashboard, not retrievable via this API
+      note: "Webhook field subscriptions are managed in Meta App Dashboard",
+    };
+  } catch (err) {
+    return {
+      subscribed: false,
+      error: err?.response?.data?.error?.message || err.message,
+    };
+  }
+};
+
+/**
+ * Gets comprehensive webhook and WhatsApp configuration status for a tenant
+ * Returns detailed status for all verification components
+ */
+export const getComprehensiveWebhookStatusService = async (tenant_id) => {
+  try {
+    // 1. Get tenant info (verify_token, webhook_verified)
+    const [tenantRows] = await db.sequelize.query(
+      `SELECT tenant_id, company_name, verify_token, webhook_verified FROM ${tableNames.TENANTS} WHERE tenant_id = ? AND is_deleted = false LIMIT 1`,
+      { replacements: [tenant_id] },
+    );
+    const tenant = tenantRows[0];
+
+    if (!tenant) {
+      return {
+        overall_status: "error",
+        error: "Tenant not found",
+      };
+    }
+
+    // 2. Get WhatsApp account configuration
+    const account = await getWhatsappAccountByTenantService(tenant_id);
+
+    const result = {
+      tenant_id,
+      company_name: tenant.company_name,
+
+      // Webhook verification status
+      verify_token_set: !!tenant.verify_token,
+      webhook_verified: !!tenant.webhook_verified,
+
+      // WhatsApp account configuration
+      whatsapp_configured: !!account,
+      phone_number_id: account?.phone_number_id || null,
+      waba_id: account?.waba_id || null,
+      whatsapp_number: account?.whatsapp_number || null,
+      account_status: account?.status || null,
+      quality: account?.quality || null,
+      tier: account?.tier || null,
+
+      // Meta API validations (will be populated if account exists)
+      access_token_valid: null,
+      meta_subscription_active: null,
+      subscription_details: null,
+
+      // Overall status
+      overall_status: "not_configured",
+      issues: [],
+    };
+
+    // 3. If no WhatsApp account, return early
+    if (!account || !account.access_token) {
+      result.issues.push("WhatsApp account not configured");
+      result.overall_status = "not_configured";
+      return result;
+    }
+
+    // 4. Validate access token
+    const tokenValidation = await validateAccessTokenService(
+      account.access_token,
+    );
+    result.access_token_valid = tokenValidation.valid;
+    if (!tokenValidation.valid) {
+      result.issues.push(`Access token invalid: ${tokenValidation.error}`);
+    }
+
+    // 5. Validate Meta subscription (if waba_id exists)
+    if (account.waba_id && tokenValidation.valid) {
+      const subscriptionValidation = await validateMetaSubscriptionService(
+        account.waba_id,
+        account.access_token,
+      );
+      // App being subscribed to WABA is sufficient - field subscriptions are in Meta Dashboard
+      result.meta_subscription_active = subscriptionValidation.subscribed;
+      result.subscription_details = subscriptionValidation;
+
+      if (!subscriptionValidation.subscribed) {
+        result.issues.push("App not subscribed to WhatsApp webhooks");
+      }
+    }
+
+    // 6. Determine overall status
+    // Priority: webhook_verified is the real proof that Meta can reach our webhook
+    const allChecks = [
+      result.verify_token_set,
+      result.webhook_verified,
+      result.whatsapp_configured,
+      result.access_token_valid,
+      result.meta_subscription_active,
+    ];
+
+    const passedChecks = allChecks.filter((v) => v === true).length;
+
+    // If webhook is verified and token is valid, system is ready
+    if (
+      result.webhook_verified &&
+      result.access_token_valid &&
+      result.whatsapp_configured
+    ) {
+      result.overall_status = "ready";
+      result.issues = []; // Clear issues if everything essential works
+    } else if (passedChecks >= 3) {
+      result.overall_status = "partial";
+    } else {
+      result.overall_status = "not_configured";
+    }
+
+    return result;
+  } catch (err) {
+    console.error("[WebhookStatus] Error:", err);
+    return {
+      overall_status: "error",
+      error: err.message,
+    };
   }
 };

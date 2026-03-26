@@ -17,10 +17,17 @@ const getActiveModels = async () => {
   try {
     const models = await db.AiPricing.findAll({
       where: { is_active: true },
-      attributes: ["model"],
+      attributes: ["model", "category"],
+      order: [
+        ["category", "ASC"], // premium first
+        ["input_rate", "ASC"],
+      ],
       raw: true,
     });
-    activeModelsCache = new Set(models.map((m) => m.model));
+    activeModelsCache = {
+      set: new Set(models.map((m) => m.model)),
+      list: models.map((m) => m.model), // ordered list for fallback
+    };
     cacheTimestamp = now;
     return activeModelsCache;
   } catch (err) {
@@ -35,6 +42,7 @@ const getActiveModels = async () => {
 /**
  * Get the AI model a tenant has selected for a given purpose.
  * Falls back to defaults if the tenant has no selection or the selected model is inactive.
+ * If defaults are also inactive, falls back to the first available active model.
  *
  * @param {string} tenant_id - Tenant identifier
  * @param {"input"|"output"} type - "input" for classification/extraction, "output" for generation
@@ -44,7 +52,24 @@ export const getTenantAiModel = async (tenant_id, type = "output") => {
   const defaultModel =
     type === "input" ? DEFAULT_INPUT_MODEL : DEFAULT_OUTPUT_MODEL;
 
-  if (!tenant_id) return defaultModel;
+  // Get active models for validation and fallback
+  const activeModels = await getActiveModels();
+
+  // Helper to get a valid fallback model
+  const getFallbackModel = () => {
+    if (!activeModels || activeModels.list.length === 0) {
+      // No active models in DB - return hardcoded default as last resort
+      return defaultModel;
+    }
+    // If default is active, use it
+    if (activeModels.set.has(defaultModel)) {
+      return defaultModel;
+    }
+    // Otherwise return first active model
+    return activeModels.list[0];
+  };
+
+  if (!tenant_id) return getFallbackModel();
 
   try {
     const tenant = await db.Tenants.findOne({
@@ -53,7 +78,7 @@ export const getTenantAiModel = async (tenant_id, type = "output") => {
       raw: true,
     });
 
-    if (!tenant?.ai_settings) return defaultModel;
+    if (!tenant?.ai_settings) return getFallbackModel();
 
     const settings =
       typeof tenant.ai_settings === "string"
@@ -63,17 +88,16 @@ export const getTenantAiModel = async (tenant_id, type = "output") => {
     const selectedModel =
       type === "input" ? settings.input_model : settings.output_model;
 
-    if (!selectedModel) return defaultModel;
+    if (!selectedModel) return getFallbackModel();
 
     // Validate that the selected model is still active
-    const activeModels = await getActiveModels();
-    if (activeModels && !activeModels.has(selectedModel)) {
-      return defaultModel;
+    if (activeModels && !activeModels.set.has(selectedModel)) {
+      return getFallbackModel();
     }
 
     return selectedModel;
   } catch (err) {
     console.error("[getTenantAiModel] Error:", err.message);
-    return defaultModel;
+    return getFallbackModel();
   }
 };

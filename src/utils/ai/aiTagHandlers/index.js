@@ -131,10 +131,36 @@ export const executeTagHandler = async (
   context,
   cleanMessage,
 ) => {
-  if (!tagDetected || !handlers[tagDetected]?.execute) return;
+  if (!tagDetected) {
+    console.log("[TAG-HANDLER] No tag detected");
+    return;
+  }
+
+  if (!handlers[tagDetected]) {
+    console.error(`[TAG-HANDLER] Unknown tag: ${tagDetected}`);
+    return;
+  }
+
+  if (!handlers[tagDetected]?.execute) {
+    console.error(
+      `[TAG-HANDLER] Handler for ${tagDetected} has no execute method`,
+    );
+    return;
+  }
+
+  console.log(
+    `[TAG-HANDLER] Executing ${tagDetected} with payload: ${tagPayload?.substring(0, 200)}`,
+  );
+  console.log(`[TAG-HANDLER] Context:`, JSON.stringify(context));
+
   try {
     await handlers[tagDetected].execute(tagPayload, context, cleanMessage);
+    console.log(`[TAG-HANDLER] ${tagDetected} completed successfully`);
   } catch (err) {
-    console.error(`[TAG-HANDLER] Error executing ${tagDetected}:`, err.message);
+    console.error(
+      `[TAG-HANDLER] Error executing ${tagDetected}:`,
+      err.message,
+      err.stack,
+    );
   }
 };
