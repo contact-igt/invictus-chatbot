@@ -92,6 +92,59 @@ export const sendWhatsAppMessage = async (tenant_id, to, message) => {
   }
 };
 
+export const sendWhatsAppLocation = async (tenant_id, to, locationParams) => {
+  const [rows] = await db.sequelize.query(
+    `SELECT phone_number_id, access_token FROM ${tableNames.WHATSAPP_ACCOUNT} WHERE tenant_id = ? AND status = 'active' LIMIT 1`,
+    { replacements: [tenant_id] },
+  );
+
+  if (!rows.length) {
+    throw new Error("No active WhatsApp account for tenant");
+  }
+
+  const { phone_number_id, access_token } = rows[0];
+  const META_API_VERSION = process.env.META_API_VERSION || "v22.0";
+
+  const payload = {
+    messaging_product: "whatsapp",
+    to,
+    type: "location",
+    location: {
+      latitude: Number(locationParams.latitude),
+      longitude: Number(locationParams.longitude),
+      name: locationParams.name || "",
+      address: locationParams.address || "",
+    },
+  };
+
+  console.log(`[SEND-LOCATION] Sending location to ${to}:`, JSON.stringify(payload, null, 2));
+
+  try {
+    const response = await axios.post(
+      `https://graph.facebook.com/${META_API_VERSION}/${phone_number_id}/messages`,
+      payload,
+      {
+        headers: {
+          Authorization: `Bearer ${access_token}`,
+          "Content-Type": "application/json",
+        },
+        httpsAgent,
+      },
+    );
+
+    const meta_message_id = response.data?.messages?.[0]?.id;
+    return { phone_number_id, meta_message_id };
+  } catch (error) {
+    if (error.response) {
+      console.error("[SEND-LOCATION] Meta API Error:", JSON.stringify(error.response.data, null, 2));
+      const metaErr = error.response.data?.error || {};
+      const message = metaErr.message || error.message;
+      throw new Error(`Meta API Location Error: ${message}`);
+    }
+    throw error;
+  }
+};
+
 export const sendWhatsAppTemplate = async (
   tenant_id,
   to,

@@ -280,6 +280,14 @@ export const sendTemplateMessageController = async (req, res) => {
       templateMediaFilename = headerComp.parameters[0].document.filename;
     }
 
+    // Derive MIME type from filename for document templates
+    let templateMediaMimeType = null;
+    if (templateMediaType === "document" && templateMediaFilename) {
+      const ext = templateMediaFilename.split('.').pop()?.toLowerCase();
+      const mimeMap = { pdf: 'application/pdf', doc: 'application/msword', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', xls: 'application/vnd.ms-excel', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' };
+      templateMediaMimeType = mimeMap[ext] || 'application/octet-stream';
+    }
+
     // 3. Log to Messages
     const savedMsg = await createUserMessageService(
       tenant_id,
@@ -293,7 +301,7 @@ export const sendTemplateMessageController = async (req, res) => {
       messageContent,
       templateMediaType,
       templateMediaUrl,
-      null,
+      templateMediaMimeType,
       "sent",
       template.template_name,
       templateMediaFilename,

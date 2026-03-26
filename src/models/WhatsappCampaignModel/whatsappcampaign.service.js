@@ -549,17 +549,19 @@ export const executeCampaignBatchService = async (
                 },
               ],
             });
-          } else if (hFormat === "LOCATION" && campaignLocationParams) {
+          }
+          // Location header: send location params inside the template header
+          else if (hFormat === "LOCATION" && campaignLocationParams) {
             components.push({
               type: "header",
               parameters: [
                 {
                   type: "location",
                   location: {
-                    latitude: campaignLocationParams.latitude,
-                    longitude: campaignLocationParams.longitude,
-                    name: campaignLocationParams.name,
-                    address: campaignLocationParams.address,
+                    latitude: Number(campaignLocationParams.latitude),
+                    longitude: Number(campaignLocationParams.longitude),
+                    name: campaignLocationParams.name || "",
+                    address: campaignLocationParams.address || "",
                   },
                 },
               ],
@@ -692,6 +694,14 @@ export const executeCampaignBatchService = async (
             }
           }
 
+          // Derive MIME type from filename for document campaigns
+          let campaignMediaMimeType = null;
+          if (finalMessageType === "document" && campaign.header_file_name) {
+            const ext = campaign.header_file_name.split('.').pop()?.toLowerCase();
+            const mimeMap = { pdf: 'application/pdf', doc: 'application/msword', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', xls: 'application/vnd.ms-excel', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' };
+            campaignMediaMimeType = mimeMap[ext] || 'application/octet-stream';
+          }
+
           // 6. Log to Messages Table
           await createUserMessageService(
             tenant_id,
@@ -705,7 +715,7 @@ export const executeCampaignBatchService = async (
             personalizedMessage,
             finalMessageType,
             finalMediaUrl,
-            null,
+            campaignMediaMimeType,
             "sent",
             campaign.template.template_name,
             finalMessageType === "document" ? (campaign.header_file_name || null) : null,
