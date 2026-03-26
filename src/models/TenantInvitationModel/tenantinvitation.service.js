@@ -1,16 +1,10 @@
 import db from "../../database/index.js";
 import { tableNames } from "../../database/tableName.js";
 import crypto from "crypto";
-import fs from "fs";
-import path from "path";
-import handlebars from "handlebars";
-import { fileURLToPath } from "url";
+import { getTemplate } from "../../utils/email/templateLoader.js";
 import { generateInviteToken } from "../../middlewares/auth/authMiddlewares.js";
 import { generateReadableIdFromLast } from "../../utils/helpers/generateReadableIdFromLast.js";
 import { sendEmail } from "../../utils/email/emailService.js";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 export const createTenantInvitationService = async (
   invitation_id,
@@ -94,6 +88,23 @@ export const updateInvitationStatusService = async (invitation_id, status) => {
   }
 };
 
+export const revokePreviousInvitationsService = async (tenant_user_id) => {
+  const query = `
+    UPDATE ${tableNames.TENANT_INVITATIONS}
+    SET status = 'revoked', updated_at = NOW()
+    WHERE tenant_user_id = ? AND status IN ('pending', 'accepted')
+  `;
+
+  try {
+    const [result] = await db.sequelize.query(query, {
+      replacements: [tenant_user_id],
+    });
+    return result;
+  } catch (err) {
+    throw err;
+  }
+};
+
 export const getLastTenantInvitationService = async (tenant_user_id) => {
   const Query = `SELECT * FROM ${tableNames?.TENANT_INVITATIONS} WHERE tenant_user_id = ? ORDER BY created_at DESC LIMIT 1`;
 
@@ -116,53 +127,54 @@ export const sendTenantInvitationService = async (
   company_name,
   invited_by,
 ) => {
-  const invitation_id = await generateReadableIdFromLast(
-    tableNames.TENANT_INVITATIONS,
-    "invitation_id",
-    "INV",
-  );
+  try {
+    const invitation_id = await generateReadableIdFromLast(
+      tableNames.TENANT_INVITATIONS,
+      "invitation_id",
+      "INV",
+    );
 
-  const inviteToken = generateInviteToken({
-    tenant_id,
-    tenant_user_id,
-    email,
-  });
+    // Revoke any previous pending/accepted invites for this user
+    await revokePreviousInvitationsService(tenant_user_id);
 
-  const tokenHash = crypto.createHash("sha256").update(inviteToken).digest("hex");
+    const inviteToken = generateInviteToken({
+      tenant_id,
+      tenant_user_id,
+      email,
+    });
 
-  await createTenantInvitationService(
-    invitation_id,
-    tenant_id,
-    tenant_user_id,
-    email,
-    tokenHash,
-    invited_by,
-  );
+    const tokenHash = crypto.createHash("sha256").update(inviteToken).digest("hex");
 
-  const inviteUrl = `${process.env.FRONTEND_URL}/account/activate?token=${inviteToken}`;
+    await createTenantInvitationService(
+      invitation_id,
+      tenant_id,
+      tenant_user_id,
+      email,
+      tokenHash,
+      invited_by,
+    );
 
-  const templatePath = path.join(
-    __dirname,
-    "../../../public/html/tenantInvite/index.html",
-  );
+    const inviteUrl = `${process.env.FRONTEND_URL}/account/activate?token=${inviteToken}`;
 
-  const source = fs.readFileSync(templatePath, "utf8");
-  const template = handlebars.compile(source);
+    const template = getTemplate("tenantInvite");
 
-  const emailHtml = template({
-    name,
-    company_name,
-    invite_url: inviteUrl,
-    expiry_hours: 48,
-  });
+    const emailHtml = template({
+      name,
+      company_name,
+      invite_url: inviteUrl,
+      expiry_hours: 48,
+    });
 
-  await sendEmail({
-    to: email,
-    subject: `You're invited to manage ${company_name} on WhatsNexus`,
-    html: emailHtml,
-  });
+    await sendEmail({
+      to: email,
+      subject: `You're invited to manage ${company_name} on WhatsNexus`,
+      html: emailHtml,
+    });
 
-  return { invitation_id, inviteToken };
+    return { invitation_id, inviteToken };
+  } catch (err) {
+    throw err;
+  }
 };
 export const sendTenantPasswordSetSuccessEmailService = async (
   email,
@@ -171,33 +183,31 @@ export const sendTenantPasswordSetSuccessEmailService = async (
   tenant_id,
   verify_token = null,
 ) => {
-  const loginUrl = `${process.env.FRONTEND_URL}/login`;
-  const webhookUrl = `${process.env.BACKEND_URL}/api/whatsapp/webhook/${tenant_id}`;
-  const metaVerifyToken = verify_token || process.env.META_VERIFY_TOKEN;
+  try {
+    const loginUrl = `${process.env.FRONTEND_URL}/login`;
+    const webhookUrl = `${process.env.BACKEND_URL}/api/whatsapp/webhook/${tenant_id}`;
+    const metaVerifyToken = verify_token || process.env.META_VERIFY_TOKEN;
+    console.log("webhookUrl", webhookUrl)
+    const template = getTemplate("passwordSetSuccess");
 
-  const templatePath = path.join(
-    __dirname,
-    "../../../public/html/passwordSetSuccess/index.html",
-  );
+    const emailHtml = template({
+      name,
+      company_name,
+      login_url: loginUrl,
+      webhook_url: webhookUrl,
+      meta_verify_token: metaVerifyToken,
+    });
 
-  const source = fs.readFileSync(templatePath, "utf8");
-  const template = handlebars.compile(source);
+    await sendEmail({
+      to: email,
+      subject: `Welcome to WhatsNexus - ${company_name} Setup Complete`,
+      html: emailHtml,
+    });
 
-  const emailHtml = template({
-    name,
-    company_name,
-    login_url: loginUrl,
-    webhook_url: webhookUrl,
-    meta_verify_token: metaVerifyToken,
-  });
-
-  await sendEmail({
-    to: email,
-    subject: `Welcome to WhatsNexus - ${company_name} Setup Complete`,
-    html: emailHtml,
-  });
-
-  return true;
+    return true;
+  } catch (err) {
+    throw err;
+  }
 };
 
 export const sendTenantUserWelcomeEmailService = async (
@@ -207,30 +217,28 @@ export const sendTenantUserWelcomeEmailService = async (
   password,
   role,
 ) => {
-  const loginUrl = `${process.env.FRONTEND_URL}/login`;
+  try {
+    const loginUrl = `${process.env.FRONTEND_URL}/login`;
 
-  const templatePath = path.join(
-    __dirname,
-    "../../../public/html/tenantUserWelcome/index.html",
-  );
+    const template = getTemplate("tenantUserWelcome");
 
-  const source = fs.readFileSync(templatePath, "utf8");
-  const template = handlebars.compile(source);
+    const emailHtml = template({
+      name,
+      company_name,
+      login_url: loginUrl,
+      email,
+      password,
+      role,
+    });
 
-  const emailHtml = template({
-    name,
-    company_name,
-    login_url: loginUrl,
-    email,
-    password,
-    role,
-  });
+    await sendEmail({
+      to: email,
+      subject: `Welcome to ${company_name} on WhatsNexus`,
+      html: emailHtml,
+    });
 
-  await sendEmail({
-    to: email,
-    subject: `Welcome to ${company_name} on WhatsNexus`,
-    html: emailHtml,
-  });
-
-  return true;
+    return true;
+  } catch (err) {
+    throw err;
+  }
 };

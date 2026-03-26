@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Appointment Pending</title>
+    <style>
+      body {
+        background: radial-gradient(circle at top left, #0b1f3a, #020617);
+        font-family: Arial, sans-serif;
+        margin: 0;
+        padding: 40px 0;
+        color: #ffffff;
+      }
+
+      .card {
+        max-width: 520px;
+        margin: auto;
+        background: #0b1220;
+        border-radius: 14px;
+        padding: 32px;
+        box-shadow: 0 0 40px rgba(0, 0, 0, 0.6);
+        text-align: center;
+      }
+
+      .logo {
+        font-size: 26px;
+        font-weight: 700;
+        color: #10b981;
+        margin-bottom: 8px;
+      }
+
+      .subtitle {
+        font-size: 13px;
+        color: #94a3b8;
+        margin-bottom: 24px;
+      }
+
+      h2 {
+        color: #f59e0b;
+        margin-bottom: 12px;
+      }
+
+      p {
+        color: #cbd5e1;
+        font-size: 15px;
+        line-height: 1.6;
+      }
+
+      .details {
+        margin-top: 24px;
+        background: #020617;
+        border-radius: 10px;
+        padding: 18px;
+        text-align: left;
+      }
+
+      .details table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+
+      .details td {
+        padding: 8px 0;
+        font-size: 14px;
+      }
+
+      .details .label {
+        color: #94a3b8;
+        white-space: nowrap;
+        vertical-align: top;
+        width: 140px;
+      }
+
+      .details .value {
+        color: #10b981;
+        font-weight: 600;
+      }
+
+      .note {
+        margin-top: 20px;
+        font-size: 13px;
+        color: #94a3b8;
+        text-align: left;
+      }
+
+      .footer {
+        margin-top: 28px;
+        font-size: 12px;
+        color: #64748b;
+      }
+    </style>
+  </head>
+
+  <body>
+    <div class="card">
+      <div class="logo">WhatsNexus</div>
+      <div class="subtitle">AI Receptionist Hub</div>
+
+      <h2>⏳ Appointment Pending</h2>
+
+      <p style="text-align: left">
+        Hello <strong>{{patient_name}}</strong>,<br /><br />
+        Your appointment is pending confirmation. Here are the details:
+      </p>
+
+      <div class="details">
+        <table>
+          <tr>
+            <td class="label">Appointment ID:</td>
+            <td class="value">{{appointment_id}}</td>
+          </tr>
+          <tr>
+            <td class="label">Token Number:</td>
+            <td class="value">#{{token_number}}</td>
+          </tr>
+          <tr>
+            <td class="label">Doctor:</td>
+            <td class="value">{{doctor_name}}</td>
+          </tr>
+          <tr>
+            <td class="label">Date:</td>
+            <td class="value">{{date}}</td>
+          </tr>
+          <tr>
+            <td class="label">Time:</td>
+            <td class="value">{{time}}</td>
+          </tr>
+        </table>
+      </div>
+
+      <p class="note">
+        You will receive a confirmation once your appointment is approved.
+      </p>
+
+      <div class="footer">
+        &copy; 2026 WhatsNexus &middot; Powered by Invictus Global Tech
+      </div>
+    </div>
+  </body>
+</html>

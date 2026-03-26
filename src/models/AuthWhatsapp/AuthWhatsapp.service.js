@@ -4,15 +4,16 @@ import OpenAI from "openai";
 import db from "../../database/index.js";
 import { tableNames } from "../../database/tableName.js";
 
-import { searchKnowledgeChunks } from "../Knowledge/knowledge.search.js";
+import { buildAiSystemPrompt } from "../../utils/ai/aiFlowHelper.js";
 import { getConversationMemory } from "../Messages/messages.memory.js";
 import { detectLanguageAI } from "../../utils/ai/detectLanguageStyle.js";
 import { buildChatHistory } from "../../utils/chat/buildChatHistory.js";
-import { getActivePromptService } from "../AiPrompt/aiprompt.service.js";
 import { processResponse } from "../../utils/ai/aiTagHandlers/index.js";
 import { classifyResponse } from "../../utils/ai/responseClassifier.js";
 import { handleClassification } from "../../utils/ai/classificationHandler.js";
-
+import { trackAiTokenUsage } from "../../utils/ai/trackAiTokenUsage.js";
+import { getTenantAiModel } from "../../utils/ai/getTenantAiModel.js";
+import { getIO } from "../../middlewares/socket/socket.js";
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -24,16 +25,76 @@ const httpsAgent = new https.Agent({
 });
 
 export const sendWhatsAppMessage = async (tenant_id, to, message) => {
-  if (!message || !message.trim()) return;
+  try {
+    if (!message || !message.trim()) return;
 
-  const [rows] = await db.sequelize.query(
-    `
+    const [rows] = await db.sequelize.query(
+      `
     SELECT phone_number_id, access_token
     FROM ${tableNames.WHATSAPP_ACCOUNT}
     WHERE tenant_id = ?
-      AND status = 'active'
+      AND status IN ('active', 'verified')
     LIMIT 1
     `,
+      { replacements: [tenant_id] },
+    );
+
+    if (!rows.length) {
+      throw new Error("No active WhatsApp account for tenant");
+    }
+
+    const { phone_number_id, access_token } = rows[0];
+
+    const META_API_VERSION = process.env.META_API_VERSION || "v22.0";
+    console.log(
+      `[SEND-MSG] Using Meta API version: ${META_API_VERSION}, phone_number_id: ${phone_number_id}, to: ${to}`,
+    );
+
+    let wamid = null;
+    try {
+      const response = await axios.post(
+        `https://graph.facebook.com/${META_API_VERSION}/${phone_number_id}/messages`,
+        {
+          messaging_product: "whatsapp",
+          to,
+          type: "text",
+          text: { body: message.trim() },
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${access_token}`,
+            "Content-Type": "application/json",
+          },
+          httpsAgent,
+        },
+      );
+      wamid = response?.data?.messages?.[0]?.id || null;
+    } catch (axiosErr) {
+      if (axiosErr.response) {
+        console.error(
+          "[SEND-MSG] Meta API Error:",
+          JSON.stringify(axiosErr.response.data, null, 2),
+        );
+        const metaErr = axiosErr.response.data?.error || {};
+        const metaMsg = metaErr.message || axiosErr.message;
+        const code = metaErr.code ? ` (Code: ${metaErr.code})` : "";
+        const subcode = metaErr.error_subcode
+          ? ` (Subcode: ${metaErr.error_subcode})`
+          : "";
+        throw new Error(`Meta API Error: ${metaMsg}${code}${subcode}`);
+      }
+      throw axiosErr;
+    }
+
+    return { phone_number_id, wamid };
+  } catch (err) {
+    throw err;
+  }
+};
+
+export const sendWhatsAppLocation = async (tenant_id, to, locationParams) => {
+  const [rows] = await db.sequelize.query(
+    `SELECT phone_number_id, access_token FROM ${tableNames.WHATSAPP_ACCOUNT} WHERE tenant_id = ? AND status = 'active' LIMIT 1`,
     { replacements: [tenant_id] },
   );
 
@@ -42,23 +103,46 @@ export const sendWhatsAppMessage = async (tenant_id, to, message) => {
   }
 
   const { phone_number_id, access_token } = rows[0];
+  const META_API_VERSION = process.env.META_API_VERSION || "v22.0";
 
-  await axios.post(
-    `https://graph.facebook.com/v19.0/${phone_number_id}/messages`,
-    {
-      messaging_product: "whatsapp",
-      to,
-      type: "text",
-      text: { body: message.trim() },
+  const payload = {
+    messaging_product: "whatsapp",
+    to,
+    type: "location",
+    location: {
+      latitude: Number(locationParams.latitude),
+      longitude: Number(locationParams.longitude),
+      name: locationParams.name || "",
+      address: locationParams.address || "",
     },
-    {
-      headers: {
-        Authorization: `Bearer ${access_token}`,
-        "Content-Type": "application/json",
+  };
+
+  console.log(`[SEND-LOCATION] Sending location to ${to}:`, JSON.stringify(payload, null, 2));
+
+  try {
+    const response = await axios.post(
+      `https://graph.facebook.com/${META_API_VERSION}/${phone_number_id}/messages`,
+      payload,
+      {
+        headers: {
+          Authorization: `Bearer ${access_token}`,
+          "Content-Type": "application/json",
+        },
+        httpsAgent,
       },
-      httpsAgent,
-    },
-  );
+    );
+
+    const meta_message_id = response.data?.messages?.[0]?.id;
+    return { phone_number_id, meta_message_id };
+  } catch (error) {
+    if (error.response) {
+      console.error("[SEND-LOCATION] Meta API Error:", JSON.stringify(error.response.data, null, 2));
+      const metaErr = error.response.data?.error || {};
+      const message = metaErr.message || error.message;
+      throw new Error(`Meta API Location Error: ${message}`);
+    }
+    throw error;
+  }
 };
 
 export const sendWhatsAppTemplate = async (
@@ -73,7 +157,7 @@ export const sendWhatsAppTemplate = async (
     SELECT phone_number_id, access_token
     FROM ${tableNames.WHATSAPP_ACCOUNT}
     WHERE tenant_id = ?
-      AND status = 'active'
+      AND status IN ('active', 'verified')
     LIMIT 1
     `,
     { replacements: [tenant_id] },
@@ -84,7 +168,7 @@ export const sendWhatsAppTemplate = async (
   }
 
   const { phone_number_id, access_token } = rows[0];
-
+  console.log("components", JSON.stringify(components, null, 2));
   const payload = {
     messaging_product: "whatsapp",
     to,
@@ -97,10 +181,15 @@ export const sendWhatsAppTemplate = async (
       components: components || [],
     },
   };
+  console.log("Full Payload:", JSON.stringify(payload, null, 2));
+  const META_API_VERSION = process.env.META_API_VERSION || "v22.0";
+  console.log(
+    `[SEND-TEMPLATE] Using Meta API version: ${META_API_VERSION}, phone_number_id: ${phone_number_id}, to: ${to}`,
+  );
 
   try {
     const response = await axios.post(
-      `https://graph.facebook.com/v19.0/${phone_number_id}/messages`,
+      `https://graph.facebook.com/${META_API_VERSION}/${phone_number_id}/messages`,
       payload,
       {
         headers: {
@@ -116,43 +205,118 @@ export const sendWhatsAppTemplate = async (
     return { phone_number_id, meta_message_id };
   } catch (error) {
     if (error.response) {
-      console.error("Meta API Error Details:", JSON.stringify(error.response.data, null, 2));
-      const message = error.response.data?.error?.message || error.message;
-      throw new Error(`Meta API Error: ${message}`);
+      console.error(
+        "Meta API Error Details:",
+        JSON.stringify(error.response.data, null, 2),
+      );
+      const metaErr = error.response.data?.error || {};
+      const message = metaErr.message || error.message;
+      const code = metaErr.code ? ` (Code: ${metaErr.code})` : "";
+      const subcode = metaErr.error_subcode
+        ? ` (Subcode: ${metaErr.error_subcode})`
+        : "";
+      throw new Error(`Meta API Error: ${message}${code}${subcode}`);
     }
     throw error;
   }
 };
 
-export const sendTypingIndicator = async (tenant_id, phone_number_id, to) => {
-  const [rows] = await db.sequelize.query(
-    `
+export const sendReadReceipt = async (
+  tenant_id,
+  phone_number_id,
+  message_id,
+) => {
+  try {
+    const [rows] = await db.sequelize.query(
+      `
     SELECT access_token
     FROM ${tableNames.WHATSAPP_ACCOUNT}
     WHERE tenant_id = ?
       AND phone_number_id = ?
-      AND status = 'active'
+      AND status IN ('active', 'verified')
     LIMIT 1
     `,
-    { replacements: [tenant_id, phone_number_id] },
-  );
+      { replacements: [tenant_id, phone_number_id] },
+    );
 
-  if (!rows.length) return;
+    if (!rows.length) return;
 
-  await axios.post(
-    `https://graph.facebook.com/v19.0/${phone_number_id}/messages`,
-    {
-      messaging_product: "whatsapp",
-      to,
-      type: "typing",
-    },
-    {
-      headers: {
-        Authorization: `Bearer ${rows[0].access_token}`,
-        "Content-Type": "application/json",
-      },
-    },
-  );
+    const META_API_VERSION = process.env.META_API_VERSION || "v22.0";
+    try {
+      await axios.post(
+        `https://graph.facebook.com/${META_API_VERSION}/${phone_number_id}/messages`,
+        {
+          messaging_product: "whatsapp",
+          status: "read",
+          message_id,
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${rows[0].access_token}`,
+            "Content-Type": "application/json",
+          },
+        },
+      );
+    } catch (apiErr) {
+      console.error(
+        "[READ-RECEIPT] Meta API Error:",
+        apiErr?.response?.data || apiErr.message,
+      );
+    }
+  } catch (err) {
+    console.error("[READ-RECEIPT] Database Error:", err.message);
+  }
+};
+
+export const sendTypingIndicator = async (
+  tenant_id,
+  phone_number_id,
+  phone,
+) => {
+  try {
+    // 1. Emit Socket event for Whatnexus Dashboard Animation
+    try {
+      const io = getIO();
+      if (io) {
+        console.log(
+          `[TYPING] Emitting ai-typing for tenant ${tenant_id}, phone ${phone}`,
+        );
+        io.to(`tenant-${tenant_id}`).emit("ai-typing", {
+          tenant_id,
+          phone,
+          status: true,
+        });
+      }
+    } catch (socketErr) {
+      console.error("[TYPING] Socket Emit Error:", socketErr.message);
+    }
+
+    // 2. Fetch token and attempt to notify Meta (status: read fallback)
+    const [rows] = await db.sequelize.query(
+      `
+    SELECT access_token
+    FROM ${tableNames.WHATSAPP_ACCOUNT}
+    WHERE tenant_id = ?
+      AND phone_number_id = ?
+      AND status IN ('active', 'verified')
+    LIMIT 1
+    `,
+      { replacements: [tenant_id, phone_number_id] },
+    );
+
+    if (!rows.length) return;
+
+    const META_API_VERSION = process.env.META_API_VERSION || "v22.0";
+    try {
+      // NOTE: WhatsApp Cloud API doesn't have a native 'typing' status for businesses.
+      // We send a read receipt if we didn't send one before, as a fallback "seen" signal.
+      // Some specialized APIs use 'typing', but for Cloud API 'read' is the standard feedback.
+    } catch (apiErr) {
+      // Suppress error
+    }
+  } catch (err) {
+    console.error("[TYPING] Database Error:", err.message);
+  }
 };
 
 export const isMessageProcessed = async (
@@ -193,8 +357,9 @@ export const markMessageProcessed = async (
 };
 
 export const isChatLocked = async (tenant_id, phone_number_id, phone) => {
-  const [rows] = await db.sequelize.query(
-    `
+  try {
+    const [rows] = await db.sequelize.query(
+      `
     SELECT 1
     FROM ${tableNames.CHATLOCKS}
     WHERE tenant_id = ?
@@ -203,44 +368,67 @@ export const isChatLocked = async (tenant_id, phone_number_id, phone) => {
       AND created_at > (NOW() - INTERVAL 15 SECOND)
     LIMIT 1
     `,
-    { replacements: [tenant_id, phone_number_id, phone] },
-  );
+      { replacements: [tenant_id, phone_number_id, phone] },
+    );
 
-  return rows.length > 0;
+    return rows.length > 0;
+  } catch (err) {
+    throw err;
+  }
 };
 
 export const lockChat = async (tenant_id, phone_number_id, phone) => {
-  await db.sequelize.query(
-    `
+  try {
+    await db.sequelize.query(
+      `
     INSERT IGNORE INTO ${tableNames.CHATLOCKS}
     (tenant_id, phone_number_id, phone)
     VALUES (?,?,?)
     `,
-    { replacements: [tenant_id, phone_number_id, phone] },
-  );
+      { replacements: [tenant_id, phone_number_id, phone] },
+    );
+  } catch (err) {
+    throw err;
+  }
 };
 
 export const unlockChat = async (tenant_id, phone_number_id, phone) => {
-  await db.sequelize.query(
-    `
+  try {
+    await db.sequelize.query(
+      `
     DELETE FROM ${tableNames.CHATLOCKS}
     WHERE tenant_id = ?
       AND phone_number_id = ?
       AND phone = ?
     `,
-    { replacements: [tenant_id, phone_number_id, phone] },
-  );
+      { replacements: [tenant_id, phone_number_id, phone] },
+    );
+  } catch (err) {
+    throw err;
+  }
 };
 
-export const getOpenAIReply = async (tenant_id, phone, userMessage) => {
+export const getOpenAIReply = async (
+  tenant_id,
+  phone,
+  userMessage,
+  contact_id = null,
+  phone_number_id = null,
+) => {
   try {
     if (!userMessage) return null;
 
     const cleanMessage = userMessage.trim();
     if (!cleanMessage) return null;
 
+    // Fetch tenant timezone from settings (default to Asia/Kolkata for backward compatibility)
+    const { getTenantSettingsService } =
+      await import("../TenantModel/tenant.service.js");
+    const tenantSettings = await getTenantSettingsService(tenant_id);
+    const tenantTimezone = tenantSettings?.timezone || "Asia/Kolkata";
+
     const now = new Date(
-      new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }),
+      new Date().toLocaleString("en-US", { timeZone: tenantTimezone }),
     );
 
     const currentDateFormatted = now.toLocaleDateString("en-GB", {
@@ -259,205 +447,81 @@ export const getOpenAIReply = async (tenant_id, phone, userMessage) => {
       hour12: true,
     });
 
-    const languageInfo = await detectLanguageAI(cleanMessage);
+    const languageInfo = await detectLanguageAI(cleanMessage, tenant_id);
 
     console.log("language", languageInfo);
 
-    const memory = await getConversationMemory(tenant_id, phone);
+    const memory = await getConversationMemory(tenant_id, phone, contact_id);
     const chatHistory = buildChatHistory(memory);
 
-    const hospitalPrompt =
-      (await getActivePromptService(tenant_id)) ||
-      "You are a hospital front-desk assistant.";
+    // Use centralized AI flow helper for parity with Playground
+    const { systemPrompt } = await buildAiSystemPrompt(
+      tenant_id,
+      contact_id,
+      languageInfo,
+      cleanMessage,
+    );
 
-    const chunks = await searchKnowledgeChunks(tenant_id, cleanMessage);
-    const knowledgeContext =
-      chunks && chunks.length > 0
-        ? chunks.join("\n\n")
-        : "No relevant knowledge available.";
+    const aiMessages = [
+      { role: "system", content: systemPrompt },
+      ...chatHistory,
+      { role: "user", content: cleanMessage },
+    ];
 
-    const COMMON_BASE_PROMPT = `
+    const outputModel = await getTenantAiModel(tenant_id, "output");
 
------------- COMMON BASE PROMPT --------------
-
- You are a WhatsApp front-desk reception assistant.
-
-Your role:
-- Act like a real human support or front-desk executive
-- Be polite, calm, respectful, and supportive
-- Use simple, easy-to-understand words
-- Sound natural and professional (not robotic, not an AI)
-
-────────────────────────────────
-GLOBAL BEHAVIOUR RULES
-────────────────────────────────
-- Always read the FULL conversation history before replying.
-- Understand the user’s intent from all recent messages.
-- Never repeat questions that were already asked or answered.
-- Ask ONLY one question at a time, and only if necessary.
-- Do NOT diagnose or prescribe medicines.
-- Do NOT make assumptions.
-- Do NOT hallucinate or invent information.
-
-────────────────────────────────
-RELEVANCE CHECK (CRITICAL)
-────────────────────────────────
-If "UPLOADED KNOWLEDGE" contains a "[Previous Question]" and "[Admin Resolution]":
-- You MUST verify if the previous question is on the SAME TOPIC as the current user question.
-- If they are different (e.g., Previous was about "address", Current is about "price"), IGNORE that resolution.
-- Only use resolutions that are a direct match for the current intent.
-
-────────────────────────────────
-KNOWLEDGE DEPENDENCY RULE (VERY IMPORTANT)
-────────────────────────────────
-All factual information MUST come ONLY from UPLOADED KNOWLEDGE.
-
-You MUST follow these rules strictly:
-
-1. If UPLOADED KNOWLEDGE contains relevant information:
-   - Answer clearly using ONLY that information.
-
-2. If UPLOADED KNOWLEDGE is EMPTY, INACTIVE, DELETED, or has NO relevant data:
-   - You MUST end your response with: [MISSING_KNOWLEDGE: brief reason]
-   - Example: I'm sorry, I don't have information about the pricing at the moment. [MISSING_KNOWLEDGE: pricing not found]
-   - Do NOT guess.
-   - Do NOT answer partially.
-   - Do NOT change the topic.
-   - Clearly and politely inform the user.
-
-Use natural responses like:
-- “Sorry, I don’t have this information available right now.”
-- “This specific detail is not available in our system at the moment.”
-- “The required information has not been uploaded yet.”
-
-Never blame the user.
-Never mention technical terms like “database” or “AI system”.
-
-────────────────────────────────
-INACTIVE / DELETED KNOWLEDGE HANDLING
-────────────────────────────────
-If the user asks a question AND the related knowledge is missing or inactive:
-
-- Acknowledge the question politely.
-- State that the information is currently not available.
-- Offer a safe next step ONLY if appropriate (example: callback, contact team).
-
-Example:
-“I understand your question. Currently, this information is not available in our system. Our team can assist you further if needed.”
-
-Do NOT fabricate answers.
-Do NOT redirect incorrectly.
-
-────────────────────────────────
-USER MESSAGE EDGE CASE HANDLING
-────────────────────────────────
-If the user message is:
-- Empty
-- Unclear
-- Incomplete
-- Random text
-
-Then:
-- Ask ONE polite clarification question.
-Example:
-“Could you please clarify what information you’re looking for?”
-
-────────────────────────────────
-LANGUAGE ENFORCEMENT (VERY STRICT):
-────────────────────────────────
-
-Detected Language: ${languageInfo.language}
-Writing Style: ${languageInfo.style}
-Internal Label (for system use only): ${languageInfo.label}
-
-You MUST follow these rules EXACTLY:
-
-1. Use Detected Language and Writing Style to form the reply.
-2. If Writing Style is "romanized":
-   - Use ONLY English letters (a–z).
-   - Do NOT use native script characters.
-3. If Writing Style is "native_script":
-   - Use ONLY the native script.
-4. If Writing Style is "mixed":
-   - Follow the same mixed style as the user.
-
-IMPORTANT:
-- The Label is ONLY for internal understanding.
-- Do NOT mention the label in the reply.
-- Do NOT prefix the reply with "english:", "tanglish:", "benglish:", etc.
-- The reply must look like normal human conversation.
-
-LANGUAGE NATURALNESS ENFORCEMENT:
-- Use commonly spoken, everyday language.
-- Avoid formal or textbook words.
-- Sound like a real hospital receptionist.
-
-────────────────────────────────
-FAIL-SAFE RULE (CRITICAL)
-────────────────────────────────
-If you are unsure about the correct reply due to missing context or missing knowledge:
-- It is ALWAYS better to say “I don’t have that information” than to guess.
-
-Accuracy and trust are more important than answering quickly.
-
-────────────────────────────────
-FINAL PRINCIPLE
-────────────────────────────────
-When in doubt:
-- Be honest
-- Be polite
-- Be clear
-- Do not guess
-
-────────────────────────────────
-SYSTEM BEHAVIOUR (INTERNAL USE ONLY):
-────────────────────────────────
-You are a professional hospital assistant. Your primary goal is to provide accurate and helpful information based ONLY on the "UPLOADED KNOWLEDGE" provided.
-
-Rules:
-- If info is in docs: Provide it clearly.
-- If info is NOT in docs: Politely state that you don't have that information at the moment and offer to connect them with a human specialist.
-- Be clear, concise, and professional.
-- No emojis or symbols.
-`;
-
-
-
-    const systemPrompt = `
-
-${COMMON_BASE_PROMPT}
-
-${hospitalPrompt}
-
-CURRENT DATE & DAY & TIME (IST):
-Date: ${currentDateFormatted}
-Day: ${currentDayFormatted}
-Time: ${currentTimeFormatted}
-
-UPLOADED KNOWLEDGE:
-${knowledgeContext}
-`;
-
-    const response = await openai.chat.completions.create({
-      model: "gpt-4o",
+    let response = await openai.chat.completions.create({
+      model: outputModel,
       temperature: 0.1, // Very low temperature for consistent tagging behavior
       top_p: 0.9,
-      max_tokens: 500,
-      messages: [
-        { role: "system", content: systemPrompt },
-        ...chatHistory,
-        { role: "user", content: cleanMessage },
-      ],
+      max_tokens: 800,
+      messages: aiMessages,
     });
 
-    const rawReply = response?.choices?.[0]?.message?.content?.trim();
+    // Track token usage for the primary AI call
+    await trackAiTokenUsage(tenant_id, "whatsapp", response).catch((e) =>
+      console.error("[WHATSAPP-AI] Token tracking failed:", e.message),
+    );
+
+    let rawReply = response?.choices?.[0]?.message?.content?.trim();
+
+    // If response was truncated (finish_reason: 'length') and contains a partial tag, retry with more tokens
+    const finishReason = response?.choices?.[0]?.finish_reason;
+    if (finishReason === "length" && rawReply) {
+      const hasPartialTag =
+        /\[([A-Z_]+)(?::\s*[\s\S]*)?$/.test(rawReply) &&
+        !/\[([A-Z_]+)(?::\s*[\s\S]*?)\]/.test(rawReply);
+      if (hasPartialTag) {
+        console.warn(
+          "[WHATSAPP-AI] Response truncated with partial tag, retrying with higher token limit...",
+        );
+        response = await openai.chat.completions.create({
+          model: outputModel,
+          temperature: 0.1,
+          top_p: 0.9,
+          max_tokens: 1200,
+          messages: aiMessages,
+        });
+        await trackAiTokenUsage(tenant_id, "whatsapp_retry", response).catch(
+          (e) =>
+            console.error(
+              "[WHATSAPP-AI] Retry token tracking failed:",
+              e.message,
+            ),
+        );
+        rawReply = response?.choices?.[0]?.message?.content?.trim();
+      }
+    }
 
     console.log("[WHATSAPP-AI-RAW]", rawReply);
 
     // Step 1: Clean any residual manual tags and extract metadata
     const processed = await processResponse(rawReply, {
       tenant_id,
-      userMessage: cleanMessage
+      userMessage: cleanMessage,
+      contact_id,
+      phone,
+      phone_number_id,
     });
 
     const finalReply = processed.message;
@@ -465,13 +529,23 @@ ${knowledgeContext}
     // Step 2: NEW Dual-AI Classification (Standardized single logging)
     try {
       console.log("[CLASSIFIER] Starting classification...");
-      const classification = await classifyResponse(cleanMessage, finalReply);
+      const classification = await classifyResponse(
+        cleanMessage,
+        finalReply,
+        tenant_id,
+      );
 
       // If the primary AI explicitly tagged missing knowledge or out of scope, use that as a "hint"
-      if (processed.tagDetected === "MISSING_KNOWLEDGE" && classification.category !== "MISSING_KNOWLEDGE") {
+      if (
+        processed.tagDetected === "MISSING_KNOWLEDGE" &&
+        classification.category !== "MISSING_KNOWLEDGE"
+      ) {
         classification.category = "MISSING_KNOWLEDGE";
         classification.reason = processed.tagPayload || classification.reason;
-      } else if (processed.tagDetected === "OUT_OF_SCOPE" && classification.category !== "OUT_OF_SCOPE") {
+      } else if (
+        processed.tagDetected === "OUT_OF_SCOPE" &&
+        classification.category !== "OUT_OF_SCOPE"
+      ) {
         classification.category = "OUT_OF_SCOPE";
         classification.reason = processed.tagPayload || classification.reason;
       }
@@ -479,17 +553,24 @@ ${knowledgeContext}
       await handleClassification(classification, {
         tenant_id,
         userMessage: cleanMessage,
-        aiResponse: finalReply
+        aiResponse: finalReply,
       });
     } catch (classifierError) {
-      console.error("[CLASSIFIER] Error in dual-AI flow:", classifierError.message);
+      console.error(
+        "[CLASSIFIER] Error in dual-AI flow:",
+        classifierError.message,
+      );
     }
 
     console.log("[WHATSAPP-AI-FINAL]", finalReply);
 
-    return finalReply || null;
+    return {
+      message: finalReply || null,
+      tagDetected: processed.tagDetected,
+      tagPayload: processed.tagPayload,
+    };
   } catch (err) {
     console.error("OpenAI error:", err.message);
-    return null;
+    return { message: null, tagDetected: null, tagPayload: null };
   }
 };

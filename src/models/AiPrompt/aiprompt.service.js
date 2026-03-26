@@ -167,41 +167,55 @@ export const getActivePromptService = async (tenant_id) => {
 /**
  * Retrieves a list of soft-deleted AI prompts for a tenant.
  */
+/**
+ * Retrieves a list of soft-deleted AI prompts for a tenant.
+ */
 export const getDeletedAiPromptListService = async (tenant_id) => {
-  const where = { tenant_id, is_deleted: true };
+  try {
+    const where = { tenant_id, is_deleted: true };
 
-  const { count, rows } = await db.AiPrompt.findAndCountAll({
-    where,
-    order: [["deleted_at", "DESC"]],
-  });
+    const { count, rows } = await db.AiPrompt.findAndCountAll({
+      where,
+      order: [["deleted_at", "DESC"]],
+    });
 
-  return {
-    prompts: rows,
-  };
+    return {
+      prompts: rows,
+    };
+  } catch (err) {
+    throw err;
+  }
 };
 
 /**
  * Restore a soft-deleted AI prompt
  */
+/**
+ * Restore a soft-deleted AI prompt
+ */
 export const restoreAiPromptService = async (id, tenant_id) => {
-  const prompt = await db.AiPrompt.findOne({
-    where: { id, tenant_id, is_deleted: true }
-  });
+  try {
+    const prompt = await db.AiPrompt.findOne({
+      where: { id, tenant_id, is_deleted: true }
+    });
 
-  if (!prompt) {
-    throw new Error("Prompt not found or not deleted");
-  }
+    if (!prompt) {
+      throw new Error("Prompt not found or not deleted");
+    }
 
-  // Use raw query to avoid ON UPDATE CURRENT_TIMESTAMP conflict
-  await db.sequelize.query(
-    `UPDATE ${tableNames.AIPROMPT} 
+    // Use raw query to avoid ON UPDATE CURRENT_TIMESTAMP conflict
+    await db.sequelize.query(
+      `UPDATE ${tableNames.AIPROMPT} 
      SET is_deleted = false, deleted_at = NULL 
      WHERE id = ? AND tenant_id = ?`,
-    {
-      replacements: [id, tenant_id],
-      type: db.Sequelize.QueryTypes.UPDATE
-    }
-  );
+      {
+        replacements: [id, tenant_id],
+        type: db.Sequelize.QueryTypes.UPDATE
+      }
+    );
 
-  return { message: "Prompt restored successfully" };
+    return { message: "Prompt restored successfully" };
+  } catch (err) {
+    throw err;
+  }
 };

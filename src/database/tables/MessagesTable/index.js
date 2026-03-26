@@ -30,6 +30,12 @@ export const MessagesTable = (sequelize, Sequelize) => {
         allowNull: true,
       },
 
+      country_code: {
+        type: Sequelize.STRING,
+        allowNull: true,
+        defaultValue: "+91",
+      },
+
       phone: {
         type: Sequelize.STRING,
         allowNull: false,
@@ -51,7 +57,17 @@ export const MessagesTable = (sequelize, Sequelize) => {
       },
 
       message_type: {
-        type: Sequelize.ENUM("text", "image", "video", "document", "audio", "sticker", "location", "contact", "template"),
+        type: Sequelize.ENUM(
+          "text",
+          "image",
+          "video",
+          "document",
+          "audio",
+          "sticker",
+          "location",
+          "contact",
+          "template",
+        ),
         allowNull: false,
         defaultValue: "text",
       },
@@ -72,6 +88,18 @@ export const MessagesTable = (sequelize, Sequelize) => {
         allowNull: true,
       },
 
+      media_filename: {
+        type: Sequelize.STRING,
+        allowNull: true,
+        comment: "Original filename for document/media messages",
+      },
+
+      template_name: {
+        type: Sequelize.STRING,
+        allowNull: true,
+        comment: "Stores the name of the template if message_type is template",
+      },
+
       status: {
         type: Sequelize.ENUM("sent", "delivered", "read", "failed"),
         allowNull: true,
@@ -84,6 +112,17 @@ export const MessagesTable = (sequelize, Sequelize) => {
         defaultValue: false,
       },
 
+      is_deleted: {
+        type: Sequelize.BOOLEAN,
+        allowNull: false,
+        defaultValue: false,
+      },
+
+      deleted_at: {
+        type: Sequelize.DATE,
+        allowNull: true,
+      },
+
       createdAt: {
         type: Sequelize.DATE,
         allowNull: false,
@@ -94,7 +133,7 @@ export const MessagesTable = (sequelize, Sequelize) => {
       updatedAt: {
         type: Sequelize.DATE,
         allowNull: false,
-        defaultValue: sequelize.literal("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"),
+        defaultValue: sequelize.literal("CURRENT_TIMESTAMP"),
         field: "updated_at",
       },
     },
@@ -109,7 +148,7 @@ export const MessagesTable = (sequelize, Sequelize) => {
         },
         {
           name: "idx_msg_tenant_phone",
-          fields: ["tenant_id", "phone"],
+          fields: ["tenant_id", "country_code", "phone"],
         },
         {
           name: "unique_msg_wamid",
@@ -120,7 +159,11 @@ export const MessagesTable = (sequelize, Sequelize) => {
           name: "idx_msg_created_at",
           fields: ["created_at"],
         },
+        {
+          name: "idx_msg_deleted",
+          fields: ["is_deleted"],
+        },
       ],
-    }
+    },
   );
 };

@@ -6,8 +6,9 @@ export const generateReadableIdFromLast = async (
   field,
   prefix,
   pad = 3,
+  passedTransaction = null,
 ) => {
-  const transaction = await db.sequelize.transaction();
+  const transaction = passedTransaction || (await db.sequelize.transaction());
 
   try {
     // 1. Try to find the sequence record and lock it
@@ -59,13 +60,17 @@ export const generateReadableIdFromLast = async (
       );
     }
 
-    await transaction.commit();
+    if (!passedTransaction) {
+      await transaction.commit();
+    }
 
     // 4. Format and return the ID
     const paddedNumber = String(nextNumber).padStart(pad, "0");
     return `${prefix}${paddedNumber}`;
   } catch (error) {
-    await transaction.rollback();
+    if (!passedTransaction) {
+      await transaction.rollback();
+    }
     throw error;
   }
 };

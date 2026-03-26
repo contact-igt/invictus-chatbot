@@ -14,6 +14,7 @@ import {
   getDeletedTenantUserListController,
   restoreTenantUserController,
   getLoggedTenantUserController,
+  updateTenantOrganizationController,
 } from "./tenantuser.controller.js";
 
 const Router = express.Router();
@@ -40,18 +41,28 @@ Router.get(
   getLoggedTenantUserController,
 );
 
-Router.get(
-  "/user/list",
+Router.put(
+  "/user/organization",
   authenticate,
   authorize({
     user_type: "tenant",
     roles: ["tenant_admin"],
   }),
+  updateTenantOrganizationController,
+);
+
+Router.get(
+  "/user/list",
+  authenticate,
+  authorize({
+    user_type: "tenant",
+    roles: ["tenant_admin", "doctor", "staff", "agent"],
+  }),
   getAllTenantUsersController,
 );
 
 Router.get(
-  "/user/:id",
+  "/user/:tenant_user_id",
   authenticate,
   authorize({
     user_type: "tenant",
@@ -61,7 +72,7 @@ Router.get(
 );
 
 Router.put(
-  "/user/:id",
+  "/user/:tenant_user_id",
   authenticate,
   authorize({
     user_type: "tenant",
@@ -71,7 +82,7 @@ Router.put(
 );
 
 Router.delete(
-  "/user/:id/soft",
+  "/user/:tenant_user_id/soft",
   authenticate,
   authorize({
     user_type: "tenant",
@@ -85,13 +96,13 @@ Router.get(
   authenticate,
   authorize({
     user_type: "tenant",
-    roles: ["tenant_admin"],
+    roles: ["tenant_admin", "doctor", "staff", "agent"],
   }),
   getDeletedTenantUserListController,
 );
 
 Router.put(
-  "/user/:id/restore",
+  "/user/:tenant_user_id/restore",
   authenticate,
   authorize({
     user_type: "tenant",
@@ -102,7 +113,7 @@ Router.put(
 
 /* ⚠️ PERMANENT DELETE – USE CAREFULLY */
 Router.delete(
-  "/user/:id/permanent",
+  "/user/:tenant_user_id/permanent",
   authenticate,
   authorize({
     user_type: "tenant",

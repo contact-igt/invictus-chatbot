@@ -7,12 +7,12 @@ import dotenv from "dotenv";
 dotenv.config();
 
 const SUPER_ADMIN_DEFAULT = {
-  email: process.env.SUPER_ADMIN_EMAIL || "admin@invictus.com",
-  username: process.env.SUPER_ADMIN_USERNAME || "superadmin",
-  password: process.env.SUPER_ADMIN_PASSWORD || "SuperAdmin@123",
+  email: process.env.SUPER_ADMIN_EMAIL,
+  username: process.env.SUPER_ADMIN_USERNAME,
+  password: process.env.SUPER_ADMIN_PASSWORD,
   title: "Mr",
-  country_code: "91",
-  mobile: process.env.SUPER_ADMIN_MOBILE || "1234567890",
+  country_code: process.env.SUPER_ADMIN_COUNTRY_CODE,
+  mobile: process.env.SUPER_ADMIN_MOBILE,
   role: "super_admin",
   status: "active",
 };
@@ -20,6 +20,7 @@ const SUPER_ADMIN_DEFAULT = {
 const seedSuperAdmin = async () => {
   try {
     console.log("🌱 Starting Super Admin seeding...");
+    await db.sequelize.sync();
 
     // Check if any super admin exists
     const checkQuery = `SELECT * FROM ${tableNames.MANAGEMENT} WHERE role = 'super_admin' LIMIT 1`;

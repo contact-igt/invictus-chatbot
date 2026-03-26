@@ -38,7 +38,7 @@ export const WhatsappTemplateTable = (sequelize, Sequelize) => {
       },
 
       template_type: {
-        type: Sequelize.ENUM("text"),
+        type: Sequelize.ENUM("text", "image", "video", "document", "location", "carousel"),
         allowNull: false,
         defaultValue: "text",
       },
@@ -103,9 +103,7 @@ export const WhatsappTemplateTable = (sequelize, Sequelize) => {
       updatedAt: {
         type: Sequelize.DATE,
         allowNull: false,
-        defaultValue: sequelize.literal(
-          "CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP",
-        ),
+        defaultValue: sequelize.literal("CURRENT_TIMESTAMP"),
         field: "updated_at",
       },
     },

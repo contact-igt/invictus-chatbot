@@ -19,17 +19,29 @@ import {
   getManagementByIdService,
   getDeletedManagementListService,
   restoreManagementService,
+  getPricingRulesService,
+  createPricingRuleService,
+  updatePricingRuleService,
+  deletePricingRuleService,
+  getAiPricingRulesService,
+  createAiPricingRuleService,
+  updateAiPricingRuleService,
+  deleteAiPricingRuleService,
 } from "./management.service.js";
 import db from "../../database/index.js";
 import { tableNames } from "../../database/tableName.js";
 import { generatePassword } from "../../utils/helpers/generatePassword.js";
-import fs from "fs";
-import path from "path";
-import handlebars from "handlebars";
-import { fileURLToPath } from "url";
+import { getTemplate } from "../../utils/email/templateLoader.js";
 import { sendEmail } from "../../utils/email/emailService.js";
-import { normalizeMobile } from "../../utils/helpers/normalizeMobile.js";
-
+import {
+  normalizeMobile,
+  cleanCountryCode,
+} from "../../utils/helpers/normalizeMobile.js";
+import {
+  generateOTPService,
+  verifyOTPService,
+  checkOTPVerificationService,
+} from "../OtpVerificationModel/otpverification.service.js";
 
 export const registerManagementController = async (req, res) => {
   try {
@@ -52,8 +64,12 @@ export const registerManagementController = async (req, res) => {
 
     const trimmedEmail = email?.trim()?.toLowerCase();
     const normalizedMobile = normalizeMobile(country_code, mobile);
+    const cleanedCC = country_code ? cleanCountryCode(country_code) : null;
 
-    const existingMg = await findManagementByEmailOrMobileService(trimmedEmail, normalizedMobile);
+    const existingMg = await findManagementByEmailOrMobileService(
+      trimmedEmail,
+      normalizedMobile,
+    );
 
     if (existingMg) {
       const field = existingMg.email === trimmedEmail ? "Email" : "Mobile";
@@ -77,22 +93,13 @@ export const registerManagementController = async (req, res) => {
       title || null,
       username,
       trimmedEmail,
-      country_code || null,
+      cleanedCC,
       normalizedMobile || null,
       hashedPassword,
       role,
     );
 
-    const __filename = fileURLToPath(import.meta.url);
-    const __dirname = path.dirname(__filename);
-
-    const templatePath = path.join(
-      __dirname,
-      "../../../public/html/managementInvite/index.html",
-    );
-
-    const source = fs.readFileSync(templatePath, "utf8");
-    const template = handlebars.compile(source);
+    const template = getTemplate("managementInvite");
 
     const emailHtml = template({
       admin_name: username,
@@ -117,7 +124,9 @@ export const registerManagementController = async (req, res) => {
       });
     }
 
-    return res.status(500).send({ message: "An internal server error occurred." });
+    return res
+      .status(500)
+      .send({ message: "An internal server error occurred." });
   }
 };
 
@@ -222,7 +231,9 @@ export const getManagementByIdController = async (req, res) => {
       data,
     });
   } catch (err) {
-    return res.status(500).send({ message: "An internal server error occurred." });
+    return res
+      .status(500)
+      .send({ message: "An internal server error occurred." });
   }
 };
 
@@ -277,19 +288,21 @@ export const updateManagementController = async (req, res) => {
       }
     }
 
+    const cleanedCC = country_code ? cleanCountryCode(country_code) : null;
+
     await updateManagementService(
       targetUserId,
       title,
       username,
-      country_code,
-      normalizeMobile(country_code, mobile),
+      cleanedCC,
+      normalizeMobile(cleanedCC, mobile),
       profile,
       loggedInUser.role === "super_admin" && req.body.role
         ? req.body.role
         : null,
       loggedInUser.role === "super_admin" && req.body.status
         ? req.body.status
-        : null
+        : null,
     );
 
     return res.status(200).send({
@@ -378,14 +391,6 @@ export const deleteManagmentByIdController = async (req, res) => {
   }
 };
 
-// --- Password Reset Controllers ---
-
-import {
-  generateOTPService,
-  verifyOTPService,
-  checkOTPVerificationService,
-} from "../OtpVerificationModel/otpverification.service.js";
-
 export const forgotManagementPasswordController = async (req, res) => {
   try {
     const { email } = req.body;
@@ -396,8 +401,8 @@ export const forgotManagementPasswordController = async (req, res) => {
     const trimmedEmail = email?.trim()?.toLowerCase();
     const user = await loginManagementService(trimmedEmail);
     if (!user) {
-      return res.status(200).send({
-        message: "If your email is registered, you will receive an OTP shortly.",
+      return res.status(400).send({
+        message: "Invalid email",
       });
     }
 
@@ -419,7 +424,11 @@ export const verifyManagementOTPController = async (req, res) => {
     }
 
     const trimmedEmail = email?.trim()?.toLowerCase();
-    const verification = await verifyOTPService(trimmedEmail, otp, "management");
+    const verification = await verifyOTPService(
+      trimmedEmail,
+      otp,
+      "management",
+    );
 
     if (!verification.valid) {
       return res.status(400).send({ message: verification.message });
@@ -445,7 +454,10 @@ export const resetManagementPasswordController = async (req, res) => {
     const trimmedEmail = email?.trim()?.toLowerCase();
     const trimmedPassword = new_password?.trim();
 
-    const isVerified = await checkOTPVerificationService(trimmedEmail, "management");
+    const isVerified = await checkOTPVerificationService(
+      trimmedEmail,
+      "management",
+    );
     if (!isVerified) {
       return res.status(400).send({
         message: "Please verify OTP first or OTP session expired",
@@ -465,5 +477,311 @@ export const resetManagementPasswordController = async (req, res) => {
     });
   } catch (err) {
     return res.status(500).send({ message: err.message });
+  }
+};
+
+// ─── Pricing Table CRUD Controllers ─────────────────────────────
+
+export const getPricingRulesController = async (req, res) => {
+  try {
+    const rules = await getPricingRulesService();
+    return res.status(200).json({ success: true, data: rules });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+export const createPricingRuleController = async (req, res) => {
+  try {
+    const { category, country, rate, markup_percent } = req.body;
+    if (!category || !country || rate === undefined) {
+      return res.status(400).json({
+        success: false,
+        message: "category, country, and rate are required",
+      });
+    }
+
+    const validCategories = [
+      "marketing",
+      "utility",
+      "authentication",
+      "service",
+    ];
+    if (!validCategories.includes(category)) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid category. Must be one of: ${validCategories.join(", ")}`,
+      });
+    }
+
+    const parsedRate = parseFloat(rate);
+    if (isNaN(parsedRate) || parsedRate < 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Rate must be a non-negative number",
+      });
+    }
+
+    const parsedMarkup = parseFloat(markup_percent || 0);
+    if (isNaN(parsedMarkup) || parsedMarkup < 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Markup percentage must be a non-negative number",
+      });
+    }
+
+    if (!country.trim()) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Country code cannot be empty" });
+    }
+
+    await createPricingRuleService(
+      category,
+      country.trim(),
+      parsedRate,
+      parsedMarkup,
+    );
+    return res
+      .status(201)
+      .json({ success: true, message: "Pricing rule created" });
+  } catch (err) {
+    return res.status(400).json({ success: false, message: err.message });
+  }
+};
+
+export const updatePricingRuleController = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { rate, markup_percent } = req.body;
+
+    if (rate !== undefined && rate !== null) {
+      const parsedRate = parseFloat(rate);
+      if (isNaN(parsedRate) || parsedRate < 0) {
+        return res.status(400).json({
+          success: false,
+          message: "Rate must be a non-negative number",
+        });
+      }
+    }
+
+    if (markup_percent !== undefined && markup_percent !== null) {
+      const parsedMarkup = parseFloat(markup_percent);
+      if (isNaN(parsedMarkup) || parsedMarkup < 0) {
+        return res.status(400).json({
+          success: false,
+          message: "Markup percentage must be a non-negative number",
+        });
+      }
+    }
+
+    await updatePricingRuleService(id, rate, markup_percent);
+    return res
+      .status(200)
+      .json({ success: true, message: "Pricing rule updated" });
+  } catch (err) {
+    return res.status(400).json({ success: false, message: err.message });
+  }
+};
+
+export const deletePricingRuleController = async (req, res) => {
+  try {
+    const { id } = req.params;
+    await deletePricingRuleService(id);
+    return res
+      .status(200)
+      .json({ success: true, message: "Pricing rule deleted" });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// ─── AI Model Pricing Controllers ─────────────────────────────
+
+export const getAiPricingRulesController = async (req, res) => {
+  try {
+    const rules = await getAiPricingRulesService();
+    return res.status(200).json({ success: true, data: rules });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+export const createAiPricingRuleController = async (req, res) => {
+  try {
+    const {
+      model,
+      input_rate,
+      output_rate,
+      markup_percent,
+      usd_to_inr_rate,
+      description,
+      recommended_for,
+      category,
+    } = req.body;
+
+    if (!model || input_rate === undefined || output_rate === undefined) {
+      return res.status(400).json({
+        success: false,
+        message: "model, input_rate, and output_rate are required",
+      });
+    }
+
+    const trimmedModel = model.trim().toLowerCase();
+    if (!trimmedModel) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Model name cannot be empty" });
+    }
+
+    const parsedInputRate = parseFloat(input_rate);
+    const parsedOutputRate = parseFloat(output_rate);
+    if (isNaN(parsedInputRate) || parsedInputRate < 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Input rate must be a non-negative number",
+      });
+    }
+    if (isNaN(parsedOutputRate) || parsedOutputRate < 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Output rate must be a non-negative number",
+      });
+    }
+
+    const parsedMarkup = parseFloat(markup_percent || 0);
+    if (isNaN(parsedMarkup) || parsedMarkup < 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Markup must be a non-negative number",
+      });
+    }
+
+    const parsedExchangeRate = parseFloat(usd_to_inr_rate || 85);
+    if (isNaN(parsedExchangeRate) || parsedExchangeRate <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Exchange rate must be a positive number",
+      });
+    }
+
+    const VALID_RECOMMENDED = ["input", "output", "both"];
+    const VALID_CATEGORY = ["premium", "mid-tier", "budget", "reasoning"];
+    const finalRecommendedFor = VALID_RECOMMENDED.includes(recommended_for)
+      ? recommended_for
+      : "both";
+    const finalCategory = VALID_CATEGORY.includes(category)
+      ? category
+      : "mid-tier";
+
+    const rule = await createAiPricingRuleService(
+      trimmedModel,
+      parsedInputRate,
+      parsedOutputRate,
+      parsedMarkup,
+      parsedExchangeRate,
+      description || null,
+      finalRecommendedFor,
+      finalCategory,
+    );
+    return res
+      .status(201)
+      .json({ success: true, message: "AI pricing rule created", data: rule });
+  } catch (err) {
+    return res.status(400).json({ success: false, message: err.message });
+  }
+};
+
+export const updateAiPricingRuleController = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const {
+      input_rate,
+      output_rate,
+      markup_percent,
+      usd_to_inr_rate,
+      is_active,
+      description,
+      recommended_for,
+      category,
+    } = req.body;
+
+    if (input_rate !== undefined) {
+      const parsed = parseFloat(input_rate);
+      if (isNaN(parsed) || parsed < 0) {
+        return res.status(400).json({
+          success: false,
+          message: "Input rate must be a non-negative number",
+        });
+      }
+    }
+    if (output_rate !== undefined) {
+      const parsed = parseFloat(output_rate);
+      if (isNaN(parsed) || parsed < 0) {
+        return res.status(400).json({
+          success: false,
+          message: "Output rate must be a non-negative number",
+        });
+      }
+    }
+    if (markup_percent !== undefined) {
+      const parsed = parseFloat(markup_percent);
+      if (isNaN(parsed) || parsed < 0) {
+        return res.status(400).json({
+          success: false,
+          message: "Markup must be a non-negative number",
+        });
+      }
+    }
+    if (usd_to_inr_rate !== undefined) {
+      const parsed = parseFloat(usd_to_inr_rate);
+      if (isNaN(parsed) || parsed <= 0) {
+        return res.status(400).json({
+          success: false,
+          message: "Exchange rate must be a positive number",
+        });
+      }
+    }
+
+    const VALID_RECOMMENDED = ["input", "output", "both"];
+    const VALID_CATEGORY = ["premium", "mid-tier", "budget", "reasoning"];
+
+    const rule = await updateAiPricingRuleService(id, {
+      input_rate: input_rate !== undefined ? parseFloat(input_rate) : undefined,
+      output_rate:
+        output_rate !== undefined ? parseFloat(output_rate) : undefined,
+      markup_percent:
+        markup_percent !== undefined ? parseFloat(markup_percent) : undefined,
+      usd_to_inr_rate:
+        usd_to_inr_rate !== undefined ? parseFloat(usd_to_inr_rate) : undefined,
+      is_active,
+      description: description !== undefined ? description : undefined,
+      recommended_for:
+        recommended_for !== undefined &&
+        VALID_RECOMMENDED.includes(recommended_for)
+          ? recommended_for
+          : undefined,
+      category:
+        category !== undefined && VALID_CATEGORY.includes(category)
+          ? category
+          : undefined,
+    });
+    return res
+      .status(200)
+      .json({ success: true, message: "AI pricing rule updated", data: rule });
+  } catch (err) {
+    return res.status(400).json({ success: false, message: err.message });
+  }
+};
+
+export const deleteAiPricingRuleController = async (req, res) => {
+  try {
+    const { id } = req.params;
+    await deleteAiPricingRuleService(id);
+    return res
+      .status(200)
+      .json({ success: true, message: "AI pricing rule deleted" });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
   }
 };

@@ -1,4 +1,5 @@
-import { sendTypingIndicator } from "../../utils/chat/sendTypingIndicator.js";
+// Remove incorrect utility import to fix OAuth collision
+// import { sendTypingIndicator } from "../../utils/chat/sendTypingIndicator.js";
 import { createUserMessageService } from "../Messages/messages.service.js";
 import { formatPhoneNumber } from "../../utils/helpers/formatPhoneNumber.js";
 import fs from "fs";
@@ -9,8 +10,12 @@ import {
   lockChat,
   markMessageProcessed,
   sendWhatsAppMessage,
+  sendReadReceipt,
+  sendTypingIndicator,
   unlockChat,
 } from "./AuthWhatsapp.service.js";
+
+import { processBillingFromWebhook } from "../BillingModel/billing.service.js";
 
 import { getTenantByPhoneNumberIdService } from "../WhatsappAccountModel/whatsappAccount.service.js";
 import { getIO } from "../../middlewares/socket/socket.js";
@@ -22,20 +27,23 @@ import db from "../../database/index.js";
 import {
   createContactService,
   getContactByPhoneAndTenantIdService,
+  getOrCreateContactService,
+  updateContactService,
 } from "../ContactsModel/contacts.service.js";
 import {
   createLeadService,
-  getLeadByLeadIdService,
   getLeadByContactIdService,
+  getLeadSummaryService,
   updateLeadService,
   updateLeadStatusService,
 } from "../LeadsModel/leads.service.js";
 import {
   createLiveChatService,
   getLivechatByIdService,
-  updateLiveChatTimestampService
+  updateLiveChatTimestampService,
 } from "../LiveChatModel/livechat.service.js";
 
+import { getTenantSettingsService } from "../TenantModel/tenant.service.js";
 
 export const verifyWebhook = async (req, res) => {
   try {
@@ -65,51 +73,200 @@ export const verifyWebhook = async (req, res) => {
 };
 
 export const receiveMessage = async (req, res) => {
+  const io = getIO();
   try {
     const value = req.body?.entry?.[0]?.changes?.[0]?.value;
     const msg = value?.messages?.[0];
     const statusUpdate = value?.statuses?.[0];
 
+    // 1. Handle Status Updates (Sent/Delivered/Read)
     if (statusUpdate) {
       const messageId = statusUpdate.id;
       const status = statusUpdate.status;
+      let campaignUpdatePayload = null;
+
+      // Normally Meta webhook statuses don't always give tenantId directly, we find it from wamid
+      let webhook_tenant_id = null;
+      try {
+        const [msgSearch] = await db.sequelize.query(
+          `SELECT tenant_id FROM messages WHERE wamid = ? LIMIT 1`,
+          { replacements: [messageId] },
+        );
+        if (msgSearch.length > 0) {
+          webhook_tenant_id = msgSearch[0].tenant_id;
+        } else {
+          // Fallback 1: Check if this was a Campaign Message broadcast
+          const [campaignSearch] = await db.sequelize.query(
+            `SELECT c.tenant_id FROM whatsapp_campaign_recipients r 
+             JOIN whatsapp_campaigns c ON r.campaign_id = c.campaign_id 
+             WHERE r.meta_message_id = ? LIMIT 1`,
+            { replacements: [messageId] },
+          );
+          if (campaignSearch.length > 0) {
+            webhook_tenant_id = campaignSearch[0].tenant_id;
+          } else {
+            // Fallback 2: Direct lookup from phone_number_id (covers Postman/Direct API calls)
+            const phoneId = value?.metadata?.phone_number_id;
+            if (phoneId) {
+              const [accountSearch] = await db.sequelize.query(
+                `SELECT tenant_id FROM whatsapp_accounts WHERE phone_number_id = ? LIMIT 1`,
+                { replacements: [phoneId] },
+              );
+              if (accountSearch.length > 0) {
+                webhook_tenant_id = accountSearch[0].tenant_id;
+              }
+            }
+          }
+        }
+
+        // Fallback 3: Direct lookup from WABA ID (Very reliable for Meta UI messages)
+        if (!webhook_tenant_id) {
+          const wabaId = req.body?.entry?.[0]?.id;
+          if (wabaId) {
+            const [wabaSearch] = await db.sequelize.query(
+              `SELECT tenant_id FROM whatsapp_accounts WHERE waba_id = ? LIMIT 1`,
+              { replacements: [wabaId] },
+            );
+            if (wabaSearch.length > 0) {
+              webhook_tenant_id = wabaSearch[0].tenant_id;
+            }
+          }
+        }
+      } catch (e) {
+        console.error("Error finding tenant_id for webhook:", e);
+      }
+
+      if (webhook_tenant_id) {
+        console.log(
+          `[WEBHOOK] Identified tenant ${webhook_tenant_id} for status update: ${messageId}`,
+        );
+        // Fire and forget billing cost calculation
+        setImmediate(() => {
+          processBillingFromWebhook(webhook_tenant_id, statusUpdate);
+        });
+      } else {
+        console.warn(
+          `[WEBHOOK] Could not identify tenant for status update: ${messageId}. Payload:`,
+          JSON.stringify(value?.metadata),
+        );
+      }
 
       await db.sequelize.transaction(async (t) => {
         const recipient = await db.WhatsappCampaignRecipients.findOne({
           where: { meta_message_id: messageId },
           include: [{ model: db.WhatsappCampaigns, as: "campaign" }],
           lock: t.LOCK.UPDATE,
-          transaction: t
+          transaction: t,
         });
 
         if (recipient) {
           const oldStatus = recipient.status;
-          const statusPriority = { sent: 1, delivered: 2, read: 3, replied: 4, failed: 5 };
+          const statusPriority = {
+            sent: 1,
+            delivered: 2,
+            read: 3,
+            replied: 4,
+            failed: 5,
+          };
 
           if (statusPriority[status] > (statusPriority[oldStatus] || 0)) {
-            await recipient.update({
-              status: status,
-              error_message: status === "failed" ? statusUpdate.errors?.[0]?.title : null
-            }, { transaction: t });
+            await recipient.update(
+              {
+                status: status,
+                error_message:
+                  status === "failed" ? statusUpdate.errors?.[0]?.title : null,
+              },
+              { transaction: t },
+            );
 
             if (recipient.campaign) {
               if (status === "delivered" && oldStatus === "sent") {
-                await recipient.campaign.increment("delivered_count", { transaction: t });
+                await recipient.campaign.increment("delivered_count", {
+                  transaction: t,
+                });
               } else if (status === "read") {
                 if (oldStatus === "sent") {
-                  await recipient.campaign.increment(["delivered_count", "read_count"], { transaction: t });
+                  await recipient.campaign.increment(
+                    ["delivered_count", "read_count"],
+                    { transaction: t },
+                  );
                 } else if (oldStatus === "delivered") {
-                  await recipient.campaign.increment("read_count", { transaction: t });
+                  await recipient.campaign.increment("read_count", {
+                    transaction: t,
+                  });
                 }
               }
+              campaignUpdatePayload = {
+                campaign_id: recipient.campaign_id,
+                tenant_id: recipient.campaign.tenant_id,
+                status,
+              };
             }
           }
         }
       });
+      if (campaignUpdatePayload) {
+        try {
+          const io = getIO();
+          io.to(`tenant-${campaignUpdatePayload.tenant_id}`).emit(
+            "campaign-status-update",
+            campaignUpdatePayload,
+          );
+        } catch (socketErr) {
+          console.error(
+            "[SOCKET] Campaign status emit failed:",
+            socketErr.message,
+          );
+        }
+      }
+
+      // Also update the regular messages table status using wamid
+      try {
+        const allowedMsgStatuses = ["sent", "delivered", "read"];
+        if (allowedMsgStatuses.includes(status)) {
+          const [msgRows] = await db.sequelize.query(
+            `SELECT id, tenant_id, contact_id, phone, status FROM messages WHERE wamid = ? LIMIT 1`,
+            { replacements: [messageId] },
+          );
+          if (msgRows.length > 0) {
+            const msgRow = msgRows[0];
+            const statusPriority = { sent: 1, delivered: 2, read: 3 };
+            const currentPriority = statusPriority[msgRow.status] || 0;
+            if (statusPriority[status] > currentPriority) {
+              await db.sequelize.query(
+                `UPDATE messages SET status = ? WHERE id = ?`,
+                { replacements: [status, msgRow.id] },
+              );
+              try {
+                io.to(`tenant-${msgRow.tenant_id}`).emit(
+                  "message-status-update",
+                  {
+                    message_id: msgRow.id,
+                    phone: msgRow.phone,
+                    contact_id: msgRow.contact_id,
+                    status,
+                  },
+                );
+              } catch (socketErr) {
+                console.error(
+                  "[SOCKET] Message status emit failed:",
+                  socketErr.message,
+                );
+              }
+            }
+          }
+        }
+      } catch (statusErr) {
+        console.error(
+          "[WEBHOOK] Error updating message status:",
+          statusErr.message,
+        );
+      }
 
       return res.sendStatus(200);
     }
 
+    // 2. Validate Incoming Message
     if (!msg) return res.sendStatus(200);
 
     const phone_number_id = value?.metadata?.phone_number_id;
@@ -119,67 +276,117 @@ export const receiveMessage = async (req, res) => {
     if (!account) return res.sendStatus(200);
 
     const tenant_id = account.tenant_id;
-
-    // Optional: Validate that the incoming message's tenant matches the URL tenant
     const { tenantId: urlTenantId } = req.params;
+
     if (urlTenantId && urlTenantId !== tenant_id) {
-      console.warn(`[WEBHOOK] Tenant mismatch: URL has ${urlTenantId} but message is for ${tenant_id}`);
-      return res.sendStatus(200); // Send 200 to acknowledge Meta but don't process
+      return res.sendStatus(200);
     }
 
-    let phone = msg.from;
-    phone = formatPhoneNumber(phone);
-
-    const text = msg.text?.body || "";
+    // 3. Format Phone and Text
+    let phone = formatPhoneNumber(msg.from);
     const messageId = msg.id;
-
     const name = value?.contacts?.[0]?.profile?.name || null;
+    let text = "";
+    const type = msg.type;
 
+    let media_url = null;
+    let media_mime_type = null;
+    let media_filename = null;
+
+    if (type === "text") text = msg.text?.body || "";
+    else if (type === "interactive") {
+      const interactive = msg.interactive;
+      if (interactive.type === "button_reply")
+        text = interactive.button_reply.title;
+      else if (interactive.type === "list_reply")
+        text = interactive.list_reply.title;
+      else text = "[Interactive Message]";
+    } else if (type === "button") text = msg.button?.text || "[Button Click]";
+    else if (type === "image") {
+      text = msg.image?.caption || "";
+      media_url = msg.image?.id ? `meta_media_id:${msg.image.id}` : null;
+      media_mime_type = msg.image?.mime_type || "image/jpeg";
+    } else if (type === "video") {
+      text = msg.video?.caption || "";
+      media_url = msg.video?.id ? `meta_media_id:${msg.video.id}` : null;
+      media_mime_type = msg.video?.mime_type || "video/mp4";
+    } else if (type === "document") {
+      text = msg.document?.caption || msg.document?.filename || "";
+      media_url = msg.document?.id ? `meta_media_id:${msg.document.id}` : null;
+      media_mime_type = msg.document?.mime_type || "application/octet-stream";
+      media_filename = msg.document?.filename || null;
+    } else if (type === "audio") {
+      text = "";
+      media_url = msg.audio?.id ? `meta_media_id:${msg.audio.id}` : null;
+      media_mime_type = msg.audio?.mime_type || "audio/ogg";
+    } else if (type === "location")
+      text = `[Location: ${msg.location?.name || "Shared Location"}]`;
+    else if (type === "contacts") text = "[Contact Card]";
+    else text = "[Unknown Message Type]";
+
+    // 4. Deduplication Check
     const ismessage = await isMessageProcessed(
       tenant_id,
       phone_number_id,
       messageId,
     );
-
-    if (ismessage?.length > 0) {
-      return res.sendStatus(200);
-    }
-
+    if (ismessage?.length > 0) return res.sendStatus(200);
     await markMessageProcessed(tenant_id, phone_number_id, messageId, phone);
 
-    const io = getIO();
-
-    io.to(`tenant-${tenant_id}`).emit("new-message", {
-      tenant_id,
-      phone,
-      phone_number_id,
-      name,
-      message: text,
-      sender: "user",
-      created_at: new Date(),
+    // 4.5 Send Read Receipt to Meta (Blue Tick)
+    setImmediate(() => {
+      sendReadReceipt(tenant_id, phone_number_id, messageId);
     });
 
-    let contactsaved = await getContactByPhoneAndTenantIdService(
-      tenant_id,
-      phone,
-    );
-    if (!contactsaved) {
-      await createContactService(tenant_id, phone, name ? name : null, null);
-      contactsaved = await getContactByPhoneAndTenantIdService(
+    // 5. Manage Contact and LiveChat
+    // Use WhatsApp profile name directly
+    const finalName = name || null;
+
+    // Use atomic getOrCreate to prevent duplicate contacts from race conditions
+    const {
+      contact: contactsaved,
+      created: isNewContact,
+      restored,
+    } = await getOrCreateContactService(tenant_id, phone, finalName, null);
+
+    if (isNewContact) {
+      io.to(`tenant-${tenant_id}`).emit("contact-created", {
         tenant_id,
         phone,
+        name: finalName,
+        contact_id: contactsaved?.contact_id,
+      });
+    } else if (restored) {
+      console.log(
+        `[WEBHOOK] Contact ${contactsaved?.contact_id} auto-restored`,
       );
+    } else {
+      // Update name if needed for existing contact
+      if (finalName && (!contactsaved.name || contactsaved.name === phone)) {
+        await updateContactService(
+          contactsaved.contact_id,
+          tenant_id,
+          finalName,
+          contactsaved.email,
+          contactsaved.profile_pic,
+          contactsaved.is_blocked,
+        );
+        contactsaved.name = finalName;
+      }
     }
 
-    const livelist = await getLivechatByIdService(tenant_id, contactsaved?.contact_id);
-
+    const livelist = await getLivechatByIdService(
+      tenant_id,
+      contactsaved?.contact_id,
+    );
     if (!livelist) {
       await createLiveChatService(tenant_id, contactsaved?.contact_id);
     } else {
       await updateLiveChatTimestampService(tenant_id, contactsaved?.contact_id);
     }
 
-    await createUserMessageService(
+    // 6. Store User Message
+    const savedMsg = await createUserMessageService(
       tenant_id,
       contactsaved?.contact_id,
       phone_number_id,
@@ -189,149 +396,319 @@ export const receiveMessage = async (req, res) => {
       "user",
       null,
       text,
+      type,
+      media_url,
+      media_mime_type,
+      "received",
+      null,
+      media_filename,
     );
 
+    // 7. Emit Real-time Event to Frontend
+    const ioInstance = getIO();
+    // Start typing indicator immediately for better perceived performance
+    ioInstance.to(`tenant-${tenant_id}`).emit("ai-typing", {
+      tenant_id,
+      phone,
+      status: true,
+    });
 
+    ioInstance.to(`tenant-${tenant_id}`).emit("new-message", {
+      tenant_id,
+      phone,
+      id: savedMsg?.id,
+      contact_id: contactsaved?.contact_id,
+      phone_number_id,
+      name: contactsaved?.name || name,
+      message: text,
+      sender: "user",
+      message_type: type,
+      media_url,
+      media_mime_type,
+      media_filename,
+      status: "received",
+      created_at: new Date(),
+    });
+
+    // 8. Campaign Reply Tracking
     const cleanPhone = phone.replace(/\D/g, "");
     const phoneSuffix = cleanPhone.slice(-10);
 
+    // Find the latest campaign message sent to this user
     const lastCampaignRecipient = await db.WhatsappCampaignRecipients.findOne({
       where: {
-        mobile_number: { [db.Sequelize.Op.like]: `%${phoneSuffix}` }
+        mobile_number: { [db.Sequelize.Op.like]: `%${phoneSuffix}` },
+        // Optimization: We only care about campaigns that aren't already marked as replied
+        status: { [db.Sequelize.Op.ne]: "replied" },
       },
       order: [["created_at", "DESC"]],
-      include: [{
-        model: db.WhatsappCampaigns,
-        as: "campaign",
-        where: { tenant_id, is_deleted: false }, // Critical: Filter by current tenant
-        required: true
-      }]
+      include: [
+        {
+          model: db.WhatsappCampaigns,
+          as: "campaign",
+          where: { tenant_id, is_deleted: false },
+          required: true,
+        },
+      ],
     });
 
     if (lastCampaignRecipient) {
       const allowedStatuses = ["sent", "delivered", "read"];
-      if (allowedStatuses.includes(lastCampaignRecipient.status) && lastCampaignRecipient.campaign) {
-        const campaignSentAt = new Date(lastCampaignRecipient.updated_at).getTime();
+
+      // Check if the message is in a valid state to receive a reply
+      if (allowedStatuses.includes(lastCampaignRecipient.status)) {
+        const campaignSentAt = new Date(
+          lastCampaignRecipient.updated_at,
+        ).getTime();
         const nowTime = new Date().getTime();
         const hoursDiff = (nowTime - campaignSentAt) / (1000 * 60 * 60);
 
+        // Logic: If user messages within 24 hours of a campaign, count it as a reply
         if (hoursDiff <= 24) {
-          await lastCampaignRecipient.update({ status: "replied" });
-          await lastCampaignRecipient.campaign.increment("replied_count");
+          // Use a transaction to prevent race conditions (double counting)
+          await db.sequelize.transaction(async (t) => {
+            const recipientToUpdate =
+              await db.WhatsappCampaignRecipients.findByPk(
+                lastCampaignRecipient.id,
+                {
+                  include: [{ model: db.WhatsappCampaigns, as: "campaign" }],
+                  lock: t.LOCK.UPDATE,
+                  transaction: t,
+                },
+              );
+
+            // Double-check status inside the lock
+            if (recipientToUpdate && recipientToUpdate.status !== "replied") {
+              await recipientToUpdate.update(
+                { status: "replied" },
+                { transaction: t },
+              );
+
+              if (recipientToUpdate.campaign) {
+                await recipientToUpdate.campaign.increment("replied_count", {
+                  transaction: t,
+                });
+              }
+            }
+          });
         }
       }
     }
 
-    let lead_source = "whatsapp";
+    // 9. Lead Source Attribution
+    let lead_source = "none";
     if (msg.referral) {
       const referral = msg.referral;
       if (referral.source_type === "ad") {
-        lead_source = referral.source_url?.includes("facebook.com") ? "facebook" :
-          referral.source_url?.includes("instagram.com") ? "instagram" : "meta";
+        lead_source = referral.source_url?.includes("facebook.com")
+          ? "facebook"
+          : referral.source_url?.includes("instagram.com")
+            ? "instagram"
+            : "meta";
       } else if (referral.source_type === "post") {
         lead_source = "post";
       }
     }
 
-    fs.appendFileSync("webhook_debug.log", `Contact found/created: ${JSON.stringify(contactsaved)}\n`);
-    let leadSaved = await getLeadByContactIdService(tenant_id, contactsaved?.contact_id);
-    fs.appendFileSync("webhook_debug.log", `Existing Lead: ${JSON.stringify(leadSaved)}\n`);
-
+    let leadSaved = await getLeadByContactIdService(
+      tenant_id,
+      contactsaved?.contact_id,
+    );
     if (!leadSaved) {
-      fs.appendFileSync("webhook_debug.log", `Creating lead for contact: ${contactsaved?.contact_id} with source: ${lead_source}\n`);
       await createLeadService(tenant_id, contactsaved?.contact_id, lead_source);
-      leadSaved = await getLeadByContactIdService(tenant_id, contactsaved?.contact_id);
-      fs.appendFileSync("webhook_debug.log", `New Lead: ${JSON.stringify(leadSaved)}\n`);
-    } else if (msg.referral && leadSaved.source === "whatsapp") {
-      // Update source if it was previously just generic 'whatsapp' and we now have better info
-      await updateLeadStatusService(tenant_id, leadSaved.lead_id, null, null, null, null, null, lead_source);
+      leadSaved = await getLeadByContactIdService(
+        tenant_id,
+        contactsaved?.contact_id,
+      );
+    } else if (
+      msg.referral &&
+      ["whatsapp", "none"].includes(leadSaved.source)
+    ) {
+      await updateLeadStatusService(
+        tenant_id,
+        leadSaved.lead_id,
+        null,
+        null,
+        null,
+        null,
+        null,
+        lead_source,
+      );
     }
-
     await updateLeadService(tenant_id, leadSaved?.contact_id);
+    io.to(`tenant-${tenant_id}`).emit("lead-updated", {
+      tenant_id,
+      contact_id: contactsaved?.contact_id,
+    });
 
+    // 10. AI Processing (Background)
     if (await isChatLocked(tenant_id, phone_number_id, phone)) {
       return res.sendStatus(200);
     }
-
     await lockChat(tenant_id, phone_number_id, phone);
-
-    res.sendStatus(200);
+    res.sendStatus(200); // Acknowledge Webhook
 
     setImmediate(async () => {
       try {
-        await sendTypingIndicator(
-          phone_number_id,
-          account?.access_token,
-          messageId,
-        );
+        const { getTenantSettingsService } =
+          await import("../TenantModel/tenant.service.js");
+        const tenantSettings = await getTenantSettingsService(tenant_id);
+        const autoResponderEnabled =
+          tenantSettings?.ai_settings?.auto_responder !== false;
 
-        let reply = await getOpenAIReply(tenant_id, phone, text);
-
-        if (!reply || !reply.trim()) {
-          const fallback =
-            "Our team will review your message and contact you shortly.";
-
-          io.to(`tenant-${tenant_id}`).emit("new-message", {
-            tenant_id,
-            phone,
-            phone_number_id,
-            name,
-            message: fallback,
-            sender: "bot",
-            created_at: new Date(),
-          });
-
-          await createUserMessageService(
-            tenant_id,
-            contactsaved?.contact_id,
-            phone_number_id,
-            phone,
-            null, // Bot messages should not use user messageId as wamid
-            name,
-            "bot",
-            null,
-            fallback,
+        if (!autoResponderEnabled) {
+          console.log(
+            `[WEBHOOK] AI Auto-Responder is globally disabled for tenant: ${tenant_id}`,
           );
-
-          await sendWhatsAppMessage(tenant_id, phone, fallback);
           return;
         }
 
-        const safeReply = reply.trim();
+        if (contactsaved?.is_ai_silenced) {
+          console.log(
+            `[WEBHOOK] AI is silenced for specific contact: ${phone}`,
+          );
+          // Clear the indicator we started earlier since we won't be replying
+          const ioInst = getIO();
+          ioInst.to(`tenant-${tenant_id}`).emit("ai-typing", {
+            tenant_id,
+            phone,
+            status: false,
+          });
+          return;
+        }
 
-        io.to(`tenant-${tenant_id}`).emit("new-message", {
+        const aiResult = await getOpenAIReply(
           tenant_id,
           phone,
+          text,
+          contactsaved?.contact_id,
           phone_number_id,
-          name,
-          message: safeReply,
-          sender: "bot",
-          created_at: new Date(),
+        );
+
+        // Log AI result for debugging UPDATE/CANCEL issues
+        console.log(`[WEBHOOK] AI Result:`, {
+          tagDetected: aiResult?.tagDetected || "NONE",
+          tagPayloadPreview: aiResult?.tagPayload?.substring(0, 150) || "N/A",
+          messagePreview: aiResult?.message?.substring(0, 200) || "N/A",
         });
 
-        await createUserMessageService(
+        const finalReply = aiResult?.message;
+        const fallback = aiResult?.tagDetected
+          ? ""
+          : "Our team will review your message and contact you shortly.";
+        const messageToSend =
+          finalReply && finalReply.trim() ? finalReply.trim() : fallback;
+
+        const savedBotMsg = await createUserMessageService(
           tenant_id,
           contactsaved?.contact_id,
           phone_number_id,
           phone,
-          null, // Bot messages should not use user messageId as wamid
+          null,
           name,
           "bot",
           null,
-          safeReply,
+          messageToSend,
         );
 
-        await sendWhatsAppMessage(tenant_id, phone, safeReply);
+        const ioInstance = getIO();
+        // Clear typing indicator before sending message to avoid overlap
+        ioInstance.to(`tenant-${tenant_id}`).emit("ai-typing", {
+          tenant_id,
+          phone,
+          status: false,
+        });
+
+        ioInstance.to(`tenant-${tenant_id}`).emit("new-message", {
+          tenant_id,
+          phone,
+          id: savedBotMsg?.id,
+          contact_id: contactsaved?.contact_id,
+          phone_number_id,
+          name: contactsaved?.name || name,
+          message: messageToSend,
+          message_type: "text",
+          media_url: null,
+          status: "sent",
+          sender: "bot",
+          created_at: new Date(),
+        });
+
+        // Send to WhatsApp and capture WAMID
+        const botMsgResponse = await sendWhatsAppMessage(
+          tenant_id,
+          phone,
+          messageToSend,
+        ).catch((err) => {
+          console.error("[WHATSAPP-SEND] Failed to send reply:", err.message);
+          import("fs").then((fs) => {
+            fs.appendFileSync(
+              "whatsapp_send_error.log",
+              `[${new Date().toISOString()}] To: ${phone} | Msg: ${messageToSend} | Error: ${err.message}\n`,
+            );
+          });
+          return null;
+        });
+
+        // Update bot message with WAMID for status tracking
+        if (botMsgResponse?.wamid && savedBotMsg?.id) {
+          try {
+            await db.sequelize.query(
+              `UPDATE messages SET wamid = ?, status = 'sent' WHERE id = ?`,
+              { replacements: [botMsgResponse.wamid, savedBotMsg.id] },
+            );
+            console.log(
+              `[WEBHOOK] Bot message ${savedBotMsg.id} updated with wamid: ${botMsgResponse.wamid}`,
+            );
+          } catch (updateErr) {
+            console.error(
+              "[WEBHOOK] Failed to update bot message wamid:",
+              updateErr.message,
+            );
+          }
+        }
+
+        // Execute tag handler AFTER sending the AI reply
+        // This ensures correct message ordering (e.g., "Let me check..." before slots list)
+        if (aiResult?.tagDetected) {
+          console.log(
+            `[WEBHOOK] Executing tag handler: ${aiResult.tagDetected}, payload: ${aiResult.tagPayload?.substring(0, 100)}`,
+          );
+          const { executeTagHandler } =
+            await import("../../utils/ai/aiTagHandlers/index.js");
+          await executeTagHandler(
+            aiResult.tagDetected,
+            aiResult.tagPayload,
+            {
+              tenant_id,
+              contact_id: contactsaved?.contact_id,
+              phone,
+              phone_number_id,
+            },
+            messageToSend,
+          );
+        }
       } catch (err) {
-        console.error("Background error:", err);
+        console.error("Background AI error:", err);
       } finally {
         await unlockChat(tenant_id, phone_number_id, phone);
+        // Deactivate Typying Animation on Dashboard
+        try {
+          const io = getIO();
+          if (io) {
+            io.to(`tenant-${tenant_id}`).emit("ai-typing", {
+              tenant_id,
+              phone,
+              status: false,
+            });
+          }
+        } catch (socketErr) {
+          console.error("[SOCKET] AI typing emit failed:", socketErr.message);
+        }
       }
     });
   } catch (err) {
     console.error("Webhook error:", err);
-    fs.appendFileSync("webhook_debug.log", `CRITICAL ERROR: ${err.message}\n${err.stack}\n`);
     return res.sendStatus(200);
   }
 };
-

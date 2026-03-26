@@ -65,6 +65,30 @@ export const WhatsappAccountTable = (sequelize, Sequelize) => {
         allowNull: true,
       },
 
+      // WhatsApp Business quality rating from Meta
+      quality: {
+        type: Sequelize.ENUM("GREEN", "YELLOW", "RED"),
+        allowNull: true,
+        defaultValue: "GREEN",
+        comment: "Meta WABA quality rating",
+      },
+
+      // Deployment region (e.g. Global, India, US)
+      region: {
+        type: Sequelize.STRING(50),
+        allowNull: true,
+        defaultValue: "Global",
+        comment: "Deployment region label",
+      },
+
+      // Messaging tier limit label (e.g. 1K MSG LIMIT, 10K MSG LIMIT)
+      tier: {
+        type: Sequelize.STRING(50),
+        allowNull: true,
+        defaultValue: "1K MSG LIMIT",
+        comment: "Meta WABA messaging tier",
+      },
+
       last_error: {
         type: Sequelize.TEXT,
         allowNull: true,
@@ -80,21 +104,17 @@ export const WhatsappAccountTable = (sequelize, Sequelize) => {
       updatedAt: {
         type: Sequelize.DATE,
         allowNull: false,
-        defaultValue: Sequelize.literal(
-          "CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP",
-        ),
+        defaultValue: sequelize.literal("CURRENT_TIMESTAMP"),
         field: "updated_at",
       },
       is_deleted: {
         type: Sequelize.BOOLEAN,
         allowNull: false,
         defaultValue: false,
-        field: "is_deleted",
       },
-      deletedAt: {
+      deleted_at: {
         type: Sequelize.DATE,
         allowNull: true,
-        field: "deleted_at",
       },
     },
     {

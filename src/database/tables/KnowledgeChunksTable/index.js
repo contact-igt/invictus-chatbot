@@ -28,6 +28,17 @@ export const KnowledgeChunksTable = (sequelize, Sequelize) => {
         allowNull: false,
       },
 
+      is_deleted: {
+        type: Sequelize.BOOLEAN,
+        allowNull: false,
+        defaultValue: false,
+      },
+
+      deleted_at: {
+        type: Sequelize.DATE,
+        allowNull: true,
+      },
+
       createdAt: {
         type: Sequelize.DATE,
         allowNull: false,
@@ -38,7 +49,7 @@ export const KnowledgeChunksTable = (sequelize, Sequelize) => {
       updatedAt: {
         type: Sequelize.DATE,
         allowNull: false,
-        defaultValue: sequelize.literal("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"),
+        defaultValue: sequelize.literal("CURRENT_TIMESTAMP"),
         field: "updated_at",
       },
     },
@@ -53,7 +64,11 @@ export const KnowledgeChunksTable = (sequelize, Sequelize) => {
         {
           fields: ["source_id"],
         },
+        {
+          name: "idx_chunk_deleted",
+          fields: ["is_deleted"],
+        },
       ],
-    }
+    },
   );
 };

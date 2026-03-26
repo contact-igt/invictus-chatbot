@@ -1,9 +1,10 @@
 import db from "../../database/index.js";
 import { tableNames } from "../../database/tableName.js";
 import axios from "axios";
-import { AiService } from "../../utils/ai/coreAi.js";
 import { getWhatsappAccountByTenantService } from "../WhatsappAccountModel/whatsappAccount.service.js";
 import { generateReadableIdFromLast } from "../../utils/helpers/generateReadableIdFromLast.js";
+import { getTemplateCopywriterPrompt } from "../../utils/ai/prompts/template.js";
+import { AiService } from "../../utils/ai/coreAi.js";
 
 const STATUS_MAP = {
   IN_REVIEW: "pending",
@@ -55,6 +56,7 @@ export const createWhatsappTemplateService = async (
   tenant_id,
   template_name,
   category,
+  template_type,
   language,
   components,
   variables,
@@ -76,8 +78,8 @@ export const createWhatsappTemplateService = async (
     await db.sequelize.query(
       `
       INSERT INTO ${tableNames.WHATSAPP_TEMPLATE}
-      (template_id, tenant_id, template_name, category, language, created_by)
-      VALUES (?, ?, ?, ?, ?, ?)
+      (template_id, tenant_id, template_name, category, template_type, language, created_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
       `,
       {
         replacements: [
@@ -85,6 +87,7 @@ export const createWhatsappTemplateService = async (
           tenant_id,
           template_name,
           category,
+          template_type,
           language,
           created_by,
         ],
@@ -105,7 +108,8 @@ export const createWhatsappTemplateService = async (
     );
 
     if (components.header) {
-      const { type, text, media_url } = components.header;
+      const { type, format, text, media_url } = components.header;
+      const headerFormat = (format || type || "text").toLowerCase();
 
       if (!type) {
         throw new Error("Header type is required");
@@ -120,7 +124,7 @@ export const createWhatsappTemplateService = async (
         {
           replacements: [
             template_id,
-            type, // header_format
+            headerFormat, // header_format
             text ? text : null, // header text (only if type=text)
             media_url ? media_url : null, // media only for image/video/doc
           ],
@@ -143,6 +147,50 @@ export const createWhatsappTemplateService = async (
       );
     }
 
+    if (
+      components.buttons &&
+      Array.isArray(components.buttons) &&
+      components.buttons.length > 0
+    ) {
+      // Validate phone numbers before saving
+      for (const btn of components.buttons) {
+        if (btn.type === "PHONE_NUMBER") {
+          const phone = (btn.value || "").replace(/\s+/g, "");
+          if (!/^\+[1-9]\d{10,14}$/.test(phone)) {
+            throw new Error(
+              `Invalid phone number for button "${btn.text}": Include + country code and 10 to 14 digits`,
+            );
+          }
+        }
+      }
+
+      await db.sequelize.query(
+        `
+        INSERT INTO ${tableNames.WHATSAPP_TEMPLATE_COMPONENTS}
+        (template_id, component_type, text_content)
+        VALUES (?, 'buttons', ?)
+        `,
+        {
+          replacements: [template_id, JSON.stringify(components.buttons)],
+          transaction,
+        },
+      );
+    }
+
+    if (components.carousel) {
+      await db.sequelize.query(
+        `
+        INSERT INTO ${tableNames.WHATSAPP_TEMPLATE_COMPONENTS}
+        (template_id, component_type, text_content)
+        VALUES (?, 'carousel', ?)
+        `,
+        {
+          replacements: [template_id, JSON.stringify(components.carousel)],
+          transaction,
+        },
+      );
+    }
+
     for (const variable of variables) {
       const varKey = variable.key.replace(/[{}]/g, ""); // Strip braces for consistency
       await db.sequelize.query(
@@ -152,7 +200,11 @@ export const createWhatsappTemplateService = async (
         VALUES (?, ?, ?)
         `,
         {
-          replacements: [template_id, varKey, variable.sample],
+          replacements: [
+            template_id,
+            varKey,
+            variable.sample || variable.value,
+          ],
           transaction,
         },
       );
@@ -185,7 +237,98 @@ export const submitWhatsappTemplateService = async ({
 
     let bodyText = body.text_content.trim();
 
-    // Meta rule: no leading/trailing variable
+    // ─────────────────────────────────────────
+    // AUTHENTICATION TEMPLATE — special Meta payload
+    // ─────────────────────────────────────────
+    if (template.category === "authentication") {
+      // Authentication templates use exactly {{1}} for the OTP.
+      // Meta does NOT apply the normal word-density rules here.
+      // We build the payload directly and bypass the normal component builder.
+
+      const otpSampleValue =
+        (variables && variables[0]?.sample_value) || "123456";
+
+      const authMetaComponents = [
+        {
+          type: "BODY",
+          text: bodyText,
+          add_security_recommendation: true,
+          example: { body_text: [[otpSampleValue]] },
+        },
+        {
+          type: "FOOTER",
+          text: "This code expires in 10 minutes.",
+        },
+        {
+          type: "BUTTONS",
+          buttons: [
+            {
+              type: "OTP",
+              otp_type: "COPY_CODE",
+              text: "Copy Code",
+            },
+          ],
+        },
+      ];
+
+      const authPayload = {
+        name: template.template_name,
+        language: template.language,
+        category: "AUTHENTICATION",
+        parameter_format: "positional",
+        components: authMetaComponents,
+      };
+
+      console.log(
+        "🔐 Auth Template Meta Payload:",
+        JSON.stringify(authPayload, null, 2),
+      );
+
+      let authResponse;
+      try {
+        authResponse = await axios.post(
+          `https://graph.facebook.com/v24.0/${whatsappAccount.waba_id}/message_templates`,
+          authPayload,
+          {
+            headers: {
+              Authorization: `Bearer ${whatsappAccount.access_token}`,
+              "Content-Type": "application/json",
+            },
+          },
+        );
+      } catch (metaErr) {
+        console.error("❌ Meta Auth Template Error:", metaErr.response?.data);
+        throw metaErr;
+      }
+
+      const metaTemplateId = authResponse.data.id;
+      const metaStatus = authResponse.data.status || "IN_REVIEW";
+
+      await db.sequelize.query(
+        `UPDATE ${tableNames.WHATSAPP_TEMPLATE} SET meta_template_id = ?, status = 'pending' WHERE template_id = ? AND is_deleted = false`,
+        { replacements: [metaTemplateId, template.template_id], transaction },
+      );
+
+      await db.sequelize.query(
+        `INSERT INTO ${tableNames.WHATSAPP_TEMPLATE_SYNC_LOGS} (template_id, action, request_payload, response_payload, meta_status) VALUES (?, 'submit', ?, ?, ?)`,
+        {
+          replacements: [
+            template.template_id,
+            JSON.stringify(authPayload),
+            JSON.stringify(authResponse.data),
+            "pending",
+          ],
+          transaction,
+        },
+      );
+
+      await transaction.commit();
+      return { meta_template_id: metaTemplateId, meta_status: metaStatus };
+    }
+
+    // ─────────────────────────────────────────
+    // Meta rule: no leading/trailing variable (non-auth templates only)
+    // ─────────────────────────────────────────
     if (/^{{\d+}}/.test(bodyText)) {
       throw new Error("Template body cannot start with a variable");
     }
@@ -220,9 +363,9 @@ export const submitWhatsappTemplateService = async ({
     ) {
       throw new Error(
         `Template text is too short. You have ${variableCount} variable(s) with only ${bodyWordCount} word(s). ` +
-        `Meta requires either: (a) at least ${minWordsPerVariable} words per variable (${minRequiredWords} total for your template), OR ` +
-        `(b) a minimum of ${minTotalWords} words total. ` +
-        `Please add more descriptive text to your template.`,
+          `Meta requires either: (a) at least ${minWordsPerVariable} words per variable (${minRequiredWords} total for your template), OR ` +
+          `(b) a minimum of ${minTotalWords} words total. ` +
+          `Please add more descriptive text to your template.`,
       );
     }
 
@@ -234,24 +377,50 @@ export const submitWhatsappTemplateService = async ({
     // HEADER (optional)
     const header = components.find((c) => c.component_type === "header");
     if (header) {
+      const format = (header.header_format || "text").toUpperCase();
       const headerObj = {
         type: "HEADER",
-        format: (header.header_format || "text").toUpperCase(),
-        text: header.text_content,
+        format: format,
       };
 
-      // If text header has variables, we need examples
-      if (
-        headerObj.format === "TEXT" &&
-        header.text_content?.includes("{{1}}")
-      ) {
-        const headerVar = variables.find(
-          (v) => v.variable_key === "1" || v.variable_key === "header_1",
-        );
-        if (headerVar) {
-          headerObj.example = { header_text: [headerVar.sample_value] };
+      if (format === "TEXT") {
+        headerObj.text = header.text_content;
+        if (header.text_content?.includes("{{1}}")) {
+          const headerVar = variables.find(
+            (v) => v.variable_key === "1" || v.variable_key === "header_1",
+          );
+          if (headerVar) {
+            headerObj.example = { header_text: [headerVar.sample_value] };
+          }
+        }
+      } else if (["IMAGE", "VIDEO", "DOCUMENT"].includes(format)) {
+        // Media header - requires example (header_handle)
+        // Use a generic sample URL as fallback if media_url is missing
+        const defaultSamples = {
+          IMAGE: "https://www.facebook.com/images/fb_icon_325x325.png",
+          VIDEO: "https://www.w3schools.com/html/mov_bbb.mp4",
+          DOCUMENT:
+            "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
+        };
+        const sampleUrl = header.media_url || defaultSamples[format];
+        if (sampleUrl) {
+          try {
+            const { uploadMediaToMetaForTemplate } =
+              await import("../../utils/whatsapp/metaMediaUpload.js");
+            const headerHandle = await uploadMediaToMetaForTemplate(
+              whatsappAccount.tenant_id,
+              sampleUrl,
+              format,
+            );
+            headerObj.example = { header_handle: [headerHandle] };
+          } catch (uploadError) {
+            throw new Error(
+              `Failed to upload media sample to Meta: ${uploadError.message}`,
+            );
+          }
         }
       }
+
       metaComponents.push(headerObj);
     }
 
@@ -334,6 +503,133 @@ export const submitWhatsappTemplateService = async ({
         type: "FOOTER",
         text: footer.text_content,
       });
+    }
+
+    // CAROUSEL (optional)
+    const carouselComp = components.find(
+      (c) => c.component_type === "carousel",
+    );
+    if (carouselComp && carouselComp.text_content) {
+      try {
+        const carouselData = JSON.parse(carouselComp.text_content);
+        if (carouselData && Array.isArray(carouselData.cards)) {
+          const { uploadMediaToMetaForTemplate } =
+            await import("../../utils/whatsapp/metaMediaUpload.js");
+          const cardPromises = carouselData.cards.map(async (card) => {
+            const format = carouselData.mediaType || "IMAGE";
+            const defaultSamples = {
+              IMAGE: "https://www.facebook.com/images/fb_icon_325x325.png",
+              VIDEO: "https://www.w3schools.com/html/mov_bbb.mp4",
+            };
+            const sampleUrl =
+              card.media_url || defaultSamples[format] || defaultSamples.IMAGE;
+
+            // Upload the media using media API
+            const headerHandle = await uploadMediaToMetaForTemplate(
+              whatsappAccount.tenant_id,
+              sampleUrl,
+              format,
+            );
+
+            const cardComponents = [
+              {
+                type: "HEADER",
+                format: format,
+                example: {
+                  header_handle: [headerHandle],
+                },
+              },
+              {
+                type: "BODY",
+                text: card.bodyText || "Sample Card Body",
+              },
+            ];
+
+            if (
+              card.buttons &&
+              Array.isArray(card.buttons) &&
+              card.buttons.length > 0
+            ) {
+              cardComponents.push({
+                type: "BUTTONS",
+                buttons: card.buttons.slice(0, 2).map((btn) => ({
+                  type: "QUICK_REPLY",
+                  text: btn.text || "Quick Reply",
+                })),
+              });
+            }
+
+            return { components: cardComponents };
+          });
+
+          const resolvedCards = await Promise.all(cardPromises);
+
+          metaComponents.push({
+            type: "CAROUSEL",
+            cards: resolvedCards,
+          });
+        }
+      } catch (e) {
+        console.error("Error parsing carousel component for Meta payload:", e);
+      }
+    }
+
+    // BUTTONS (optional)
+    const buttonsComp = components.find((c) => c.component_type === "buttons");
+    if (buttonsComp && buttonsComp.text_content) {
+      try {
+        const buttons = JSON.parse(buttonsComp.text_content);
+        if (buttons.length > 0) {
+          metaComponents.push({
+            type: "BUTTONS",
+            buttons: buttons.map((btn) => {
+              const b = {
+                type: btn.type,
+              };
+
+              // Text is only allowed/required for certain types
+              if (btn.type !== "CATALOG" && btn.type !== "COPY_CODE") {
+                b.text =
+                  btn.text ||
+                  btn.label ||
+                  (btn.type === "URL" ? "Visit Website" : "Call");
+              }
+
+              if (btn.type === "PHONE_NUMBER") {
+                const rawPhone = (btn.phone_number || btn.value || "").trim();
+                const phone = rawPhone.replace(/\s+/g, "");
+                // Match frontend: Must start with +, follow by 11-15 digits total.
+                if (!/^\+[1-9]\d{10,14}$/.test(phone)) {
+                  throw new Error(
+                    `Invalid phone number for button "${btn.text}": Include + country code and 10 to 14 digits`,
+                  );
+                }
+                // Meta API accepts the leading + sign, space stripping is already done above.
+                b.phone_number = phone;
+              }
+              if (btn.type === "URL") {
+                b.url = btn.url || btn.value;
+                // Handle dynamic URL if {{1}} is present
+                if (b.url && b.url.includes("{{1}}")) {
+                  const urlVar = variables.find(
+                    (v) => v.variable_key === "url_1" || v.variable_key === "1",
+                  );
+                  if (urlVar) {
+                    b.example = [urlVar.sample_value];
+                  }
+                }
+              }
+              if (btn.type === "COPY_CODE") {
+                b.example = btn.example || btn.value || "CODE123";
+              }
+              // CATALOG and MPM don't need extra fields in the basic creation usually
+              return b;
+            }),
+          });
+        }
+      } catch (e) {
+        console.error("Error parsing buttons for Meta payload:", e);
+      }
     }
 
     // ─────────────────────────────────────────
@@ -540,39 +836,43 @@ export const syncAllPendingTemplatesService = async (
   tenant_id,
   whatsappAccount,
 ) => {
-  const [templates] = await db.sequelize.query(
-    `
+  try {
+    const [templates] = await db.sequelize.query(
+      `
     SELECT * FROM ${tableNames.WHATSAPP_TEMPLATE}
     WHERE tenant_id = ?
       AND status = 'pending'
       AND meta_template_id IS NOT NULL
       AND is_deleted = false
     `,
-    { replacements: [tenant_id] },
-  );
+      { replacements: [tenant_id] },
+    );
 
-  const results = [];
+    const results = [];
 
-  for (const template of templates) {
-    try {
-      const result = await syncWhatsappTemplateStatusService({
-        template,
-        whatsappAccount,
-      });
+    for (const template of templates) {
+      try {
+        const result = await syncWhatsappTemplateStatusService({
+          template,
+          whatsappAccount,
+        });
 
-      results.push({
-        template_id: template.template_id,
-        status: result.status,
-      });
-    } catch (err) {
-      results.push({
-        template_id: template.template_id,
-        error: err.message,
-      });
+        results.push({
+          template_id: template.template_id,
+          status: result.status,
+        });
+      } catch (err) {
+        results.push({
+          template_id: template.template_id,
+          error: err.message,
+        });
+      }
     }
-  }
 
-  return results;
+    return results;
+  } catch (err) {
+    throw err;
+  }
 };
 // ... existing code ...
 
@@ -611,15 +911,19 @@ export const getTemplateListService = async (tenant_id) => {
       const components = allComponents.filter(
         (c) => c.template_id === t.template_id,
       );
-      const variables = allVariables.filter(
-        (v) => v.template_id === t.template_id,
-      );
+      const variables = allVariables
+        .filter((v) => v.template_id === t.template_id)
+        .map((v) => ({ ...v, key: v.variable_key, value: v.sample_value }));
 
       return {
         ...t,
         is_submitted: !!t.meta_template_id,
-        can_edit: ["draft", "rejected"].includes(t.status),
-        can_submit: t.status === "draft",
+        can_edit: ["draft", "rejected", "paused", "approved"].includes(
+          t.status,
+        ),
+        can_submit: ["draft", "rejected", "paused", "approved"].includes(
+          t.status,
+        ),
         display_status: t.status.charAt(0).toUpperCase() + t.status.slice(1),
         components,
         variables,
@@ -635,40 +939,52 @@ export const getTemplateListService = async (tenant_id) => {
 };
 
 export const getTemplateByIdService = async (template_id, tenant_id) => {
-  // Join all related data
-  const [[template]] = await db.sequelize.query(
-    `SELECT * FROM ${tableNames.WHATSAPP_TEMPLATE} WHERE template_id = ? AND tenant_id = ? AND is_deleted = false`,
-    { replacements: [template_id, tenant_id] },
-  );
+  try {
+    // Join all related data
+    const [[template]] = await db.sequelize.query(
+      `SELECT * FROM ${tableNames.WHATSAPP_TEMPLATE} WHERE template_id = ? AND tenant_id = ? AND is_deleted = false`,
+      { replacements: [template_id, tenant_id] },
+    );
 
-  if (!template) return null;
+    if (!template) return null;
 
-  const [components] = await db.sequelize.query(
-    `SELECT * FROM ${tableNames.WHATSAPP_TEMPLATE_COMPONENTS} WHERE template_id = ?`,
-    { replacements: [template_id] },
-  );
+    const [components] = await db.sequelize.query(
+      `SELECT * FROM ${tableNames.WHATSAPP_TEMPLATE_COMPONENTS} WHERE template_id = ?`,
+      { replacements: [template_id] },
+    );
 
-  const [variables] = await db.sequelize.query(
-    `SELECT * FROM ${tableNames.WHATSAPP_TEMPLATE_VARIABLES} WHERE template_id = ? ORDER BY variable_key ASC`,
-    { replacements: [template_id] },
-  );
+    const [variables] = await db.sequelize.query(
+      `SELECT * FROM ${tableNames.WHATSAPP_TEMPLATE_VARIABLES} WHERE template_id = ? ORDER BY variable_key ASC`,
+      { replacements: [template_id] },
+    );
 
-  const [logs] = await db.sequelize.query(
-    `SELECT * FROM ${tableNames.WHATSAPP_TEMPLATE_SYNC_LOGS} WHERE template_id = ? ORDER BY created_at DESC LIMIT 20`,
-    { replacements: [template_id] },
-  );
+    const [logs] = await db.sequelize.query(
+      `SELECT * FROM ${tableNames.WHATSAPP_TEMPLATE_SYNC_LOGS} WHERE template_id = ? ORDER BY created_at DESC LIMIT 20`,
+      { replacements: [template_id] },
+    );
 
-  return {
-    ...template,
-    is_submitted: !!template.meta_template_id,
-    can_edit: ["draft", "rejected"].includes(template.status),
-    can_submit: template.status === "draft",
-    display_status:
-      template.status.charAt(0).toUpperCase() + template.status.slice(1),
-    components,
-    variables,
-    logs,
-  };
+    return {
+      ...template,
+      is_submitted: !!template.meta_template_id,
+      can_edit: ["draft", "rejected", "paused", "approved"].includes(
+        template.status,
+      ),
+      can_submit: ["draft", "rejected", "paused", "approved"].includes(
+        template.status,
+      ),
+      display_status:
+        template.status.charAt(0).toUpperCase() + template.status.slice(1),
+      components,
+      variables: variables.map((v) => ({
+        ...v,
+        key: v.variable_key,
+        value: v.sample_value,
+      })),
+      logs,
+    };
+  } catch (err) {
+    throw err;
+  }
 };
 
 export const pullTemplatesFromMetaService = async (tenant_id) => {
@@ -756,13 +1072,23 @@ export const pullTemplatesFromMetaService = async (tenant_id) => {
           let format = comp.format ? comp.format.toLowerCase() : null;
           let type = comp.type.toLowerCase();
 
-          if (type === "body" || type === "footer" || type === "header") {
+          if (
+            type === "body" ||
+            type === "footer" ||
+            type === "header" ||
+            type === "buttons"
+          ) {
+            let contentValue = text;
+            if (type === "buttons") {
+              contentValue = JSON.stringify(comp.buttons);
+            }
+
             await db.sequelize.query(
               `INSERT INTO ${tableNames.WHATSAPP_TEMPLATE_COMPONENTS}
                 (template_id, component_type, header_format, text_content)
                 VALUES (?, ?, ?, ?)`,
               {
-                replacements: [template_id, type, format, text],
+                replacements: [template_id, type, format, contentValue],
                 transaction,
               },
             );
@@ -939,6 +1265,7 @@ export const updateWhatsappTemplateService = async (
   tenant_id,
   template_name,
   category,
+  template_type,
   language,
   components,
   variables,
@@ -956,11 +1283,30 @@ export const updateWhatsappTemplateService = async (
       throw new Error("Template not found");
     }
 
-    // Only allow editing draft, rejected, paused
-    if (!["draft", "rejected", "paused"].includes(template.status)) {
+    // Only allow editing draft, rejected, paused, approved
+    if (
+      !["draft", "rejected", "paused", "approved"].includes(template.status)
+    ) {
       throw new Error(
-        `Cannot edit template with status: ${template.status}. Only draft, rejected, or paused templates can be edited.`,
+        `Cannot edit template with status: ${template.status}. Only draft, rejected, paused, or approved templates can be edited.`,
       );
+    }
+
+    // If template is already submitted to Meta, name, category, and language cannot change
+    if (template.status !== "draft") {
+      const isNameChanged =
+        template_name &&
+        template_name.toLowerCase() !== template.template_name.toLowerCase();
+      const isLanguageChanged =
+        language && language.toLowerCase() !== template.language.toLowerCase();
+      const isCategoryChanged =
+        category && category.toLowerCase() !== template.category.toLowerCase();
+
+      if (isNameChanged || isLanguageChanged || isCategoryChanged) {
+        throw new Error(
+          "Template name, category, and language cannot be changed after the template has been submitted to Meta. You may only edit the message content.",
+        );
+      }
     }
 
     // Validate body component
@@ -983,13 +1329,14 @@ export const updateWhatsappTemplateService = async (
     await db.sequelize.query(
       `
       UPDATE ${tableNames.WHATSAPP_TEMPLATE}
-      SET template_name = ?, category = ?, language = ?, updated_by = ?
+      SET template_name = ?, category = ?, template_type = ?, language = ?, updated_by = ?
       WHERE template_id = ? AND is_deleted = false
       `,
       {
         replacements: [
           template_name || template.template_name,
           category || template.category,
+          template_type || template.template_type,
           language || template.language,
           template.updated_by,
           template_id,
@@ -1019,14 +1366,19 @@ export const updateWhatsappTemplateService = async (
       await db.sequelize.query(
         `
         INSERT INTO ${tableNames.WHATSAPP_TEMPLATE_COMPONENTS}
-        (template_id, component_type, header_format, text_content)
-        VALUES (?, 'header', ?, ?)
+        (template_id, component_type, header_format, text_content, media_url)
+        VALUES (?, 'header', ?, ?, ?)
         `,
         {
           replacements: [
             template_id,
-            components.header.format || "text",
+            (
+              components.header.format ||
+              components.header.type ||
+              "text"
+            ).toLowerCase(),
             components.header.text || null,
+            components.header.media_url || null,
           ],
           transaction,
         },
@@ -1043,6 +1395,40 @@ export const updateWhatsappTemplateService = async (
         `,
         {
           replacements: [template_id, components.footer.text || null],
+          transaction,
+        },
+      );
+    }
+
+    // Insert buttons if provided
+    if (
+      components.buttons &&
+      Array.isArray(components.buttons) &&
+      components.buttons.length > 0
+    ) {
+      await db.sequelize.query(
+        `
+        INSERT INTO ${tableNames.WHATSAPP_TEMPLATE_COMPONENTS}
+        (template_id, component_type, text_content)
+        VALUES (?, 'buttons', ?)
+        `,
+        {
+          replacements: [template_id, JSON.stringify(components.buttons)],
+          transaction,
+        },
+      );
+    }
+
+    // Insert carousel if provided
+    if (components.carousel) {
+      await db.sequelize.query(
+        `
+        INSERT INTO ${tableNames.WHATSAPP_TEMPLATE_COMPONENTS}
+        (template_id, component_type, text_content)
+        VALUES (?, 'carousel', ?)
+        `,
+        {
+          replacements: [template_id, JSON.stringify(components.carousel)],
           transaction,
         },
       );
@@ -1087,7 +1473,7 @@ export const updateWhatsappTemplateService = async (
     if (variables && Array.isArray(variables)) {
       for (const variable of variables) {
         const varKey = variable.key.replace(/[{}]/g, ""); // Clean up key
-        extractedVariables.set(varKey, variable.sample);
+        extractedVariables.set(varKey, variable.sample || variable.value);
       }
     }
 
@@ -1135,40 +1521,35 @@ export const updateWhatsappTemplateService = async (
   }
 };
 
-export const generateAiTemplateService = async ({
-  prompt,
+/**
+ * Uses AI to help user generate or fix a template's content
+ */
+export const generateTemplateContentService = async ({
+  tenant_id,
   focus,
   style,
   optimization,
+  prompt,
   previous_content = null,
   rejection_reason = null,
 }) => {
-  const systemPrompt = `You are an expert WhatsApp Marketing Copywriter. 
-  Your goal is to generate or FIX high-converting WhatsApp message body content based on user instructions.
-  
-  RULES:
-  1. Use {{1}}, {{2}}, etc. for dynamic variables (e.g., Name, Order ID, Date).
-  2. The message must be professional yet engaging.
-  3. Category: ${focus} (Marketing, Utility, or Authentication).
-  4. Style: ${style} (Normal, Poetic, Exciting, or Funny).
-  5. Optimize for: ${optimization} (Click Rate or Reply Rate).
-  6. Output ONLY the message body text. No headers, no footers, no explanations.
-  7. IMPORTANT (for Marketing/Utility): Meta requires at least 15 words total, OR 5 words per variable. Ensure the text is descriptive.
-  8. IMPORTANT (for Authentication): These usually contain a verification code and should be concise. e.g. "Your verification code is {{1}}."
-  
-  ${previous_content
-      ? `FIX MODE: 
-  The previous version was: "${previous_content}"
-  Reason for failure/rejection: "${rejection_reason || "Unknown"}"
-  Please analyze the previous version, avoid the mistakes mentioned in the rejection reason, and ensure the new content strictly follows Meta category guidelines (e.g., Utility must NOT contain marketing language).`
-      : ""
-    }
-  `;
+  const systemPrompt = getTemplateCopywriterPrompt({
+    focus,
+    style,
+    optimization,
+    previousContent: previous_content,
+    rejectionReason: rejection_reason,
+  });
 
   const userPrompt = `User Request: ${prompt}`;
 
   try {
-    const aiResponse = await AiService("system", `${systemPrompt}\n\n${userPrompt}`);
+    const aiResponse = await AiService(
+      "system",
+      `${systemPrompt}\n\n${userPrompt}`,
+      tenant_id,
+      "template_content",
+    );
     return aiResponse;
   } catch (err) {
     throw new Error(`AI Generation failed: ${err.message}`);
@@ -1179,36 +1560,44 @@ export const generateAiTemplateService = async ({
  * Retrieves a list of soft-deleted templates for a tenant.
  */
 export const getDeletedTemplateListService = async (tenant_id) => {
-  const deletedTemplates = await db.WhatsappTemplates.findAll({
-    where: { tenant_id, is_deleted: true },
-    order: [["deleted_at", "DESC"]],
-    include: [
-      {
-        model: db.WhatsappTemplateComponents,
-        as: "components",
-      },
-    ],
-  });
+  try {
+    const deletedTemplates = await db.WhatsappTemplates.findAll({
+      where: { tenant_id, is_deleted: true },
+      order: [["deleted_at", "DESC"]],
+      include: [
+        {
+          model: db.WhatsappTemplateComponents,
+          as: "components",
+        },
+      ],
+    });
 
-  return deletedTemplates;
+    return deletedTemplates;
+  } catch (err) {
+    throw err;
+  }
 };
 
 /**
  * Restore a soft-deleted template
  */
 export const restoreTemplateService = async (template_id, tenant_id) => {
-  const template = await db.WhatsappTemplates.findOne({
-    where: { template_id, tenant_id, is_deleted: true }
-  });
+  try {
+    const template = await db.WhatsappTemplates.findOne({
+      where: { template_id, tenant_id, is_deleted: true },
+    });
 
-  if (!template) {
-    throw new Error("Template not found or not deleted");
+    if (!template) {
+      throw new Error("Template not found or not deleted");
+    }
+
+    await template.update({
+      is_deleted: false,
+      deleted_at: null,
+    });
+
+    return { message: "Template restored successfully" };
+  } catch (err) {
+    throw err;
   }
-
-  await template.update({
-    is_deleted: false,
-    deleted_at: null
-  });
-
-  return { message: "Template restored successfully" };
 };

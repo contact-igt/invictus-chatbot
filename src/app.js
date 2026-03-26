@@ -10,7 +10,7 @@ import { initSocket } from "./middlewares/socket/socket.js";
 import AuthWhatsappRouter from "./models/AuthWhatsapp/AuthWhatsapp.routes.js";
 import WhatsappMessageRouter from "./models/Messages/messages.routes.js";
 import KnowledgeRouter from "./models/Knowledge/knowledge.routes.js";
-import AiPropmtRouter from "./models/AiPrompt/aiprompt.routes.js";
+import AiPromptRouter from "./models/AiPrompt/aiprompt.routes.js";
 import ManagementRouter from "./models/ManagementModel/management.routes.js";
 import TenantRouter from "./models/TenantModel/tenant.routes.js";
 import WhatsappAccountRouter from "./models/WhatsappAccountModel/whatsappAccount.routes.js";
@@ -26,12 +26,32 @@ import { startCampaignSchedulerService } from "./models/WhatsappCampaignModel/wh
 import { startLeadHeatDecayCronService } from "./models/LeadsModel/leads.service.js";
 import { startLiveChatCleanupService } from "./models/LiveChatModel/livechat.service.js";
 import AiAnalysisLogRouter from "./models/AiAnalysisLog/aiAnalysisLog.routes.js";
+import DoctorRouter from "./models/DoctorModel/doctor.routes.js";
+import SpecializationRouter from "./models/SpecializationModel/specialization.routes.js";
+import AppointmentRouter from "./models/AppointmentModel/appointment.routes.js";
+import DashboardRouter from "./models/DashboardModel/dashboard.routes.js";
+import { startAppointmentSchedulerService } from "./models/AppointmentModel/appointment.service.js";
+import PlaygroundRouter from "./models/Playground/playground.routes.js";
+import BillingRouter from "./models/BillingModel/billing.routes.js";
+import WhatsappOtpRouter from "./models/OtpVerificationModel/otpverification.routes.js";
+import PaymentRouter from "./models/PaymentModel/payment.routes.js";
+import SuperAdminDashboardRouter from "./models/SuperAdminDashboardModel/superAdminDashboard.routes.js";
+
 
 dns.setDefaultResultOrder("ipv4first");
 
 const app = express();
 
-app.use(cors());
+app.use(cors({
+  origin: "*",
+  methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "x-meta-token", "ngrok-skip-browser-warning"],
+  credentials: false,
+}));
+
+// Handle preflight requests explicitly
+app.options("*", cors());
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -47,7 +67,7 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use("/api/management", ManagementRouter);
+app.use("/api/management", SuperAdminDashboardRouter, ManagementRouter);
 
 app.use(
   "/api/tenant",
@@ -61,7 +81,7 @@ app.use(
   AuthWhatsappRouter,
   WhatsappMessageRouter,
   KnowledgeRouter,
-  AiPropmtRouter,
+  AiPromptRouter,
   WhatsappAccountRouter,
   ContactRouter,
   LeadRouter,
@@ -69,7 +89,15 @@ app.use(
   WhatsappTemplateRouter,
   WhatsappCampaignRouter,
   ContactGroupRouter,
-  AiAnalysisLogRouter
+  AiAnalysisLogRouter,
+  DoctorRouter,
+  SpecializationRouter,
+  AppointmentRouter,
+  PlaygroundRouter,
+  DashboardRouter,
+  BillingRouter,
+  WhatsappOtpRouter,
+  PaymentRouter,
 );
 
 
@@ -78,12 +106,14 @@ app.get("/", (req, res) => {
 });
 
 
-await db.sequelize.sync({ alter: true });
+await db.sequelize.sync();
 console.log("DB connected");
 
 startLeadHeatDecayCronService();
 startLiveChatCleanupService();
 startCampaignSchedulerService();
+startAppointmentSchedulerService();
+
 
 const PORT = process.env.PORT || 8000;
 const server = http.createServer(app);

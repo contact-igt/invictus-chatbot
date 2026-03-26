@@ -31,6 +31,17 @@ export const LiveChatTable = (sequelize, Sequelize) => {
         comment: "tenant_user_id of assigned agent",
       },
 
+      is_deleted: {
+        type: Sequelize.BOOLEAN,
+        allowNull: false,
+        defaultValue: false,
+      },
+
+      deleted_at: {
+        type: Sequelize.DATE,
+        allowNull: true,
+      },
+
       createdAt: {
         type: Sequelize.DATE,
         allowNull: false,
@@ -41,7 +52,7 @@ export const LiveChatTable = (sequelize, Sequelize) => {
       updatedAt: {
         type: Sequelize.DATE,
         allowNull: false,
-        defaultValue: sequelize.literal("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"),
+        defaultValue: sequelize.literal("CURRENT_TIMESTAMP"),
         field: "updated_at",
       },
     },
@@ -67,7 +78,11 @@ export const LiveChatTable = (sequelize, Sequelize) => {
           name: "idx_livechat_last_msg",
           fields: ["last_message_at"],
         },
+        {
+          name: "idx_livechat_deleted",
+          fields: ["is_deleted"],
+        },
       ],
-    }
+    },
   );
 };

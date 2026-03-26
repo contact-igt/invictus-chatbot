@@ -12,6 +12,7 @@ import {
     permanentDeleteCampaignController,
     getDeletedCampaignListController,
     restoreCampaignController,
+    uploadCampaignMediaController,
 } from "./whatsappcampaign.controller.js";
 
 const router = express.Router();
@@ -23,6 +24,13 @@ router.post(
     authenticate,
     authorize({ user_type: "tenant", roles: tenantRoles }),
     createCampaignController,
+);
+
+router.post(
+    "/whatsapp-campaign/upload-media",
+    authenticate,
+    authorize({ user_type: "tenant", roles: tenantRoles }),
+    uploadCampaignMediaController,
 );
 
 router.get(

@@ -12,10 +12,11 @@ import {
   syncAllPendingTemplatesService,
   syncWhatsappTemplateStatusService,
   updateWhatsappTemplateService,
-  generateAiTemplateService,
+  generateTemplateContentService,
   getDeletedTemplateListService,
   restoreTemplateService,
 } from "./whatsapptemplate.service.js";
+import { uploadToCloudinary } from "../../middlewares/cloudinary/cloudinaryUpload.js";
 
 export const getDeletedTemplateListController = async (req, res) => {
   const tenant_id = req.user.tenant_id;
@@ -52,12 +53,19 @@ export const createWhatsappTemplateController = async (req, res) => {
   try {
     const loginUser = req.user;
 
-    const { template_name, category, language, components, variables } =
-      req.body;
+    const {
+      template_name,
+      category,
+      template_type,
+      language,
+      components,
+      variables,
+    } = req.body;
 
     const requiredFields = {
       template_name,
       category,
+      template_type,
       components,
     };
 
@@ -98,6 +106,7 @@ export const createWhatsappTemplateController = async (req, res) => {
       loginUser?.tenant_id,
       template_name,
       category,
+      template_type,
       language,
       components,
       variables,
@@ -124,8 +133,6 @@ export const createWhatsappTemplateController = async (req, res) => {
     });
   }
 };
-
-
 
 export const submitWhatsappTemplateController = async (req, res) => {
   try {
@@ -347,8 +354,14 @@ export const updateWhatsappTemplateController = async (req, res) => {
   try {
     const tenant_id = req.user.tenant_id;
     const { template_id } = req.params;
-    const { template_name, category, language, components, variables } =
-      req.body;
+    const {
+      template_name,
+      category,
+      template_type,
+      language,
+      components,
+      variables,
+    } = req.body;
 
     if (!tenant_id) {
       return res.status(400).json({ message: "Invalid tenant context" });
@@ -359,6 +372,7 @@ export const updateWhatsappTemplateController = async (req, res) => {
       tenant_id,
       template_name,
       category,
+      template_type,
       language,
       components,
       variables,
@@ -403,10 +417,12 @@ export const resubmitWhatsappTemplateController = async (req, res) => {
       return res.status(404).json({ message: "Template not found" });
     }
 
-    // Only allow resubmit for draft, rejected, paused
-    if (!["draft", "rejected", "paused"].includes(template.status)) {
+    // Only allow resubmit for draft, rejected, paused, approved
+    if (
+      !["draft", "rejected", "paused", "approved"].includes(template.status)
+    ) {
       return res.status(400).json({
-        message: `Cannot resubmit template with status: ${template.status}. Only draft, rejected, or paused templates can be resubmitted.`,
+        message: `Cannot resubmit template with status: ${template.status}. Only draft, rejected, paused, or approved templates can be resubmitted.`,
       });
     }
 
@@ -462,7 +478,26 @@ export const resubmitWhatsappTemplateController = async (req, res) => {
 
 export const generateAiTemplateController = async (req, res) => {
   try {
-    const { prompt, focus, style, optimization, previous_content, rejection_reason } = req.body;
+    const tenant_id = req.user.tenant_id;
+    const { getTenantSettingsService } =
+      await import("../TenantModel/tenant.service.js");
+    const tenantSettings = await getTenantSettingsService(tenant_id);
+
+    if (tenantSettings?.ai_settings?.content_generation === false) {
+      return res.status(403).json({
+        message:
+          "AI Template Generation is disabled for your organization. Please enable it in Settings.",
+      });
+    }
+
+    const {
+      prompt,
+      focus,
+      style,
+      optimization,
+      previous_content,
+      rejection_reason,
+    } = req.body;
 
     const requiredFields = {
       prompt,
@@ -478,13 +513,14 @@ export const generateAiTemplateController = async (req, res) => {
       });
     }
 
-    const aiContent = await generateAiTemplateService({
+    const aiContent = await generateTemplateContentService({
+      tenant_id,
       prompt,
       focus,
       style,
       optimization,
       previous_content,
-      rejection_reason
+      rejection_reason,
     });
 
     return res.status(200).json({
@@ -498,5 +534,32 @@ export const generateAiTemplateController = async (req, res) => {
     return res.status(500).json({
       message: err.message,
     });
+  }
+};
+
+export const uploadWhatsappTemplateMediaController = async (req, res) => {
+  try {
+    const file = req.files?.file;
+    const { type } = req.body; // image | video | raw (for document)
+
+    if (!file) {
+      return res.status(400).json({ message: "No file uploaded" });
+    }
+
+    const folder = `whatsapp_templates/${req.user.tenant_id}`;
+    const secureUrl = await uploadToCloudinary(
+      file,
+      type || "auto",
+      "public",
+      folder,
+    );
+
+    return res.status(200).json({
+      message: "Media uploaded successfully",
+      url: secureUrl,
+    });
+  } catch (err) {
+    console.error("Template media upload error:", err);
+    return res.status(500).json({ message: err.message });
   }
 };

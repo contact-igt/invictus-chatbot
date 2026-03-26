@@ -79,10 +79,12 @@ export const getAiAnalysisLogByIdController = async (req, res) => {
 };
 
 export const updateAiLogStatusController = async (req, res) => {
+    const { id } = req.params;
+    const tenant_id = req.user?.tenant_id;
+    console.log(`[AI-LOG-UPDATE] Request for ID: ${id}, Tenant: ${tenant_id}, Body:`, req.body);
+
     try {
-        const { id } = req.params;
         const { status, resolution, type } = req.body;
-        const tenant_id = req.user.tenant_id;
 
         if (!status && !resolution && !type) {
             return res.status(400).json({ message: "Status, resolution, or type is required" });
@@ -96,13 +98,15 @@ export const updateAiLogStatusController = async (req, res) => {
             tenant_id
         );
 
+        console.log(`[AI-LOG-UPDATE] Success for ID: ${id}`);
         return res.status(200).json({
             message: "Log updated successfully",
             data: result,
         });
     } catch (error) {
+        console.error(`[AI-LOG-UPDATE] Error for ID: ${id}:`, error.message);
         return res.status(500).json({
-            message: error.message,
+            message: error.message || "Internal server error",
         });
     }
 };

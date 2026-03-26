@@ -1,6 +1,6 @@
 export const calculateHeatState = (lastMessageAt) => {
   if (!lastMessageAt) {
-    return { heat_state: "super_cold", heat_score: 0 };
+    return { heat_state: "supercold", heat_score: 0 };
   }
 
   const now = new Date();
@@ -20,5 +20,5 @@ export const calculateHeatState = (lastMessageAt) => {
     return { heat_state: "cold", heat_score: 30 };
   }
 
-  return { heat_state: "super_cold", heat_score: 10 };
+  return { heat_state: "supercold", heat_score: 10 };
 };

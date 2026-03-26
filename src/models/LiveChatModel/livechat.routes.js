@@ -3,6 +3,9 @@ import {
   createLiveChatController,
   getLiveChatListController,
   getHistoryChatListController,
+  claimLiveChatController,
+  assignAgentToLiveChatController,
+  getAgentListController,
 } from "./livechat.controller.js";
 import {
   authenticate,
@@ -30,6 +33,29 @@ Router.get(
   authenticate,
   authorize({ user_type: "tenant", roles: tenantRoles }),
   getHistoryChatListController,
+);
+
+// --- Agent Assignment Routes ---
+
+Router.post(
+  "/live-chat/claim",
+  authenticate,
+  authorize({ user_type: "tenant", roles: tenantRoles }),
+  claimLiveChatController,
+);
+
+Router.put(
+  "/live-chat/assign",
+  authenticate,
+  authorize({ user_type: "tenant", roles: ["tenant_admin"] }),
+  assignAgentToLiveChatController,
+);
+
+Router.get(
+  "/live-chats/agents",
+  authenticate,
+  authorize({ user_type: "tenant", roles: tenantRoles }),
+  getAgentListController,
 );
 
 export default Router;

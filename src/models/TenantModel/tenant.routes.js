@@ -11,6 +11,10 @@ import {
   getTenantWebhookStatusController,
   getDeletedTenantListController,
   restoreTenantController,
+  getTenantInvitationListController,
+  getOnboardedTenantListController,
+  getTenantSettingsController,
+  updateTenantAiSettingsController,
 } from "./tenant.controller.js";
 import {
   authenticate,
@@ -18,6 +22,36 @@ import {
 } from "../../middlewares/auth/authMiddlewares.js";
 
 const Router = express.Router();
+
+Router.get(
+  "/invitations",
+  authenticate,
+  authorize({
+    user_type: "management",
+    roles: ["platform_admin", "super_admin"],
+  }),
+  getTenantInvitationListController,
+);
+
+Router.get(
+  "/onboarded",
+  authenticate,
+  authorize({
+    user_type: "management",
+    roles: ["platform_admin", "super_admin"],
+  }),
+  getOnboardedTenantListController,
+);
+
+Router.get(
+  "/deleted-list",
+  authenticate,
+  authorize({
+    user_type: "management",
+    roles: ["platform_admin", "super_admin"],
+  }),
+  getDeletedTenantListController,
+);
 
 Router.post(
   "/",
@@ -37,26 +71,6 @@ Router.get(
     roles: ["platform_admin", "super_admin"],
   }),
   getAllTenantController,
-);
-
-Router.get(
-  "/:id",
-  authenticate,
-  authorize({
-    user_type: "management",
-    roles: ["platform_admin", "super_admin"],
-  }),
-  getTenantByIdController,
-);
-
-Router.put(
-  "/:id",
-  authenticate,
-  authorize({
-    user_type: "management",
-    roles: ["platform_admin", "super_admin"],
-  }),
-  updateTenantController,
 );
 
 Router.put(
@@ -79,17 +93,7 @@ Router.delete(
   softDeleteTenantController,
 );
 
-Router.get(
-  "/deleted/list",
-  authenticate,
-  authorize({
-    user_type: "management",
-    roles: ["platform_admin", "super_admin"],
-  }),
-  getDeletedTenantListController,
-);
-
-Router.put(
+Router.post(
   "/:id/restore",
   authenticate,
   authorize({
@@ -127,6 +131,46 @@ Router.get(
     roles: ["tenant_admin", "doctor", "staff", "agent"],
   }),
   getTenantWebhookStatusController,
+);
+
+Router.get(
+  "/settings/general",
+  authenticate,
+  authorize({
+    user_type: "tenant",
+    roles: ["tenant_admin", "staff", "doctor", "agent"],
+  }),
+  getTenantSettingsController,
+);
+
+Router.patch(
+  "/settings/ai",
+  authenticate,
+  authorize({
+    user_type: "tenant",
+    roles: ["tenant_admin"],
+  }),
+  updateTenantAiSettingsController,
+);
+
+Router.get(
+  "/:id",
+  authenticate,
+  authorize({
+    user_type: "management",
+    roles: ["platform_admin", "super_admin"],
+  }),
+  getTenantByIdController,
+);
+
+Router.put(
+  "/:id",
+  authenticate,
+  authorize({
+    user_type: "management",
+    roles: ["platform_admin", "super_admin"],
+  }),
+  updateTenantController,
 );
 
 export default Router;

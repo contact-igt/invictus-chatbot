@@ -1,3 +1,4 @@
+import db from "../../database/index.js";
 import { tableNames } from "../../database/tableName.js";
 import { generateReadableIdFromLast } from "../../utils/helpers/generateReadableIdFromLast.js";
 import { missingFieldsChecker } from "../../utils/helpers/missingFields.js";
@@ -13,18 +14,30 @@ import {
   updateTenantStatusService,
   getDeletedTenantListService,
   restoreTenantService,
+  getTenantInvitationListService,
+  getOnboardedTenantListService,
+  getTenantSettingsService,
+  updateTenantAiSettingsService,
 } from "./tenant.service.js";
-import { normalizeMobile } from "../../utils/helpers/normalizeMobile.js";
 
 import {
-  sendTenantInvitationService,
-} from "../TenantInvitationModel/tenantinvitation.service.js";
+  normalizeMobile,
+  cleanCountryCode,
+} from "../../utils/helpers/normalizeMobile.js";
+
+import { sendTenantInvitationService } from "../TenantInvitationModel/tenantinvitation.service.js";
 import {
-  createTenantUserService,
-  findTenantUserByIdService,
-  updateTenantUserService,
+  createTenantUserService, // Retained from original
+  findTenantUserByIdService, // Retained from original
+  softDeleteTenantUserService,
+  softDeleteUsersByTenantIdService,
+  updateTenantUserByIdService,
   findTenantUserByEmailOrMobileGloballyService,
+  findTenantAdminService,
+  updateUsersStatusByTenantIdService,
 } from "../TenantUserModel/tenantuser.service.js";
+
+import { getComprehensiveWebhookStatusService } from "../WhatsappAccountModel/whatsappAccount.service.js";
 
 export const createTenantController = async (req, res) => {
   const loginUSer = req.user;
@@ -37,9 +50,18 @@ export const createTenantController = async (req, res) => {
       owner_country_code,
       owner_mobile,
       type,
+      subscriptionStatus,
       subscription_start_date,
       subscription_end_date,
+      address,
+      city,
+      country,
+      state,
+      pincode,
+      maxUsers,
+      subscriptionPlan,
       profile,
+      ai_settings,
     } = req.body;
 
     const requiredFields = {
@@ -64,11 +86,15 @@ export const createTenantController = async (req, res) => {
       "TT",
     );
 
-    const normalizedMobile = normalizeMobile(owner_country_code, owner_mobile);
+    const cleanedCC = cleanCountryCode(owner_country_code);
+    const normalizedMobile = normalizeMobile(cleanedCC, owner_mobile);
     const trimmedEmail = owner_email?.trim()?.toLowerCase();
 
     // Check for existing user in Tenants
-    const existingTu = await findTenantUserByEmailOrMobileGloballyService(trimmedEmail, normalizedMobile);
+    const existingTu = await findTenantUserByEmailOrMobileGloballyService(
+      trimmedEmail,
+      normalizedMobile,
+    );
 
     if (existingTu) {
       const field = existingTu.email === trimmedEmail ? "Email" : "Mobile";
@@ -82,12 +108,22 @@ export const createTenantController = async (req, res) => {
       company_name,
       owner_name,
       owner_email,
-      owner_country_code,
+      cleanedCC,
       normalizedMobile,
       type,
+      subscriptionStatus || "invited",
       subscription_start_date || null,
       subscription_end_date || null,
+      address || null,
+      city || null,
+      country || null,
+      state || null,
+      pincode || null,
+      maxUsers || 10,
+      subscriptionPlan || "basic",
       profile || null,
+      null, // verify_token
+      ai_settings || null,
     );
 
     const tenant_user_id = await generateReadableIdFromLast(
@@ -99,13 +135,15 @@ export const createTenantController = async (req, res) => {
     await createTenantUserService(
       tenant_user_id,
       tenant_id,
+      "Mr", // Default title as Mr
       owner_name,
       owner_email,
-      owner_country_code,
+      cleanedCC,
       normalizedMobile,
       profile || null,
       "tenant_admin",
-      null, // Initial owners still use the invitation link flow
+      null, // password_hash — null until invitation is accepted
+      "inactive", // user_status — inactive until invitation is accepted
     );
 
     await sendTenantInvitationService(
@@ -174,6 +212,18 @@ export const updateTenantController = async (req, res) => {
       owner_country_code,
       owner_mobile,
       type,
+      subscriptionStatus,
+      subscription_start_date,
+      subscription_end_date,
+      address,
+      city,
+      country,
+      state,
+      pincode,
+      maxUsers,
+      subscriptionPlan,
+      profile,
+      ai_settings,
     } = req.body;
 
     const tenant = await findTenantByIdService(id);
@@ -182,33 +232,100 @@ export const updateTenantController = async (req, res) => {
       return res.status(404).json({ message: "Tenant details not found" });
     }
 
-    const normalizedMobile = owner_mobile ? normalizeMobile(owner_country_code, owner_mobile) : null;
+    const cleanedCC = owner_country_code
+      ? cleanCountryCode(owner_country_code)
+      : null;
+    const normalizedMobile = owner_mobile
+      ? normalizeMobile(cleanedCC, owner_mobile)
+      : null;
+
+    const trimmedEmail = owner_email?.trim()?.toLowerCase();
+    console.log(
+      `[UPDATE TENANT] ID: ${id}, New Email: ${trimmedEmail}, Old Email: ${tenant.owner_email}`,
+    );
+
+    // Check for duplicate email if it's changing
+    if (trimmedEmail && trimmedEmail !== tenant.owner_email) {
+      const existingUser = await findTenantUserByEmailOrMobileGloballyService(
+        trimmedEmail,
+        null,
+      );
+      if (existingUser) {
+        console.log(
+          `[UPDATE TENANT] Duplicate email detected: ${trimmedEmail}`,
+        );
+        return res
+          .status(400)
+          .json({ message: "Email already in use by another account" });
+      }
+    }
 
     await updateTenantService(
       company_name,
       owner_name,
-      owner_email,
-      owner_country_code,
+      trimmedEmail || owner_email,
+      cleanedCC,
       normalizedMobile,
       type,
+      subscriptionStatus,
+      subscription_start_date,
+      subscription_end_date,
+      address,
+      city,
+      country,
+      state,
+      pincode,
+      maxUsers,
+      subscriptionPlan,
+      profile,
+      ai_settings,
       id,
     );
 
     // Sync changes to the primary tenant admin user
-    await updateTenantUserService(
-      owner_name,
-      owner_email,
-      normalizedMobile,
-      owner_country_code,
-      tenant?.owner_email, // old email used as identifier
+    const tenantAdmin = await findTenantAdminService(id);
+    console.log(
+      `[UPDATE TENANT] Admin Found: ${tenantAdmin ? tenantAdmin.tenant_user_id : "NO"}`,
     );
+
+    if (tenantAdmin) {
+      await updateTenantUserByIdService(tenantAdmin.tenant_user_id, {
+        username: owner_name,
+        email: trimmedEmail || owner_email,
+        mobile: normalizedMobile,
+        country_code: cleanedCC,
+      });
+    }
+
+    // If email changed and user hasn't registered yet, send a new invitation
+    if (trimmedEmail && trimmedEmail !== tenant.owner_email) {
+      if (tenantAdmin && !tenantAdmin.password_hash) {
+        console.log(
+          `[UPDATE TENANT] Sending new invitation to: ${trimmedEmail}`,
+        );
+        await sendTenantInvitationService(
+          id,
+          tenantAdmin.tenant_user_id,
+          trimmedEmail,
+          owner_name || tenantAdmin.username,
+          company_name || tenant.company_name,
+          req.user?.unique_id,
+        );
+      } else {
+        console.log(
+          `[UPDATE TENANT] Skip invitation (User already has password or no admin found)`,
+        );
+      }
+    }
 
     return res.status(200).send({
       message: "Tenant updated successfully",
     });
   } catch (err) {
     if (err.original?.code === "ER_DUP_ENTRY") {
-      return res.status(400).json({ message: "Email or mobile already exists" });
+      return res
+        .status(400)
+        .json({ message: "Email or mobile already exists" });
     }
 
     return res.status(500).json({
@@ -247,7 +364,17 @@ export const updateTenantStatusController = async (req, res) => {
       });
     }
 
-    await updateTenantStatusService(status, id);
+    // Wrap in transaction to ensure atomic status sync
+    await db.sequelize.transaction(async (t) => {
+      await updateTenantStatusService(status, id);
+
+      // Sync status to the tenant's users
+      let userStatus = "inactive";
+      if (["active", "trial", "grace_period"].includes(status)) {
+        userStatus = "active";
+      }
+      await updateUsersStatusByTenantIdService(id, userStatus);
+    });
 
     return res.status(200).send({
       message: "Tenant status updated successfully",
@@ -268,8 +395,10 @@ export const softDeleteTenantController = async (req, res) => {
     }
 
     await softDeleteTenantService(id);
+    // softDeleteTenantService already soft-deletes associated users
+
     return res.status(200).send({
-      message: "Tenant removed successfully",
+      message: "Tenant and all associated users removed successfully",
     });
   } catch (err) {
     res.status(500).send({ error: err.message });
@@ -332,6 +461,12 @@ export const resendTenantInvitationController = async (req, res) => {
       });
     }
 
+    if (tenantUser.password_hash) {
+      return res.status(400).send({
+        message: "User is already registered and has set their password.",
+      });
+    }
+
     const tenant = await findTenantByIdService(tenantUser.tenant_id);
     if (!tenant) {
       return res.status(404).send({
@@ -343,7 +478,7 @@ export const resendTenantInvitationController = async (req, res) => {
       tenantUser.tenant_id,
       tenant_user_id,
       tenantUser.email,
-      tenantUser.name,
+      tenantUser.username,
       tenant.company_name,
       loginUSer?.unique_id,
     );
@@ -360,25 +495,105 @@ export const resendTenantInvitationController = async (req, res) => {
 
 export const getTenantWebhookStatusController = async (req, res) => {
   try {
+    const loginUser = req.user;
     const { id } = req.params;
 
     if (!id) {
       return res.status(400).json({ message: "Tenant ID is required" });
     }
 
-    const tenant = await findTenantByIdService(id);
-
-    if (!tenant) {
-      return res.status(404).json({ message: "Tenant not found" });
+    // 🔒 Security Check: A tenant user can only check their OWN webhook status
+    if (loginUser.user_type === "tenant" && loginUser.tenant_id !== id) {
+      return res.status(403).json({
+        message:
+          "Access denied: You can only check your own organization's status",
+      });
     }
+
+    // Use comprehensive status check
+    const status = await getComprehensiveWebhookStatusService(id);
 
     return res.status(200).json({
       message: "success",
-      data: {
-        webhook_verified: !!tenant.webhook_verified,
-      },
+      data: status,
     });
   } catch (err) {
     return res.status(500).json({ error: err.message });
+  }
+};
+
+export const getTenantInvitationListController = async (req, res) => {
+  try {
+    const data = await getTenantInvitationListService();
+    return res.status(200).json({
+      message: "success",
+      data: data || [],
+    });
+  } catch (err) {
+    return res.status(500).json({ message: err.message });
+  }
+};
+
+export const getOnboardedTenantListController = async (req, res) => {
+  try {
+    const data = await getOnboardedTenantListService();
+    return res.status(200).json({
+      message: "success",
+      data: data || [],
+    });
+  } catch (err) {
+    console.error("Error in getOnboardedTenantListController:", err);
+    return res.status(500).json({ message: err.message });
+  }
+};
+
+export const getTenantSettingsController = async (req, res) => {
+  try {
+    const tenant_id = req.user.tenant_id;
+    console.log(`[SETTINGS GET] tenant_id=${tenant_id}`);
+    const settings = await getTenantSettingsService(tenant_id);
+    if (!settings) return res.status(404).json({ message: "Tenant not found" });
+    return res.status(200).json({ message: "success", data: settings });
+  } catch (err) {
+    return res.status(500).json({ message: err.message });
+  }
+};
+
+export const updateTenantAiSettingsController = async (req, res) => {
+  try {
+    const tenant_id = req.user.tenant_id;
+    const { ai_settings } = req.body;
+
+    // Validate model selections if provided
+    if (ai_settings?.input_model || ai_settings?.output_model) {
+      const activeModels = await db.AiPricing.findAll({
+        where: { is_active: true },
+        attributes: ["model"],
+        raw: true,
+      });
+      const validModels = new Set(activeModels.map((m) => m.model));
+
+      if (
+        ai_settings.input_model &&
+        !validModels.has(ai_settings.input_model)
+      ) {
+        return res.status(400).json({
+          message: `Invalid input model: ${ai_settings.input_model}. Please select an active model.`,
+        });
+      }
+      if (
+        ai_settings.output_model &&
+        !validModels.has(ai_settings.output_model)
+      ) {
+        return res.status(400).json({
+          message: `Invalid output model: ${ai_settings.output_model}. Please select an active model.`,
+        });
+      }
+    }
+
+    await updateTenantAiSettingsService(tenant_id, ai_settings);
+    return res.status(200).json({ message: "Settings updated successfully" });
+  } catch (err) {
+    return res.status(500).json({ message: err.message });
   }
 };

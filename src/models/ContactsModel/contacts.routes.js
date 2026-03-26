@@ -8,8 +8,13 @@ import {
   updateContactController,
   getDeletedContactListController,
   restoreContactController,
+  importContactsController,
+  toggleSilenceAiController,
 } from "./contacts.controller.js";
-import { authenticate, authorize } from "../../middlewares/auth/authMiddlewares.js";
+import {
+  authenticate,
+  authorize,
+} from "../../middlewares/auth/authMiddlewares.js";
 
 const Router = express.Router();
 
@@ -22,7 +27,6 @@ Router.post(
   createContactController,
 );
 
-
 Router.get(
   "/contacts",
   authenticate,
@@ -30,44 +34,40 @@ Router.get(
   getAllContactsController,
 );
 
-
 Router.get(
-  "/contact/:id",
+  "/contact/:contact_id",
   authenticate,
   authorize({ user_type: "tenant", roles: tenantRoles }),
   getContactByIdController,
 );
 
-
 Router.put(
-  "/contact/:id",
+  "/contact/:contact_id",
   authenticate,
   authorize({ user_type: "tenant", roles: tenantRoles }),
   updateContactController,
 );
 
-
 Router.delete(
-  "/contact/:id/soft",
+  "/contact/:contact_id/soft",
   authenticate,
   authorize({ user_type: "tenant", roles: tenantRoles }),
   deleteContactController,
 );
 
 Router.delete(
-  "/contact/:id/permanent",
+  "/contact/:contact_id/permanent",
   authenticate,
   authorize({ user_type: "tenant", roles: ["tenant_admin"] }),
   permanentDeleteContactController,
 );
 
 Router.post(
-  "/contact/:id/restore",
+  "/contact/:contact_id/restore",
   authenticate,
-  authorize({ user_type: "tenant", roles: ["tenant_admin"] }),
+  authorize({ user_type: "tenant", roles: tenantRoles }),
   restoreContactController,
 );
-
 
 Router.get(
   "/contacts/deleted/list",
@@ -76,8 +76,18 @@ Router.get(
   getDeletedContactListController,
 );
 
+Router.post(
+  "/contact/import",
+  authenticate,
+  authorize({ user_type: "tenant", roles: ["tenant_admin", "staff"] }),
+  importContactsController,
+);
 
+Router.patch(
+  "/contact/:contact_id/silence",
+  authenticate,
+  authorize({ user_type: "tenant", roles: tenantRoles }),
+  toggleSilenceAiController,
+);
 
 export default Router;
-
-

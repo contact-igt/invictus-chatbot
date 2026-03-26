@@ -17,12 +17,12 @@ export const WhatsappTemplateComponentTable = (sequelize, Sequelize) => {
       },
 
       component_type: {
-        type: Sequelize.ENUM("header", "body", "footer"),
+        type: Sequelize.ENUM("header", "body", "footer", "buttons", "carousel"),
         allowNull: false,
       },
 
       header_format: {
-        type: Sequelize.ENUM("text", "image", "video", "document"),
+        type: Sequelize.ENUM("text", "image", "video", "document", "location"),
         allowNull: true, // only for header
       },
 
@@ -46,9 +46,7 @@ export const WhatsappTemplateComponentTable = (sequelize, Sequelize) => {
       updatedAt: {
         type: Sequelize.DATE,
         allowNull: false,
-        defaultValue: sequelize.literal(
-          "CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP",
-        ),
+        defaultValue: sequelize.literal("CURRENT_TIMESTAMP"),
         field: "updated_at",
       },
     },
@@ -58,7 +56,13 @@ export const WhatsappTemplateComponentTable = (sequelize, Sequelize) => {
       underscored: true,
       indexes: [
         {
+          name: "idx_component_template",
           fields: ["template_id"],
+        },
+        {
+          name: "unique_template_component_type",
+          unique: true,
+          fields: ["template_id", "component_type"],
         },
       ],
     },

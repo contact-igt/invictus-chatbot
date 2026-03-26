@@ -9,6 +9,8 @@ import {
   getDeletedLeadListService,
   restoreLeadService,
   getLeadByLeadIdService,
+  getBulkLeadSummaryService,
+  bulkUpdateLeadsService,
 } from "./leads.service.js";
 
 
@@ -32,6 +34,33 @@ export const getLeadListController = async (req, res) => {
   } catch (err) {
     return res.status(500).send({
       message: err?.message || err,
+    });
+  }
+};
+
+export const getLeadByIdController = async (req, res) => {
+  const { lead_id } = req.params;
+
+  const tenant_id = req.user.tenant_id;
+
+  if (!tenant_id || !lead_id) {
+    return res.status(400).send({
+      message: "Tenant id or lead id missing",
+    });
+  }
+
+  try {
+    const lead = await getLeadByLeadIdService(tenant_id, lead_id);
+    if (!lead) {
+      return res.status(404).send({ message: "Lead not found" });
+    }
+    return res.status(200).send({
+      message: "success",
+      data: lead,
+    });
+  } catch (err) {
+    return res.status(500).send({
+      message: err?.message,
     });
   }
 };
@@ -73,6 +102,44 @@ export const getLeadSummaryController = async (req, res) => {
     return res.status(200).send({
       message: "success",
       data: response,
+    });
+  } catch (err) {
+    return res.status(500).send({
+      message: err?.message,
+    });
+  }
+};
+
+export const getBulkLeadSummaryController = async (req, res) => {
+  const tenant_id = req.user.tenant_id;
+  const { lead_ids, mode, date, start_date, end_date } = req.body;
+
+  console.log("ssss", lead_ids)
+
+  if (!tenant_id) {
+    return res.status(400).send({ message: "Tenant id missing" });
+  }
+
+  if (!lead_ids || !Array.isArray(lead_ids) || lead_ids.length === 0) {
+    return res.status(400).send({ message: "Invalid or missing lead_ids array" });
+  }
+
+  try {
+    console.log(`Bulk Smart Summary Req - Leads: ${lead_ids.length}, Mode: ${mode}`);
+
+    // Call service
+    const results = await getBulkLeadSummaryService(
+      tenant_id,
+      lead_ids,
+      mode,
+      date,
+      start_date,
+      end_date
+    );
+
+    return res.status(200).send({
+      message: "success",
+      data: results,
     });
   } catch (err) {
     return res.status(500).send({
@@ -181,6 +248,29 @@ export const permanentDeleteLeadController = async (req, res) => {
   } catch (err) {
     return res.status(500).send({
       message: err?.message,
+    });
+  }
+};
+
+export const bulkUpdateLeadsController = async (req, res) => {
+  const { lead_ids, updates } = req.body;
+  const tenant_id = req.user.tenant_id;
+
+  if (!tenant_id || !lead_ids || !Array.isArray(lead_ids)) {
+    return res.status(400).send({
+      message: "Tenant id or lead ids missing",
+    });
+  }
+
+  try {
+    const result = await bulkUpdateLeadsService(tenant_id, lead_ids, updates);
+    return res.status(200).send({
+      message: "Leads updated successfully",
+      data: result,
+    });
+  } catch (err) {
+    return res.status(500).send({
+      message: err?.message || err,
     });
   }
 };

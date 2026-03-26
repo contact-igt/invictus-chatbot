@@ -13,14 +13,20 @@ import {
   resetManagementPasswordController,
   getDeletedManagementListController,
   restoreManagementController,
+  getPricingRulesController,
+  createPricingRuleController,
+  updatePricingRuleController,
+  deletePricingRuleController,
+  getAiPricingRulesController,
+  createAiPricingRuleController,
+  updateAiPricingRuleController,
+  deleteAiPricingRuleController,
 } from "./management.controller.js";
 import {
   authenticate,
   authorize,
   refreshToken,
 } from "../../middlewares/auth/authMiddlewares.js";
-
-
 
 const Router = express.Router();
 
@@ -51,6 +57,90 @@ Router.get(
     roles: ["platform_admin", "super_admin"],
   }),
   getManagementController,
+);
+
+// ─── Pricing Table CRUD Routes (Super Admin Only) ────────────
+
+Router.get(
+  "/pricing",
+  authenticate,
+  authorize({
+    user_type: "management",
+    roles: ["super_admin", "platform_admin"],
+  }),
+  getPricingRulesController,
+);
+
+Router.post(
+  "/pricing",
+  authenticate,
+  authorize({
+    user_type: "management",
+    roles: ["super_admin"],
+  }),
+  createPricingRuleController,
+);
+
+Router.put(
+  "/pricing/:id",
+  authenticate,
+  authorize({
+    user_type: "management",
+    roles: ["super_admin"],
+  }),
+  updatePricingRuleController,
+);
+
+Router.delete(
+  "/pricing/:id",
+  authenticate,
+  authorize({
+    user_type: "management",
+    roles: ["super_admin"],
+  }),
+  deletePricingRuleController,
+);
+
+// ─── AI Model Pricing Routes (Super Admin Only) ────────────
+
+Router.get(
+  "/ai-pricing",
+  authenticate,
+  authorize({
+    user_type: "management",
+    roles: ["super_admin", "platform_admin"],
+  }),
+  getAiPricingRulesController,
+);
+
+Router.post(
+  "/ai-pricing",
+  authenticate,
+  authorize({
+    user_type: "management",
+    roles: ["super_admin"],
+  }),
+  createAiPricingRuleController,
+);
+
+Router.put(
+  "/ai-pricing/:id",
+  authenticate,
+  authorize({
+    user_type: "management",
+    roles: ["super_admin"],
+  }),
+  updateAiPricingRuleController,
+);
+
+Router.delete(
+  "/ai-pricing/:id",
+  authenticate,
+  authorize({
+    user_type: "management",
+    roles: ["super_admin"],
+  }),
+  deleteAiPricingRuleController,
 );
 
 Router.get(
@@ -90,7 +180,7 @@ Router.get(
   authenticate,
   authorize({
     user_type: "management",
-    roles: ["super_admin"],
+    roles: ["super_admin", "platform_admin"],
   }),
   getDeletedManagementListController,
 );
@@ -115,12 +205,7 @@ Router.delete(
   deleteManagmentByIdController,
 );
 
-
-Router.post(
-  "/forgot-password",
-  forgotManagementPasswordController,
-);
-
+Router.post("/forgot-password", forgotManagementPasswordController);
 
 Router.post("/verify-otp", verifyManagementOTPController);
 Router.post("/reset-password", resetManagementPasswordController);

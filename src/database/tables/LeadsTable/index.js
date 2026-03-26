@@ -14,8 +14,6 @@ export const LeadsTable = (sequelize, Sequelize) => {
         allowNull: false,
       },
 
-      
-
       contact_id: {
         type: Sequelize.STRING,
         allowNull: false,
@@ -44,6 +42,11 @@ export const LeadsTable = (sequelize, Sequelize) => {
         defaultValue: "new",
       },
 
+      ai_summary_created_at: {
+        type: Sequelize.DATE,
+        allowNull: true,
+      },
+
       last_user_message_at: {
         type: Sequelize.DATE,
         allowNull: true,
@@ -61,7 +64,14 @@ export const LeadsTable = (sequelize, Sequelize) => {
       },
 
       lead_stage: {
-        type: Sequelize.ENUM("New", "Contacted", "Qualified", "Negotiation", "Lost", "Won"),
+        type: Sequelize.ENUM(
+          "New",
+          "Contacted",
+          "Qualified",
+          "Negotiation",
+          "Lost",
+          "Won",
+        ),
         allowNull: false,
         defaultValue: "New",
         field: "lead_stage",
@@ -74,8 +84,22 @@ export const LeadsTable = (sequelize, Sequelize) => {
       },
 
       source: {
-        type: Sequelize.STRING,
-        allowNull: true,
+        type: Sequelize.ENUM(
+          "none",
+          "whatsapp",
+          "meta",
+          "website",
+          "google",
+          "referral",
+          "instagram",
+          "facebook",
+          "twitter",
+          "campaign",
+          "post",
+          "other",
+        ),
+        allowNull: false,
+        defaultValue: "none",
         field: "source",
       },
 
@@ -113,7 +137,7 @@ export const LeadsTable = (sequelize, Sequelize) => {
       updatedAt: {
         type: Sequelize.DATE,
         allowNull: false,
-        defaultValue: sequelize.literal("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"),
+        defaultValue: sequelize.literal("CURRENT_TIMESTAMP"),
         field: "updated_at",
       },
     },
@@ -136,9 +160,8 @@ export const LeadsTable = (sequelize, Sequelize) => {
           fields: ["tenant_id", "heat_state", "is_deleted"],
         },
         {
-          name: "unique_lead_contact_active",
-          unique: true,
-          fields: ["contact_id", "is_deleted"],
+          name: "idx_lead_contact_active",
+          fields: ["tenant_id", "contact_id", "is_deleted"],
         },
         {
           name: "idx_lead_last_message",
@@ -149,6 +172,6 @@ export const LeadsTable = (sequelize, Sequelize) => {
           fields: ["is_deleted"],
         },
       ],
-    }
+    },
   );
 };

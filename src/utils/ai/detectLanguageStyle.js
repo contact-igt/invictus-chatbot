@@ -1,7 +1,8 @@
-import { AiService } from "./coreAi.js";
+import { LANGUAGE_DETECT_SYSTEM_PROMPT } from "./prompts/index.js";
 import { normalizeLanguageLabel } from "./normalizeLanguageLabel.js";
+import { AiService } from "./coreAi.js";
 
-export const detectLanguageAI = async (message) => {
+export const detectLanguageAI = async (message, tenant_id = null) => {
   if (!message || typeof message !== "string") {
     return {
       language: "unknown",
@@ -10,32 +11,14 @@ export const detectLanguageAI = async (message) => {
     };
   }
 
-  const LANGUAGE_DETECT_SYSTEM_PROMPT = `
-You are a language and writing-style detector.
+  const systemPrompt = `${LANGUAGE_DETECT_SYSTEM_PROMPT}\n\nUSER MESSAGE:\n${message}`;
 
-Analyze the USER MESSAGE and identify:
-1. Primary spoken language (ALL Indian languages + English).
-2. Writing style:
-   - native_script
-   - romanized
-   - mixed
-
-Return ONLY valid JSON in this format:
-{
-  "language": "",
-  "style": ""
-}
-
-Do not explain.
-Do not add extra text.
-
-USER MESSAGE
-
-${message}
-
-`;
-
-  const result = await AiService("system", LANGUAGE_DETECT_SYSTEM_PROMPT);
+  const result = await AiService(
+    "system",
+    systemPrompt,
+    tenant_id,
+    "language_detect",
+  );
 
   try {
     const parsed = JSON.parse(result);

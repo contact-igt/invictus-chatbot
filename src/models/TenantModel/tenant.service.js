@@ -9,27 +9,36 @@ export const createTenantService = async (
   owner_country_code,
   owner_mobile,
   type,
+  status,
   subscription_start_date,
   subscription_end_date,
+  address,
+  city,
+  country,
+  state,
+  pincode,
+  max_users,
+  subscription_plan,
   profile,
   verify_token = null,
+  ai_settings = null,
 ) => {
-  const Query = `INSERT INTO ${tableNames?.TENANTS} (
-      tenant_id,
-      company_name,
-      owner_name,
-      owner_email,
-      owner_country_code,
-      owner_mobile,
-      type,
-      subscription_start_date,
-      subscription_end_date,
-      profile,
-      verify_token
-  ) VALUES (?,?,?,?,?,?,?,?,?,?,?)`;
-
   try {
-    const values = [
+    // Merge default AI settings with provided ones
+    const defaultAiSettings = {
+      auto_responder: true,
+      smart_reply: true,
+      neural_summary: true,
+      content_generation: true,
+      input_model: "gpt-4o-mini",
+      output_model: "gpt-4o",
+    };
+
+    const mergedAiSettings = ai_settings
+      ? { ...defaultAiSettings, ...ai_settings }
+      : defaultAiSettings;
+
+    const result = await db.Tenants.create({
       tenant_id,
       company_name,
       owner_name,
@@ -37,19 +46,24 @@ export const createTenantService = async (
       owner_country_code,
       owner_mobile,
       type,
+      status,
       subscription_start_date,
       subscription_end_date,
+      address,
+      city,
+      country,
+      state,
+      pincode,
+      max_users,
+      subscription_plan,
       profile,
       verify_token,
-    ];
-    console.log("values", values);
-
-    const [result] = await db.sequelize.query(Query, {
-      replacements: values,
+      ai_settings: mergedAiSettings,
     });
 
     return result;
   } catch (err) {
+    console.error("[TENANT SERVICE] Error creating tenant:", err);
     throw err;
   }
 };
@@ -66,9 +80,9 @@ export const getAllTenantService = async () => {
     WHERE id IN (
       SELECT MAX(id)
       FROM ${tableNames.TENANT_INVITATIONS}
-      GROUP BY tenant_id, email
+      GROUP BY tenant_id
     )
-  ) ti ON t.tenant_id = ti.tenant_id AND t.owner_email = ti.email
+  ) ti ON t.tenant_id = ti.tenant_id
   WHERE t.is_deleted = ?
   ORDER BY t.created_at DESC`;
 
@@ -103,6 +117,18 @@ export const updateTenantService = async (
   owner_country_code,
   owner_mobile,
   type,
+  status,
+  subscription_start_date,
+  subscription_end_date,
+  address,
+  city,
+  country,
+  state,
+  pincode,
+  max_users,
+  subscription_plan,
+  profile,
+  ai_settings,
   tenant_id,
 ) => {
   const updateFields = [];
@@ -136,6 +162,91 @@ export const updateTenantService = async (
   if (type !== undefined && type !== null) {
     updateFields.push("type = ?");
     updateValues.push(type);
+  }
+
+  if (status !== undefined && status !== null) {
+    updateFields.push("status = ?");
+    updateValues.push(status);
+  }
+
+  if (
+    subscription_start_date !== undefined &&
+    subscription_start_date !== null
+  ) {
+    updateFields.push("subscription_start_date = ?");
+    updateValues.push(subscription_start_date);
+  }
+
+  if (subscription_end_date !== undefined && subscription_end_date !== null) {
+    updateFields.push("subscription_end_date = ?");
+    updateValues.push(subscription_end_date);
+  }
+
+  if (address !== undefined && address !== null) {
+    updateFields.push("address = ?");
+    updateValues.push(address);
+  }
+
+  if (country !== undefined && country !== null) {
+    updateFields.push("country = ?");
+    updateValues.push(country);
+  }
+
+  if (state !== undefined && state !== null) {
+    updateFields.push("state = ?");
+    updateValues.push(state);
+  }
+
+  if (city !== undefined && city !== null) {
+    updateFields.push("city = ?");
+    updateValues.push(city);
+  }
+
+  if (pincode !== undefined && pincode !== null) {
+    updateFields.push("pincode = ?");
+    updateValues.push(pincode);
+  }
+
+  if (max_users !== undefined && max_users !== null) {
+    updateFields.push("max_users = ?");
+    updateValues.push(max_users);
+  }
+
+  if (subscription_plan !== undefined && subscription_plan !== null) {
+    updateFields.push("subscription_plan = ?");
+    updateValues.push(subscription_plan);
+  }
+
+  if (profile !== undefined && profile !== null) {
+    updateFields.push("profile = ?");
+    updateValues.push(profile);
+  }
+
+  // Handle AI settings - merge with existing settings to preserve other fields
+  if (ai_settings !== undefined && ai_settings !== null) {
+    // Fetch existing ai_settings to merge
+    const existingTenant = await db.Tenants.findOne({
+      where: { tenant_id },
+      attributes: ["ai_settings"],
+      raw: true,
+    });
+
+    let existingAiSettings = {};
+    if (existingTenant?.ai_settings) {
+      try {
+        existingAiSettings =
+          typeof existingTenant.ai_settings === "string"
+            ? JSON.parse(existingTenant.ai_settings)
+            : existingTenant.ai_settings;
+      } catch (e) {
+        existingAiSettings = {};
+      }
+    }
+
+    // Merge: keep existing settings, update only provided fields
+    const mergedAiSettings = { ...existingAiSettings, ...ai_settings };
+    updateFields.push("ai_settings = ?");
+    updateValues.push(JSON.stringify(mergedAiSettings));
   }
 
   if (updateFields.length === 0) return null;
@@ -174,17 +285,17 @@ export const updateTenantStatusService = async (status, tenant_id) => {
 };
 
 export const softDeleteTenantService = async (tenant_id) => {
-  const Query = `UPDATE ${tableNames?.TENANTS} SET is_deleted = ? , deleted_at = NOW() WHERE tenant_id = ? AND is_deleted = false`;
+  const Query = `UPDATE ${tableNames?.TENANTS} SET is_deleted = ? , deleted_at = NOW() WHERE tenant_id = ? AND is_deleted = 0`;
 
-  const Query2 = `UPDATE ${tableNames?.TENANT_USERS} SET is_deleted = ? , deleted_at = NOW() WHERE tenant_id IN(?) AND is_deleted = false`;
+  const Query2 = `UPDATE ${tableNames?.TENANT_USERS} SET is_deleted = ? , deleted_at = NOW() WHERE tenant_id IN(?) AND is_deleted = 0`;
 
   try {
     const [result] = await db.sequelize.query(Query, {
-      replacements: [true, tenant_id],
+      replacements: [1, tenant_id],
     });
 
     const [result2] = await db.sequelize.query(Query2, {
-      replacements: [true, tenant_id],
+      replacements: [1, tenant_id],
     });
 
     return [result, result2];
@@ -214,7 +325,7 @@ export const deleteTenantService = async (tenant_id) => {
 
 export const getDeletedTenantListService = async () => {
   const Query = `
-    SELECT * FROM ${tableNames.TENANTS}
+    SELECT *, status as tenant_status FROM ${tableNames.TENANTS}
     WHERE is_deleted = ?
     ORDER BY deleted_at DESC
   `;
@@ -232,15 +343,24 @@ export const getDeletedTenantListService = async () => {
 };
 
 export const restoreTenantService = async (tenant_id) => {
+  // Restore tenant — preserve original status if it was 'invited' or 'trial', otherwise default to 'active'
   const Query = `
     UPDATE ${tableNames.TENANTS}
-    SET is_deleted = ?, deleted_at = NULL
+    SET is_deleted = ?, deleted_at = NULL,
+        status = CASE
+          WHEN status IN ('invited', 'trial', 'pending_setup') THEN status
+          ELSE 'active'
+        END
     WHERE tenant_id = ?
   `;
 
   const Query2 = `
     UPDATE ${tableNames.TENANT_USERS}
-    SET is_deleted = ?, deleted_at = NULL
+    SET is_deleted = ?, deleted_at = NULL,
+        status = CASE
+          WHEN (SELECT status FROM ${tableNames.TENANTS} WHERE tenant_id = ?) IN ('active', 'trial', 'grace_period') THEN 'active'
+          ELSE 'inactive'
+        END
     WHERE tenant_id = ?
   `;
 
@@ -250,7 +370,7 @@ export const restoreTenantService = async (tenant_id) => {
     });
 
     const [result2] = await db.sequelize.query(Query2, {
-      replacements: [0, tenant_id],
+      replacements: [0, tenant_id, tenant_id],
     });
 
     return [result, result2];
@@ -272,7 +392,10 @@ export const activateTenantService = async (tenant_id) => {
   }
 };
 
-export const updateTenantVerifyTokenService = async (tenant_id, verify_token) => {
+export const updateTenantVerifyTokenService = async (
+  tenant_id,
+  verify_token,
+) => {
   const Query = `UPDATE ${tableNames?.TENANTS} SET verify_token = ? WHERE tenant_id = ? AND is_deleted = ?`;
 
   try {
@@ -293,6 +416,116 @@ export const updateTenantWebhookStatusService = async (tenant_id, verified) => {
       replacements: [verified, tenant_id, 0],
     });
     return result;
+  } catch (err) {
+    throw err;
+  }
+};
+
+export const getTenantInvitationListService = async () => {
+  const query = `
+    SELECT t.tenant_id, t.company_name, tu.username as owner_name, tu.email as owner_email, ti.status as invitation_status, ti.invited_at, ti.tenant_user_id
+    FROM ${tableNames.TENANTS} t
+    INNER JOIN ${tableNames.TENANT_USERS} tu ON t.tenant_id = tu.tenant_id AND tu.role = 'tenant_admin' AND tu.is_deleted = 0
+    INNER JOIN ${tableNames.TENANT_INVITATIONS} ti ON tu.tenant_user_id = ti.tenant_user_id
+    WHERE ti.id IN (
+      SELECT MAX(id)
+      FROM ${tableNames.TENANT_INVITATIONS}
+      GROUP BY tenant_user_id
+    ) AND t.is_deleted = ?
+    ORDER BY ti.invited_at DESC`;
+
+  try {
+    const [rows] = await db.sequelize.query(query, {
+      replacements: [0],
+    });
+    return rows;
+  } catch (err) {
+    throw err;
+  }
+};
+
+export const getOnboardedTenantListService = async () => {
+  // Only return tenants that have completed full onboarding:
+  // 1. Tenant exists (email set)
+  // 2. Password set (tenant_users.password_hash is not null AND status = 'active')
+  // 3. WhatsApp connected (whatsapp_accounts entry exists with status 'active' or 'verified')
+  const query = `
+    SELECT 
+      t.*,
+      wa.status as whatsapp_status,
+      wa.whatsapp_number,
+      tu.status as admin_status
+    FROM ${tableNames.TENANTS} t
+    INNER JOIN ${tableNames.TENANT_USERS} tu ON t.tenant_id = tu.tenant_id 
+      AND tu.role = 'tenant_admin' 
+      AND tu.password_hash IS NOT NULL 
+      AND tu.status = 'active'
+      AND tu.is_deleted = false
+    INNER JOIN ${tableNames.WHATSAPP_ACCOUNT} wa ON t.tenant_id = wa.tenant_id 
+      AND wa.status IN ('active', 'verified')
+      AND wa.is_deleted = false
+    WHERE t.is_deleted = false
+    ORDER BY t.created_at DESC`;
+
+  try {
+    const [rows] = await db.sequelize.query(query);
+    return rows;
+  } catch (err) {
+    console.error("[getOnboardedTenantListService] Error:", err);
+    throw err;
+  }
+};
+
+export const getTenantSettingsService = async (tenant_id) => {
+  const Query = `SELECT company_name, owner_email, owner_name, type, ai_settings FROM ${tableNames?.TENANTS} WHERE tenant_id = ? AND is_deleted = ?`;
+
+  try {
+    const [result] = await db.sequelize.query(Query, {
+      replacements: [tenant_id, 0],
+    });
+    const tenantData = result[0];
+    if (tenantData && typeof tenantData.ai_settings === "string") {
+      try {
+        tenantData.ai_settings = JSON.parse(tenantData.ai_settings);
+      } catch (e) {
+        console.error("Failed to parse ai_settings on read");
+      }
+    }
+    return tenantData;
+  } catch (err) {
+    throw err;
+  }
+};
+
+export const updateTenantAiSettingsService = async (tenant_id, ai_settings) => {
+  // Merge existing settings before updating
+  const currentSettings = await getTenantSettingsService(tenant_id);
+
+  let parsedSettings = {};
+  if (currentSettings && currentSettings.ai_settings) {
+    if (typeof currentSettings.ai_settings === "string") {
+      try {
+        parsedSettings = JSON.parse(currentSettings.ai_settings);
+      } catch (e) {
+        console.error("Failed to parse ai_settings string");
+      }
+    } else {
+      parsedSettings = currentSettings.ai_settings;
+    }
+  }
+
+  const updatedSettings = {
+    ...parsedSettings,
+    ...ai_settings,
+  };
+
+  const Query = `UPDATE ${tableNames?.TENANTS} SET ai_settings = ? WHERE tenant_id = ? AND is_deleted = ?`;
+
+  try {
+    const [result] = await db.sequelize.query(Query, {
+      replacements: [JSON.stringify(updatedSettings), tenant_id, 0],
+    });
+    return Object.keys(result).length > 0;
   } catch (err) {
     throw err;
   }

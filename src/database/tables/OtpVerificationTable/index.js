@@ -13,7 +13,12 @@ export const OtpVerificationTable = (sequelize, Sequelize) => {
 
             email: {
                 type: Sequelize.STRING,
-                allowNull: false,
+                allowNull: true,
+            },
+
+            phone: {
+                type: Sequelize.STRING(20),
+                allowNull: true,
             },
 
             otp: {
@@ -34,7 +39,18 @@ export const OtpVerificationTable = (sequelize, Sequelize) => {
 
             user_type: {
                 type: Sequelize.ENUM("tenant", "management"),
+                allowNull: true,
+            },
+
+            channel: {
+                type: Sequelize.ENUM("email", "whatsapp"),
                 allowNull: false,
+                defaultValue: "email",
+            },
+
+            template_name: {
+                type: Sequelize.STRING(255),
+                allowNull: true,
             },
 
             createdAt: {
@@ -57,6 +73,9 @@ export const OtpVerificationTable = (sequelize, Sequelize) => {
                     name: "idx_otp_verified",
                     fields: ["is_verified"],
                 },
+                // NOTE: idx_otp_phone_channel is created via migrations/add_whatsapp_otp_columns.sql
+                // Do NOT define it here — Sequelize sync() will crash if 'phone'/'channel' columns
+                // don't exist in the live DB yet.
             ],
         }
     );
