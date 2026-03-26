@@ -7,6 +7,8 @@ import {
   softDeleteWhatsappAccountService,
   permanentDeleteWhatsappAccountService,
   syncWabaMetaInfoService,
+  subscribeToWebhookFieldsService,
+  validateMetaSubscriptionService,
 } from "./whatsappAccount.service.js";
 import { missingFieldsChecker } from "../../utils/helpers/missingFields.js";
 
@@ -374,6 +376,68 @@ export const permanentDeleteWhatsappAccountController = async (req, res) => {
   } catch (err) {
     return res.status(500).send({
       message: err?.message,
+    });
+  }
+};
+
+/**
+ * Subscribe app to webhook fields (messages, message_template_status_update)
+ * This should be called after webhook verification to complete the setup
+ */
+export const subscribeToWebhooksController = async (req, res) => {
+  const tenant_id = req.user.tenant_id;
+
+  try {
+    // Get WhatsApp account for this tenant
+    const account = await getWhatsappAccountByTenantService(tenant_id);
+
+    if (!account) {
+      return res.status(400).send({
+        success: false,
+        message:
+          "WhatsApp account not configured. Please set up your WhatsApp account first.",
+      });
+    }
+
+    if (!account.waba_id || !account.access_token) {
+      return res.status(400).send({
+        success: false,
+        message:
+          "Missing WABA ID or Access Token. Please configure your WhatsApp account.",
+      });
+    }
+
+    // Subscribe to webhook fields
+    const subscriptionResult = await subscribeToWebhookFieldsService(
+      account.waba_id,
+      account.access_token,
+    );
+
+    if (!subscriptionResult.success) {
+      return res.status(400).send({
+        success: false,
+        message:
+          subscriptionResult.error || "Failed to subscribe to webhook fields",
+      });
+    }
+
+    // Verify the subscription
+    const verifyResult = await validateMetaSubscriptionService(
+      account.waba_id,
+      account.access_token,
+    );
+
+    return res.status(200).send({
+      success: true,
+      message:
+        "Successfully subscribed to Meta webhook fields (messages, message_template_status_update)",
+      subscription: verifyResult,
+    });
+  } catch (err) {
+    console.error("Subscribe to webhooks error:", err);
+    return res.status(500).send({
+      success: false,
+      message: err?.message || "Failed to subscribe to webhooks",
     });
   }
 };

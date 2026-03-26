@@ -232,14 +232,15 @@ export const assignAgentToLiveChatService = async (
 };
 
 /**
- * Get all active users (agents/staff/doctors/admins) for the assign dropdown
+ * Get all active users (agents/staff/admins) for the assign dropdown
+ * Note: Doctors are excluded from agent matrix - they are managed separately
  */
 export const getAgentListService = async (tenant_id) => {
   const Query = `
     SELECT tenant_user_id, username, role, profile
     FROM ${tableNames.TENANT_USERS}
     WHERE tenant_id = ?
-      AND role IN ('agent', 'staff', 'doctor', 'tenant_admin')
+      AND role IN ('agent', 'staff', 'tenant_admin')
       AND is_deleted = false
       AND status = 'active'
     ORDER BY username ASC

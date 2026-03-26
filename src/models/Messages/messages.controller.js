@@ -105,7 +105,7 @@ export const sendAdminMessage = async (req, res) => {
       msgResponse.wamid,
       name,
       "admin",
-      req.user.tenant_user_id || null,
+      req.user.username || "Admin",
       message,
       "text",
       null,
@@ -129,6 +129,7 @@ export const sendAdminMessage = async (req, res) => {
       media_url: null,
       status: "sent",
       sender: "admin",
+      sender_id: req.user.username || "Admin",
       created_at: new Date(),
     });
 
@@ -276,16 +277,25 @@ export const sendTemplateMessageController = async (req, res) => {
 
     // Extract document filename from header component if present
     let templateMediaFilename = null;
-    if (templateMediaType === "document" && headerComp?.parameters?.[0]?.document?.filename) {
+    if (
+      templateMediaType === "document" &&
+      headerComp?.parameters?.[0]?.document?.filename
+    ) {
       templateMediaFilename = headerComp.parameters[0].document.filename;
     }
 
     // Derive MIME type from filename for document templates
     let templateMediaMimeType = null;
     if (templateMediaType === "document" && templateMediaFilename) {
-      const ext = templateMediaFilename.split('.').pop()?.toLowerCase();
-      const mimeMap = { pdf: 'application/pdf', doc: 'application/msword', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', xls: 'application/vnd.ms-excel', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' };
-      templateMediaMimeType = mimeMap[ext] || 'application/octet-stream';
+      const ext = templateMediaFilename.split(".").pop()?.toLowerCase();
+      const mimeMap = {
+        pdf: "application/pdf",
+        doc: "application/msword",
+        docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        xls: "application/vnd.ms-excel",
+        xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      };
+      templateMediaMimeType = mimeMap[ext] || "application/octet-stream";
     }
 
     // 3. Log to Messages
