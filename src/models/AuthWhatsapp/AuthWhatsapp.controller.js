@@ -399,7 +399,7 @@ export const receiveMessage = async (req, res) => {
       type,
       media_url,
       media_mime_type,
-      "received",
+      null, // status is for outbound delivery tracking, null for incoming messages
       null,
       media_filename,
     );
