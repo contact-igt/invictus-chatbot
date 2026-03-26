@@ -495,6 +495,7 @@ export const generateAiTemplateController = async (req, res) => {
       focus,
       style,
       optimization,
+      language,
       previous_content,
       rejection_reason,
     } = req.body;
@@ -519,6 +520,7 @@ export const generateAiTemplateController = async (req, res) => {
       focus,
       style,
       optimization,
+      language: language || 'English',
       previous_content,
       rejection_reason,
     });

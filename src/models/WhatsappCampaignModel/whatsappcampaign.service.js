@@ -334,9 +334,9 @@ export const executeCampaignBatchService = async (
       return { finished: true };
     }
 
-    // Fetch Template Components (Body and Header)
+    // Fetch Template Components (Body, Header, Footer, Buttons)
     const [components_data] = await db.sequelize.query(
-      `SELECT component_type, text_content, header_format FROM ${tableNames.WHATSAPP_TEMPLATE_COMPONENTS} WHERE template_id = ? AND component_type IN ('body', 'header')`,
+      `SELECT component_type, text_content, header_format FROM ${tableNames.WHATSAPP_TEMPLATE_COMPONENTS} WHERE template_id = ? AND component_type IN ('body', 'header', 'footer', 'buttons')`,
       { replacements: [campaign.template_id] },
     );
 
@@ -345,6 +345,12 @@ export const executeCampaignBatchService = async (
     );
     const headerComponent = components_data.find(
       (c) => c.component_type === "header",
+    );
+    const footerComponent = components_data.find(
+      (c) => c.component_type === "footer",
+    );
+    const buttonsComponent = components_data.find(
+      (c) => c.component_type === "buttons",
     );
 
     const templateBodyText =
@@ -691,6 +697,31 @@ export const executeCampaignBatchService = async (
               personalizedMessage = `[${headerFormat.toUpperCase()}: ${finalMediaUrl}]\n${personalizedMessage}`;
             } else {
               personalizedMessage = `[${headerFormat.toUpperCase()}]\n${personalizedMessage}`;
+            }
+          }
+
+          // Append footer text if present
+          if (footerComponent?.text_content) {
+            personalizedMessage += "\n" + footerComponent.text_content;
+          }
+
+          // Append button markers for chat display
+          if (buttonsComponent?.text_content) {
+            try {
+              const buttons = JSON.parse(buttonsComponent.text_content);
+              if (Array.isArray(buttons)) {
+                buttons.forEach((btn) => {
+                  let btnLabel = btn.text;
+                  if (btn.type === 'URL' && btn.url) {
+                    btnLabel += ` (${btn.url})`;
+                  } else if (btn.type === 'PHONE_NUMBER' && btn.phone_number) {
+                    btnLabel += ` (${btn.phone_number})`;
+                  }
+                  personalizedMessage += `\n[Button: ${btnLabel}]`;
+                });
+              }
+            } catch (e) {
+              // Silently fail if JSON parsing fails
             }
           }
 

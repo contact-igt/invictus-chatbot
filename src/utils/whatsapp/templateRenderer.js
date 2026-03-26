@@ -87,8 +87,15 @@ export const renderTemplateContent = async (template_id, dynamicComponents = [])
             if (btn.type === 'URL' && btn.url && btn.url.includes('{{1}}')) {
               const btnParams = dynamicComponents?.find((c) => c.type === "button" && String(c.index) === String(index))?.parameters || [];
               if (btnParams?.[0]?.text) {
-                btnText += ` (${btnParams[0].text})`;
+                // Replace {{1}} with actual value to form complete URL
+                const resolvedUrl = btn.url.replace('{{1}}', btnParams[0].text);
+                btnText += ` (${resolvedUrl})`;
               }
+            } else if (btn.type === 'URL' && btn.url) {
+              // Static URL button
+              btnText += ` (${btn.url})`;
+            } else if (btn.type === 'PHONE_NUMBER' && btn.phone_number) {
+              btnText += ` (${btn.phone_number})`;
             }
             
             messageContent += `\n[Button: ${btnText}]`;

@@ -1529,6 +1529,7 @@ export const generateTemplateContentService = async ({
   focus,
   style,
   optimization,
+  language = 'English',
   prompt,
   previous_content = null,
   rejection_reason = null,
@@ -1537,6 +1538,7 @@ export const generateTemplateContentService = async ({
     focus,
     style,
     optimization,
+    language,
     previousContent: previous_content,
     rejectionReason: rejection_reason,
   });

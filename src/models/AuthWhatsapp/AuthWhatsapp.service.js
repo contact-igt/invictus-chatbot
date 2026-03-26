@@ -3,7 +3,6 @@ import https from "https";
 import OpenAI from "openai";
 import db from "../../database/index.js";
 import { tableNames } from "../../database/tableName.js";
-
 import { buildAiSystemPrompt } from "../../utils/ai/aiFlowHelper.js";
 import { getConversationMemory } from "../Messages/messages.memory.js";
 import { detectLanguageAI } from "../../utils/ai/detectLanguageStyle.js";
