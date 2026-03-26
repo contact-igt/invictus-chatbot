@@ -116,7 +116,10 @@ export const sendWhatsAppLocation = async (tenant_id, to, locationParams) => {
     },
   };
 
-  console.log(`[SEND-LOCATION] Sending location to ${to}:`, JSON.stringify(payload, null, 2));
+  console.log(
+    `[SEND-LOCATION] Sending location to ${to}:`,
+    JSON.stringify(payload, null, 2),
+  );
 
   try {
     const response = await axios.post(
@@ -135,7 +138,10 @@ export const sendWhatsAppLocation = async (tenant_id, to, locationParams) => {
     return { phone_number_id, meta_message_id };
   } catch (error) {
     if (error.response) {
-      console.error("[SEND-LOCATION] Meta API Error:", JSON.stringify(error.response.data, null, 2));
+      console.error(
+        "[SEND-LOCATION] Meta API Error:",
+        JSON.stringify(error.response.data, null, 2),
+      );
       const metaErr = error.response.data?.error || {};
       const message = metaErr.message || error.message;
       throw new Error(`Meta API Location Error: ${message}`);
@@ -413,6 +419,7 @@ export const getOpenAIReply = async (
   userMessage,
   contact_id = null,
   phone_number_id = null,
+  cachedData = {},
 ) => {
   try {
     if (!userMessage) return null;
@@ -420,10 +427,11 @@ export const getOpenAIReply = async (
     const cleanMessage = userMessage.trim();
     if (!cleanMessage) return null;
 
-    // Fetch tenant timezone from settings (default to Asia/Kolkata for backward compatibility)
+    // Use cached tenant settings or fetch if not provided
     const { getTenantSettingsService } =
       await import("../TenantModel/tenant.service.js");
-    const tenantSettings = await getTenantSettingsService(tenant_id);
+    const tenantSettings =
+      cachedData.tenantSettings || (await getTenantSettingsService(tenant_id));
     const tenantTimezone = tenantSettings?.timezone || "Asia/Kolkata";
 
     const now = new Date(
@@ -454,11 +462,13 @@ export const getOpenAIReply = async (
     const chatHistory = buildChatHistory(memory);
 
     // Use centralized AI flow helper for parity with Playground
+    // Pass cached data including tenantSettings to avoid redundant DB calls
     const { systemPrompt } = await buildAiSystemPrompt(
       tenant_id,
       contact_id,
       languageInfo,
       cleanMessage,
+      { ...cachedData, tenantSettings },
     );
 
     const aiMessages = [
