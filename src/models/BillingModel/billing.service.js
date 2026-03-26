@@ -20,18 +20,6 @@ export const processBillingFromWebhook = async (tenant_id, statusUpdate) => {
       return;
     }
 
-    // Prevent duplicate processing if we already handled this message_id
-    const existingUsage = await db.MessageUsage.findOne({
-      where: { message_id },
-    });
-    if (existingUsage) {
-      // If we already captured the cost, but string changed to delivered/read, just update status
-      if (existingUsage.status !== status) {
-        await existingUsage.update({ status });
-      }
-      return;
-    }
-
     // Meta sends categories in UPPERCASE (e.g., "MARKETING"), normalize to lowercase for our ENUM
     const rawCategory =
       pricing.category || conversation?.origin?.type || "service";
@@ -40,15 +28,27 @@ export const processBillingFromWebhook = async (tenant_id, statusUpdate) => {
     const conversation_id = conversation?.id || null;
 
     // 1. Create MessageUsage Record (Tracks BOTH billable and free conversations)
-    const usageRecord = await db.MessageUsage.create({
-      tenant_id,
-      message_id,
-      conversation_id,
-      category,
-      billable,
-      status, // 'sent'
-      timestamp: new Date(),
+    // Use findOrCreate to handle race conditions where multiple webhooks arrive simultaneously
+    const [usageRecord, created] = await db.MessageUsage.findOrCreate({
+      where: { message_id },
+      defaults: {
+        tenant_id,
+        message_id,
+        conversation_id,
+        category,
+        billable,
+        status, // 'sent'
+        timestamp: new Date(),
+      },
     });
+
+    // If record already existed, just update status if changed
+    if (!created) {
+      if (usageRecord.status !== status) {
+        await usageRecord.update({ status });
+      }
+      return;
+    }
 
     // 2. Calculate Cost (Look up closest pricing rule)
     // In Meta, the appropriate country is critical for pricing.
