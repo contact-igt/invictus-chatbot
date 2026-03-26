@@ -404,9 +404,7 @@ export const receiveMessage = async (req, res) => {
       media_filename,
     );
 
-    // 7. Emit Real-time Event to Frontend
     const ioInstance = getIO();
-    // Start typing indicator immediately for better perceived performance
     ioInstance.to(`tenant-${tenant_id}`).emit("ai-typing", {
       tenant_id,
       phone,
