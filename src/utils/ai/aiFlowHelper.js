@@ -59,15 +59,29 @@ export const buildAiSystemPrompt = async (
   });
 
   // 1. Fetch Prompts & Knowledge
-  const hospitalPrompt =
-    (await getActivePromptService(tenant_id)) || DEFAULT_SYSTEM_PROMPT;
+  let hospitalPrompt = DEFAULT_SYSTEM_PROMPT;
+  try {
+    hospitalPrompt = (await getActivePromptService(tenant_id)) || DEFAULT_SYSTEM_PROMPT;
+  } catch (promptErr) {
+    console.error("[AI-FLOW-HELPER] Active prompt fetch failed:", promptErr.message);
+  }
 
   const commonBasePrompt = getCommonBasePrompt(languageInfo, businessName);
 
-  const { chunks, resolvedLogs, sources } = await searchKnowledgeChunks(
-    tenant_id,
-    userMessage,
-  );
+  let chunks = [];
+  let resolvedLogs = [];
+  let sources = [];
+  try {
+    const searchResult = await searchKnowledgeChunks(
+      tenant_id,
+      userMessage,
+    );
+    chunks = searchResult.chunks || [];
+    resolvedLogs = searchResult.resolvedLogs || [];
+    sources = searchResult.sources || [];
+  } catch (knErr) {
+    console.error("[AI-FLOW-HELPER] Knowledge search failed:", knErr.message);
+  }
 
   const knowledgeContext =
     chunks && chunks.length > 0
@@ -223,6 +237,12 @@ STRICT SOURCE OF TRUTH MANDATE:
 - If an appointment ID is NOT in the lists below, it does NOT exist. Do NOT assume, estimate, or hallucinate status.
 - If an appointment is in "PAST APPOINTMENTS", it has already happened; do not try to cancel or update it unless explicitly requested for a reschedule.
 - If a doctor is listed with status 'busy' or 'off duty', they are currently unavailable for new bookings.
+
+KNOWLEDGE BASE STRICT RULE:
+- For ANY factual or informational question (about services, clinic, policies, procedures, prices, timings, etc.), you MUST answer ONLY from the "UPLOADED KNOWLEDGE" section below.
+- Do NOT use information from previous conversation messages to answer knowledge questions. Previous chat messages may contain outdated or deactivated information.
+- If the "UPLOADED KNOWLEDGE" section says "No relevant uploaded documents" or does not contain the answer, respond with: "I don't have that information right now. Let me connect you with our team." and tag [MISSING_KNOWLEDGE: <topic>].
+- NEVER make up, guess, or recall factual answers from conversation history. Only the UPLOADED KNOWLEDGE section is the current source of truth.
 
 ${leadSourcePrompt}
 

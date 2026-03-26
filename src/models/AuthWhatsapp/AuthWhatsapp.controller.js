@@ -9,7 +9,6 @@ import {
   lockChat,
   markMessageProcessed,
   sendWhatsAppMessage,
-  sendReadReceipt,
   sendTypingIndicator,
   unlockChat,
 } from "./AuthWhatsapp.service.js";
@@ -337,9 +336,9 @@ export const receiveMessage = async (req, res) => {
     if (ismessage?.length > 0) return res.sendStatus(200);
     await markMessageProcessed(tenant_id, phone_number_id, messageId, phone);
 
-    // 4.5 Send Read Receipt to Meta (Blue Tick)
+    // 4.5 Send Read Receipt + Typing Indicator to Meta (Blue Tick + Typing)
     setImmediate(() => {
-      sendReadReceipt(tenant_id, phone_number_id, messageId);
+      sendTypingIndicator(tenant_id, phone_number_id, phone, messageId);
     });
 
     // 5. Manage Contact and LiveChat
@@ -409,12 +408,6 @@ export const receiveMessage = async (req, res) => {
     );
 
     const ioInstance = getIO();
-    ioInstance.to(`tenant-${tenant_id}`).emit("ai-typing", {
-      tenant_id,
-      phone,
-      status: true,
-    });
-
     ioInstance.to(`tenant-${tenant_id}`).emit("new-message", {
       tenant_id,
       phone,

@@ -277,6 +277,7 @@ export const sendTypingIndicator = async (
   tenant_id,
   phone_number_id,
   phone,
+  message_id,
 ) => {
   try {
     // 1. Emit Socket event for Whatnexus Dashboard Animation
@@ -296,7 +297,9 @@ export const sendTypingIndicator = async (
       console.error("[TYPING] Socket Emit Error:", socketErr.message);
     }
 
-    // 2. Fetch token and attempt to notify Meta (status: read fallback)
+    // 2. Fetch token and send read receipt + typing indicator to Meta
+    if (!message_id) return;
+
     const [rows] = await db.sequelize.query(
       `
     SELECT access_token
@@ -312,12 +315,31 @@ export const sendTypingIndicator = async (
     if (!rows.length) return;
 
     const META_API_VERSION = process.env.META_API_VERSION || "v22.0";
+    const access_token = rows[0]?.access_token;
+    if (!access_token) return;
+
     try {
-      // NOTE: WhatsApp Cloud API doesn't have a native 'typing' status for businesses.
-      // We send a read receipt if we didn't send one before, as a fallback "seen" signal.
-      // Some specialized APIs use 'typing', but for Cloud API 'read' is the standard feedback.
+      // WhatsApp Cloud API: mark as read + show typing indicator in one call
+      await axios.post(
+        `https://graph.facebook.com/${META_API_VERSION}/${phone_number_id}/messages`,
+        {
+          messaging_product: "whatsapp",
+          status: "read",
+          message_id,
+          typing_indicator: {
+            type: "text",
+          },
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${access_token}`,
+            "Content-Type": "application/json",
+          },
+        },
+      );
     } catch (apiErr) {
-      // Suppress error
+      // Typing indicator may not be supported on all API versions — suppress gracefully
+      console.debug("[TYPING] Meta API typing indicator failed:", apiErr?.response?.data?.error?.message || apiErr.message);
     }
   } catch (err) {
     console.error("[TYPING] Database Error:", err.message);
@@ -454,22 +476,38 @@ export const getOpenAIReply = async (
       hour12: true,
     });
 
-    const languageInfo = await detectLanguageAI(cleanMessage, tenant_id);
+    const languageInfo = await detectLanguageAI(cleanMessage, tenant_id).catch((err) => {
+      console.error("[WHATSAPP-AI] Language detection failed:", err.message);
+      return { language: "unknown", style: "unknown", label: "unknown" };
+    });
 
     console.log("language", languageInfo);
 
-    const memory = await getConversationMemory(tenant_id, phone, contact_id);
-    const chatHistory = buildChatHistory(memory);
+    let chatHistory = [];
+    try {
+      const memory = await getConversationMemory(tenant_id, phone, contact_id);
+      chatHistory = buildChatHistory(memory);
+    } catch (memErr) {
+      console.error("[WHATSAPP-AI] Memory/history failed:", memErr.message);
+    }
 
     // Use centralized AI flow helper for parity with Playground
     // Pass cached data including tenantSettings to avoid redundant DB calls
-    const { systemPrompt } = await buildAiSystemPrompt(
-      tenant_id,
-      contact_id,
-      languageInfo,
-      cleanMessage,
-      { ...cachedData, tenantSettings },
-    );
+    let systemPrompt = "";
+    try {
+      const promptResult = await buildAiSystemPrompt(
+        tenant_id,
+        contact_id,
+        languageInfo,
+        cleanMessage,
+        { ...cachedData, tenantSettings },
+      );
+      systemPrompt = promptResult.systemPrompt;
+    } catch (promptErr) {
+      console.error("[WHATSAPP-AI] System prompt build failed:", promptErr.message);
+      // Use a minimal fallback prompt so AI can still respond
+      systemPrompt = "You are a helpful AI assistant. Answer the user's question.";
+    }
 
     const aiMessages = [
       { role: "system", content: systemPrompt },
@@ -525,13 +563,19 @@ export const getOpenAIReply = async (
     console.log("[WHATSAPP-AI-RAW]", rawReply);
 
     // Step 1: Clean any residual manual tags and extract metadata
-    const processed = await processResponse(rawReply, {
-      tenant_id,
-      userMessage: cleanMessage,
-      contact_id,
-      phone,
-      phone_number_id,
-    });
+    let processed;
+    try {
+      processed = await processResponse(rawReply, {
+        tenant_id,
+        userMessage: cleanMessage,
+        contact_id,
+        phone,
+        phone_number_id,
+      });
+    } catch (procErr) {
+      console.error("[WHATSAPP-AI] processResponse failed:", procErr.message);
+      processed = { message: rawReply, tagDetected: null, tagPayload: null };
+    }
 
     const finalReply = processed.message;
 
