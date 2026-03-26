@@ -15,18 +15,24 @@ import { getTenantSettingsService } from "../../models/TenantModel/tenant.servic
 /**
  * Shared utility to build the complete System Prompt for the AI flow.
  * Used by both production WhatsApp chat and Playground.
+ * @param {Object} cachedData - Optional pre-fetched data to avoid redundant DB calls
+ * @param {Object} cachedData.tenantSettings - Tenant settings (timezone, company_name, etc.)
+ * @param {Object} cachedData.contact - Contact object (name, email, phone)
+ * @param {Object} cachedData.lead - Lead object (source, etc.)
  */
 export const buildAiSystemPrompt = async (
   tenant_id,
   contact_id,
   languageInfo,
   userMessage,
+  cachedData = {},
 ) => {
-  // Fetch tenant settings including timezone and company name
+  // Use cached tenant settings or fetch if not provided
   let businessName = "our clinic";
   let tenantTimezone = "Asia/Kolkata"; // Default for backward compatibility
   try {
-    const tenantSettings = await getTenantSettingsService(tenant_id);
+    const tenantSettings =
+      cachedData.tenantSettings || (await getTenantSettingsService(tenant_id));
     if (tenantSettings?.company_name)
       businessName = tenantSettings.company_name;
     if (tenantSettings?.timezone) tenantTimezone = tenantSettings.timezone;
@@ -93,16 +99,24 @@ ${resolvedContext}
 
   if (contact_id) {
     try {
-      const contact = await db.Contacts.findOne({
-        where: { contact_id, tenant_id },
-        attributes: ["name", "email", "phone"],
-      });
+      // Use cached contact or fetch if not provided
+      const contact =
+        cachedData.contact ||
+        (await db.Contacts.findOne({
+          where: { contact_id, tenant_id },
+          attributes: ["name", "email", "phone"],
+        }));
       if (contact) {
-        const emailStatus = contact.email ? `${contact.email} (on file)` : "NOT PROVIDED — MUST ASK";
+        const emailStatus = contact.email
+          ? `${contact.email} (on file)`
+          : "NOT PROVIDED — MUST ASK";
         patientProfileSection = `PATIENT PROFILE:\n- Name: ${contact.name || "Unknown — MUST ASK"}\n- Email: ${emailStatus}\n- Phone: ${contact.phone || "Known"}`;
       }
 
-      const lead = await getLeadByContactIdService(tenant_id, contact_id);
+      // Use cached lead or fetch if not provided
+      const lead =
+        cachedData.lead ||
+        (await getLeadByContactIdService(tenant_id, contact_id));
       if (lead && lead.source === "none") {
         leadSourcePrompt = getLeadSourcePrompt(contact_id);
       }

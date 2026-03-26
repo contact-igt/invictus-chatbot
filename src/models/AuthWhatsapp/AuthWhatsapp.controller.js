@@ -575,12 +575,20 @@ export const receiveMessage = async (req, res) => {
           return;
         }
 
+        // Pass cached data to avoid redundant DB calls in AI flow
+        const cachedData = {
+          tenantSettings,
+          contact: contactsaved,
+          lead: leadSaved,
+        };
+
         const aiResult = await getOpenAIReply(
           tenant_id,
           phone,
           text,
           contactsaved?.contact_id,
           phone_number_id,
+          cachedData,
         );
 
         // Log AI result for debugging UPDATE/CANCEL issues
