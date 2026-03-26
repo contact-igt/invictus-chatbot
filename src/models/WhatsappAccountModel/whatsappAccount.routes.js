@@ -8,6 +8,7 @@ import {
   getWhatsappAccountController,
   softDeleteWhatsappAccountController,
   permanentDeleteWhatsappAccountController,
+  subscribeToWebhooksController,
 } from "./whatsappAccount.controller.js";
 
 import {
@@ -69,6 +70,14 @@ router.delete(
   authenticate,
   authorize({ user_type: "tenant", roles: ["tenant_admin"] }),
   permanentDeleteWhatsappAccountController,
+);
+
+// Subscribe app to Meta webhook fields (messages, message_template_status_update)
+router.post(
+  "/whatsapp-account/subscribe-webhooks",
+  authenticate,
+  authorize({ user_type: "tenant", roles: ["tenant_admin"] }),
+  subscribeToWebhooksController,
 );
 
 export default router;

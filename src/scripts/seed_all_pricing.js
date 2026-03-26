@@ -192,18 +192,6 @@ const AI_MODEL_PRICING = [
     is_active: true,
   },
   {
-    model: "gpt-4.1",
-    description:
-      "Latest flagship model with improved coding and instruction following",
-    recommended_for: "both",
-    category: "premium",
-    input_rate: 2.0,
-    output_rate: 8.0,
-    markup_percent: 0,
-    usd_to_inr_rate: 85.0,
-    is_active: true,
-  },
-  {
     model: "gpt-4.5",
     description:
       "Most capable GPT model with enhanced creativity and nuanced understanding",
@@ -217,22 +205,11 @@ const AI_MODEL_PRICING = [
   },
   {
     model: "gpt-5",
-    description: "Next generation GPT model (hypothetical future release)",
+    description: "Next generation GPT model",
     recommended_for: "output",
     category: "premium",
     input_rate: 100.0,
     output_rate: 300.0,
-    markup_percent: 0,
-    usd_to_inr_rate: 85.0,
-    is_active: true, // Not yet available
-  },
-  {
-    model: "gpt-4o-audio-preview",
-    description: "GPT-4o with audio input/output capabilities",
-    recommended_for: "both",
-    category: "premium",
-    input_rate: 2.5,
-    output_rate: 10.0,
     markup_percent: 0,
     usd_to_inr_rate: 85.0,
     is_active: true,
@@ -270,7 +247,7 @@ const AI_MODEL_PRICING = [
     output_rate: 24.0,
     markup_percent: 0,
     usd_to_inr_rate: 85.0,
-    is_active: true, // Not yet available
+    is_active: true,
   },
 
   // ──────────────── BUDGET TIER ────────────────
@@ -311,28 +288,6 @@ const AI_MODEL_PRICING = [
 
   // ──────────────── REASONING MODELS ────────────────
   {
-    model: "o1",
-    description: "OpenAI flagship reasoning model for complex multi-step tasks",
-    recommended_for: "output",
-    category: "reasoning",
-    input_rate: 15.0,
-    output_rate: 60.0,
-    markup_percent: 0,
-    usd_to_inr_rate: 85.0,
-    is_active: true,
-  },
-  {
-    model: "o1-mini",
-    description: "Fast, affordable reasoning model for STEM and coding tasks",
-    recommended_for: "both",
-    category: "reasoning",
-    input_rate: 1.1,
-    output_rate: 4.4,
-    markup_percent: 0,
-    usd_to_inr_rate: 85.0,
-    is_active: true,
-  },
-  {
     model: "o3",
     description:
       "Advanced reasoning model with superior problem-solving ability",
@@ -351,18 +306,6 @@ const AI_MODEL_PRICING = [
     category: "reasoning",
     input_rate: 1.1,
     output_rate: 4.4,
-    markup_percent: 0,
-    usd_to_inr_rate: 85.0,
-    is_active: true,
-  },
-  {
-    model: "o3-pro",
-    description:
-      "Professional-grade reasoning model for the most demanding tasks",
-    recommended_for: "output",
-    category: "reasoning",
-    input_rate: 20.0,
-    output_rate: 80.0,
     markup_percent: 0,
     usd_to_inr_rate: 85.0,
     is_active: true,

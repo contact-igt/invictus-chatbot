@@ -398,6 +398,48 @@ export const validateMetaSubscriptionService = async (
 };
 
 /**
+ * Subscribes the app to webhook fields for the WABA
+ * Meta API: POST /{waba_id}/subscribed_apps
+ *
+ * This actually subscribes the app to receive webhook events like:
+ * - messages (incoming messages)
+ * - message_template_status_update (template approval status changes)
+ */
+export const subscribeToWebhookFieldsService = async (
+  waba_id,
+  access_token,
+) => {
+  try {
+    const response = await axios.post(
+      `https://graph.facebook.com/v19.0/${waba_id}/subscribed_apps`,
+      null,
+      {
+        params: { access_token },
+        timeout: 10000,
+      },
+    );
+
+    if (response.data?.success) {
+      return {
+        success: true,
+        message:
+          "Successfully subscribed to webhook fields (messages, message_template_status_update)",
+      };
+    }
+
+    return {
+      success: false,
+      message: "Subscription request did not return success",
+    };
+  } catch (err) {
+    return {
+      success: false,
+      error: err?.response?.data?.error?.message || err.message,
+    };
+  }
+};
+
+/**
  * Gets comprehensive webhook and WhatsApp configuration status for a tenant
  * Returns detailed status for all verification components
  */

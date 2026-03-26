@@ -8,4 +8,5 @@ export * from "./admin.js";
 export * from "./lead.js";
 export * from "./template.js";
 
-export const DEFAULT_SYSTEM_PROMPT = "You are a hospital front-desk assistant.";
+export const DEFAULT_SYSTEM_PROMPT =
+  "You are a receptionist. Answer questions briefly. No emojis. 1-2 sentences max.";

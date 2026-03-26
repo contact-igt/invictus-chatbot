@@ -157,7 +157,7 @@ export const getChatByPhoneService = async (phone, tenant_id) => {
     }
 
     const Query = `
-    SELECT id, contact_id, sender, message, message_type, media_url, media_mime_type, media_filename, seen, status, created_at
+    SELECT id, contact_id, sender, sender_id, message, message_type, media_url, media_mime_type, media_filename, seen, status, created_at
     FROM ${tableNames?.MESSAGES}
     WHERE ${whereClause} AND is_deleted = false
     ORDER BY created_at ASC
@@ -248,28 +248,39 @@ export const suggestReplyService = async (tenant_id, phone) => {
 
     const [messages] = await db.sequelize.query(
       `
-    SELECT sender, message
+    SELECT sender, message, created_at
     FROM ${tableNames.MESSAGES}
     WHERE ${msgWhere}
-  ORDER BY created_at ASC
+    ORDER BY created_at DESC
+    LIMIT 30
     `,
       { replacements: msgReplacements },
     );
 
-    const chatHistory = messages
-      .map((m) => `${m.sender.toUpperCase()}: ${m.message} `)
+    // Reverse to get chronological order and format nicely
+    const recentMessages = messages.reverse();
+    const chatHistory = recentMessages
+      .map((m) => {
+        const senderLabel =
+          m.sender === "user"
+            ? "Customer"
+            : m.sender === "bot"
+              ? "AI"
+              : "Admin";
+        return `${senderLabel}: ${m.message}`;
+      })
       .join("\n");
 
     const [lastMsg] = await db.sequelize.query(
       `
     SELECT message
     FROM ${tableNames.MESSAGES}
-    WHERE phone = ?
-  AND sender = 'user' AND tenant_id = ?
+    WHERE ${msgWhere}
+    AND sender = 'user'
     ORDER BY created_at DESC
     LIMIT 1
-  `,
-      { replacements: [phone, tenant_id] },
+    `,
+      { replacements: msgReplacements },
     );
 
     if (!lastMsg.length) {

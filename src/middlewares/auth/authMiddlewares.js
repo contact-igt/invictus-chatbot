@@ -95,6 +95,10 @@ export const authenticate = async (req, res, next) => {
         });
       }
 
+      // Add useful user info to req.user
+      req.user.tenant_user_id = user.tenant_user_id;
+      req.user.username = user.username;
+
       // 🔴 GLOBAL TENANT STATUS CHECK
       const tenant = await findTenantByIdService(decoded.tenant_id);
       if (!tenant || tenant.status !== "active") {

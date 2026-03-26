@@ -15,6 +15,9 @@ import {
   restoreTenantUserController,
   getLoggedTenantUserController,
   updateTenantOrganizationController,
+    forgotTenantPasswordController,
+  verifyTenantOTPController,
+  resetTenantPasswordController,
 } from "./tenantuser.controller.js";
 
 const Router = express.Router();
@@ -122,12 +125,7 @@ Router.delete(
   permanentDeleteTenantUserController,
 );
 
-// --- Password Reset Routes ---
-import {
-  forgotTenantPasswordController,
-  verifyTenantOTPController,
-  resetTenantPasswordController,
-} from "./tenantuser.controller.js";
+
 
 Router.post("/user/forgot-password", forgotTenantPasswordController);
 Router.post("/user/verify-otp", verifyTenantOTPController);
