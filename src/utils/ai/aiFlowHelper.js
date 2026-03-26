@@ -98,7 +98,8 @@ ${resolvedContext}
         attributes: ["name", "email", "phone"],
       });
       if (contact) {
-        patientProfileSection = `PATIENT PROFILE:\n- Name: ${contact.name || "Unknown"}\n- Email: ${contact.email || "Missing"}\n- Phone: ${contact.phone || "Known"}`;
+        const emailStatus = contact.email ? `${contact.email} (on file)` : "NOT PROVIDED — MUST ASK";
+        patientProfileSection = `PATIENT PROFILE:\n- Name: ${contact.name || "Unknown — MUST ASK"}\n- Email: ${emailStatus}\n- Phone: ${contact.phone || "Known"}`;
       }
 
       const lead = await getLeadByContactIdService(tenant_id, contact_id);
