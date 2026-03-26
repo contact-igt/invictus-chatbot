@@ -23,6 +23,10 @@ import {
   deleteAiPricingRuleController,
 } from "./management.controller.js";
 import {
+  addManualCreditController,
+  getWalletStatusController,
+} from "../BillingModel/billing.controller.js";
+import {
   authenticate,
   authorize,
   refreshToken,
@@ -209,5 +213,29 @@ Router.post("/forgot-password", forgotManagementPasswordController);
 
 Router.post("/verify-otp", verifyManagementOTPController);
 Router.post("/reset-password", resetManagementPasswordController);
+
+// ─── Wallet Management (Super Admin Only) ────────────
+
+// Get wallet status for a specific tenant
+Router.get(
+  "/wallet/:tenant_id/status",
+  authenticate,
+  authorize({
+    user_type: "management",
+    roles: ["super_admin", "platform_admin"],
+  }),
+  getWalletStatusController,
+);
+
+// Add manual credit to a tenant's wallet
+Router.post(
+  "/wallet/credit",
+  authenticate,
+  authorize({
+    user_type: "management",
+    roles: ["super_admin"],
+  }),
+  addManualCreditController,
+);
 
 export default Router;

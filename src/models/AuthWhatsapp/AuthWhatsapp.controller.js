@@ -1,5 +1,4 @@
-// Remove incorrect utility import to fix OAuth collision
-// import { sendTypingIndicator } from "../../utils/chat/sendTypingIndicator.js";
+
 import { createUserMessageService } from "../Messages/messages.service.js";
 import { formatPhoneNumber } from "../../utils/helpers/formatPhoneNumber.js";
 import fs from "fs";
@@ -16,6 +15,11 @@ import {
 } from "./AuthWhatsapp.service.js";
 
 import { processBillingFromWebhook } from "../BillingModel/billing.service.js";
+import {
+  canUseAI,
+  getSuspensionMessage,
+  WALLET_STATUS,
+} from "../../utils/billing/walletGuard.js";
 
 import { getTenantByPhoneNumberIdService } from "../WhatsappAccountModel/whatsappAccount.service.js";
 import { getIO } from "../../middlewares/socket/socket.js";
@@ -571,6 +575,38 @@ export const receiveMessage = async (req, res) => {
             tenant_id,
             phone,
             status: false,
+          });
+          return;
+        }
+
+        // Check wallet status before AI processing
+        const walletCheck = await canUseAI(tenant_id);
+        if (!walletCheck.allowed) {
+          console.log(
+            `[WEBHOOK] Wallet suspended for tenant ${tenant_id}. Status: ${walletCheck.status}, Balance: ₹${walletCheck.balance?.toFixed(2)}`,
+          );
+          // Send suspension fallback message to customer
+          const suspensionMsg = await getSuspensionMessage(tenant_id);
+          await sendWhatsAppMessage(tenant_id, phone, suspensionMsg).catch(
+            (err) =>
+              console.error(
+                "[WEBHOOK] Failed to send suspension message:",
+                err.message,
+              ),
+          );
+          // Clear typing indicator
+          const ioInst = getIO();
+          ioInst.to(`tenant-${tenant_id}`).emit("ai-typing", {
+            tenant_id,
+            phone,
+            status: false,
+          });
+          // Emit wallet warning to dashboard
+          ioInst.to(`tenant-${tenant_id}`).emit("wallet-suspended", {
+            tenant_id,
+            balance: walletCheck.balance,
+            status: walletCheck.status,
+            message: walletCheck.reason,
           });
           return;
         }

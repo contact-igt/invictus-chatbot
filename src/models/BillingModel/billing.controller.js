@@ -12,6 +12,8 @@ import {
   getAutoRechargeSettingsService,
   updateAutoRechargeSettingsService,
   getAvailableAiModelsService,
+  addManualCreditService,
+  getWalletStatusService,
 } from "./billing.service.js";
 
 export const getBillingKpiController = async (req, res) => {
@@ -256,5 +258,92 @@ export const getAvailableAiModelsController = async (req, res) => {
   } catch (error) {
     console.error("Error in getAvailableAiModelsController:", error);
     return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+/**
+ * Super Admin: Add manual credit to a tenant's wallet
+ */
+export const addManualCreditController = async (req, res) => {
+  try {
+    const { tenant_id, amount, reason, reference_id } = req.body;
+    const admin_id = req.user.unique_id || req.user.id;
+
+    if (!tenant_id) {
+      return res.status(400).json({
+        success: false,
+        message: "tenant_id is required",
+      });
+    }
+
+    const result = await addManualCreditService(
+      tenant_id,
+      amount,
+      reason,
+      reference_id,
+      admin_id,
+    );
+
+    return res.status(200).json({
+      success: true,
+      data: result,
+      message: "Credit added successfully",
+    });
+  } catch (error) {
+    console.error("Error in addManualCreditController:", error);
+    return res.status(400).json({
+      success: false,
+      message: error.message || "Failed to add credit",
+    });
+  }
+};
+
+/**
+ * Get wallet status for a specific tenant (Super Admin)
+ */
+export const getWalletStatusController = async (req, res) => {
+  try {
+    const { tenant_id } = req.params;
+
+    if (!tenant_id) {
+      return res.status(400).json({
+        success: false,
+        message: "tenant_id is required",
+      });
+    }
+
+    const status = await getWalletStatusService(tenant_id);
+
+    return res.status(200).json({
+      success: true,
+      data: status,
+    });
+  } catch (error) {
+    console.error("Error in getWalletStatusController:", error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Failed to get wallet status",
+    });
+  }
+};
+
+/**
+ * Get own wallet status (Tenant Admin)
+ */
+export const getOwnWalletStatusController = async (req, res) => {
+  try {
+    const { tenant_id } = req.user;
+    const status = await getWalletStatusService(tenant_id);
+
+    return res.status(200).json({
+      success: true,
+      data: status,
+    });
+  } catch (error) {
+    console.error("Error in getOwnWalletStatusController:", error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Failed to get wallet status",
+    });
   }
 };

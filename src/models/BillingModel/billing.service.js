@@ -945,3 +945,99 @@ export const getAvailableAiModelsService = async () => {
     };
   });
 };
+
+/**
+ * Super Admin: Add manual credit to a tenant's wallet
+ * Used for bank transfers, refunds, or promotional credits
+ */
+export const addManualCreditService = async (
+  tenant_id,
+  amount,
+  reason,
+  reference_id,
+  admin_id,
+) => {
+  try {
+    if (!amount || amount <= 0) {
+      throw new Error("Amount must be positive");
+    }
+    if (!reason) {
+      throw new Error("Reason is required");
+    }
+
+    const amountInRupees = parseFloat(amount);
+
+    let newBalance = 0;
+    await db.sequelize.transaction(async (t) => {
+      // Find or create wallet
+      let [wallet] = await db.Wallets.findOrCreate({
+        where: { tenant_id },
+        defaults: { tenant_id, balance: 0, currency: "INR" },
+        transaction: t,
+      });
+
+      newBalance = parseFloat(wallet.balance) + amountInRupees;
+      await wallet.update({ balance: newBalance }, { transaction: t });
+
+      // Log the transaction with admin reference
+      await db.WalletTransactions.create(
+        {
+          tenant_id,
+          type: "credit",
+          amount: amountInRupees,
+          reference_id: reference_id || `admin_credit_${Date.now()}`,
+          description: `Manual Credit: ${reason} (by admin: ${admin_id})`,
+        },
+        { transaction: t },
+      );
+    });
+
+    // Emit socket update to tenant
+    try {
+      const io = getIO();
+      io.to(`tenant-${tenant_id}`).emit("payment-update", {
+        type: "ADMIN_CREDIT",
+        amount: amountInRupees,
+        balance: newBalance,
+        message: `₹${amountInRupees.toFixed(2)} credited: ${reason}`,
+      });
+
+      // If balance was restored from suspended state, emit restoration event
+      if (newBalance > 0) {
+        const { checkAndRestoreWallet } =
+          await import("../../utils/billing/walletGuard.js");
+        await checkAndRestoreWallet(tenant_id, newBalance);
+      }
+    } catch (err) {
+      console.error("[BILLING] Socket emit error:", err.message);
+    }
+
+    console.log(
+      `[BILLING] Admin ${admin_id} credited ₹${amountInRupees.toFixed(2)} to tenant ${tenant_id}. Reason: ${reason}. New balance: ₹${newBalance.toFixed(2)}`,
+    );
+
+    return {
+      success: true,
+      tenant_id,
+      amount: amountInRupees,
+      newBalance,
+      reason,
+      message: "Credit added successfully",
+    };
+  } catch (error) {
+    throw error;
+  }
+};
+
+/**
+ * Get wallet status for a tenant (used by management panel)
+ */
+export const getWalletStatusService = async (tenant_id) => {
+  try {
+    const { checkWalletStatus } =
+      await import("../../utils/billing/walletGuard.js");
+    return await checkWalletStatus(tenant_id);
+  } catch (error) {
+    throw error;
+  }
+};
