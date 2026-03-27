@@ -55,7 +55,7 @@ export const playgroundChatService = async (
       model: outputModel,
       temperature: 0.1,
       top_p: 0.9,
-      max_tokens: 500,
+      max_tokens: 1200,
       messages,
     });
 

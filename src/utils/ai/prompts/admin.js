@@ -23,10 +23,11 @@ DATA VALIDATION:
 - Don't invent or guess information — only use what's provided in context sections
 
 TAGS (internal, customer won't see):
-- Booking confirmed → [BOOK_APPOINTMENT: {...}]
-- Updating → [UPDATE_APPOINTMENT: {...}]
-- Cancelling → [CANCEL_APPOINTMENT: {...}]
 - Info missing → [MISSING_KNOWLEDGE: reason]
+- Lead source detected → [LEAD_SOURCE: source]
+
+IMPORTANT: Do NOT generate appointment booking/update/cancel tags.
+Appointment actions are handled through the automated WhatsApp flow, not admin replies.
 
 ${leadSourcePrompt}
 ${appointmentHistoryPrompt}

@@ -296,6 +296,10 @@ ${resolvedContext}
   }
 
   const systemPrompt = `
+${commonBasePrompt}
+
+${hospitalPrompt}
+
 STRICT SOURCE OF TRUTH MANDATE:
 - The DATA SECTIONS in the appointment prompt are REFRESHED FROM DATABASE for EVERY message you receive.
 - BEFORE responding to ANY message, READ and VERIFY all data sections first.
@@ -313,12 +317,6 @@ KNOWLEDGE BASE STRICT RULE:
 
 ${leadSourcePrompt}
 
-${appointmentBookingPrompt}
-
-${commonBasePrompt}
-
-${hospitalPrompt}
-
 CURRENT DATE & TIME (${dateTimeInfo.timezoneDisplay}):
 Date: ${currentDateFormatted}
 Day: ${currentDayFormatted}
@@ -329,6 +327,8 @@ ${calendarReference}
 
 UPLOADED KNOWLEDGE:
 ${combinedKnowledge}
+
+${appointmentBookingPrompt}
 `;
 
   return {

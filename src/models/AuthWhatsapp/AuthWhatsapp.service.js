@@ -335,7 +335,10 @@ export const sendTypingIndicator = async (
       );
     } catch (apiErr) {
       // Typing indicator may not be supported on all API versions — suppress gracefully
-      console.debug("[TYPING] Meta API typing indicator failed:", apiErr?.response?.data?.error?.message || apiErr.message);
+      console.debug(
+        "[TYPING] Meta API typing indicator failed:",
+        apiErr?.response?.data?.error?.message || apiErr.message,
+      );
     }
   } catch (err) {
     console.error("[TYPING] Database Error:", err.message);
@@ -472,10 +475,12 @@ export const getOpenAIReply = async (
       hour12: true,
     });
 
-    const languageInfo = await detectLanguageAI(cleanMessage, tenant_id).catch((err) => {
-      console.error("[WHATSAPP-AI] Language detection failed:", err.message);
-      return { language: "unknown", style: "unknown", label: "unknown" };
-    });
+    const languageInfo = await detectLanguageAI(cleanMessage, tenant_id).catch(
+      (err) => {
+        console.error("[WHATSAPP-AI] Language detection failed:", err.message);
+        return { language: "unknown", style: "unknown", label: "unknown" };
+      },
+    );
 
     console.log("language", languageInfo);
 
@@ -500,9 +505,13 @@ export const getOpenAIReply = async (
       );
       systemPrompt = promptResult.systemPrompt;
     } catch (promptErr) {
-      console.error("[WHATSAPP-AI] System prompt build failed:", promptErr.message);
+      console.error(
+        "[WHATSAPP-AI] System prompt build failed:",
+        promptErr.message,
+      );
       // Use a minimal fallback prompt so AI can still respond
-      systemPrompt = "You are a helpful AI assistant. Answer the user's question.";
+      systemPrompt =
+        "You are a helpful AI assistant. Answer the user's question.";
     }
 
     const aiMessages = [
@@ -518,7 +527,7 @@ export const getOpenAIReply = async (
       model: outputModel,
       temperature: 0.1, // Very low temperature for consistent tagging behavior
       top_p: 0.9,
-      max_tokens: 800,
+      max_tokens: 1200,
       messages: aiMessages,
     });
 
@@ -543,7 +552,7 @@ export const getOpenAIReply = async (
           model: outputModel,
           temperature: 0.1,
           top_p: 0.9,
-          max_tokens: 1200,
+          max_tokens: 1600,
           messages: aiMessages,
         });
         await trackAiTokenUsage(tenant_id, "whatsapp_retry", response).catch(

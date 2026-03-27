@@ -1,5 +1,7 @@
 /**
- * System prompts for the Playground/Testing environment.
+ * @deprecated These functions are NOT used anywhere.
+ * Playground uses buildAiSystemPrompt() from aiFlowHelper.js instead.
+ * Kept for reference only — safe to remove.
  */
 
 export const DEFAULT_PLAYGROUND_PROMPT =
