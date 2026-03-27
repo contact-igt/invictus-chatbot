@@ -194,8 +194,8 @@ export const processBillingFromWebhook = async (tenant_id, statusUpdate) => {
           transaction: t,
         });
 
-        // Deduct balance (can go negative if we allow, or we could add a check here)
-        const oldBalance = parseFloat(wallet.balance);
+        // NaN protection: ensure balance is a valid number
+        const oldBalance = parseFloat(wallet.balance) || 0;
         const newBalance = oldBalance - totalCost;
 
         await wallet.update({ balance: newBalance }, { transaction: t });
@@ -908,6 +908,17 @@ export const updateAutoRechargeSettingsService = async (
       if (isNaN(a) || a < 100)
         throw new Error("Minimum auto-recharge amount is ₹100");
       updateData.auto_recharge_amount = a;
+    }
+
+    // Validate that recharge amount is greater than threshold to prevent ineffective auto-recharge
+    const finalThreshold =
+      updateData.auto_recharge_threshold ??
+      (parseFloat(wallet.auto_recharge_threshold) || 100);
+    const finalAmount =
+      updateData.auto_recharge_amount ??
+      (parseFloat(wallet.auto_recharge_amount) || 500);
+    if (finalAmount <= finalThreshold) {
+      throw new Error("Auto-recharge amount must be greater than threshold");
     }
 
     await wallet.update(updateData);

@@ -3,6 +3,10 @@ import { tableNames } from "../../database/tableName.js";
 import { generateReadableIdFromLast } from "../../utils/helpers/generateReadableIdFromLast.js";
 import { missingFieldsChecker } from "../../utils/helpers/missingFields.js";
 import { formatPhoneNumber } from "../../utils/helpers/formatPhoneNumber.js";
+import {
+  SUPPORTED_TIMEZONES,
+  DEFAULT_TIMEZONE,
+} from "../../utils/helpers/timezone.js";
 import crypto from "crypto";
 import {
   createTenantService,
@@ -18,6 +22,7 @@ import {
   getOnboardedTenantListService,
   getTenantSettingsService,
   updateTenantAiSettingsService,
+  
 } from "./tenant.service.js";
 
 import {
@@ -627,6 +632,16 @@ export const updateTenantAiSettingsController = async (req, res) => {
       }
     }
 
+    // Validate timezone if provided
+    if (ai_settings?.timezone) {
+      if (!SUPPORTED_TIMEZONES.includes(ai_settings.timezone)) {
+        return res.status(400).json({
+          message: `Invalid timezone: ${ai_settings.timezone}. Please select a supported timezone.`,
+          supportedTimezones: SUPPORTED_TIMEZONES,
+        });
+      }
+    }
+
     await updateTenantAiSettingsService(tenant_id, ai_settings);
 
     // Return refreshed settings with masked key so frontend cache stays consistent
@@ -705,3 +720,19 @@ export const validateOpenAIKeyController = async (req, res) => {
     });
   }
 };
+
+
+
+export const getAvailableTimezonesController = async (req, res) => {
+  try {
+    return res.status(200).json({
+      message: "success",
+      data: {
+        timezones: SUPPORTED_TIMEZONES,
+        default: DEFAULT_TIMEZONE,
+      },
+    });
+  } catch (err) {
+    return res.status(500).json({ message: err.message });
+  }
+}

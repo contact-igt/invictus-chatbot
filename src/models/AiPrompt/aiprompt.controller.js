@@ -11,6 +11,13 @@ import {
   getDeletedAiPromptListService,
   restoreAiPromptService,
 } from "./aiprompt.service.js";
+import OpenAI from "openai";
+import { getTenantAiModel } from "../../utils/ai/getTenantAiModel.js";
+import { trackAiTokenUsage } from "../../utils/ai/trackAiTokenUsage.js";
+
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
 
 export const getDeletedAiPromptListController = async (req, res) => {
   const tenant_id = req.user.tenant_id;
@@ -204,5 +211,58 @@ export const getActivePromptController = async (req, res) => {
     return res.status(500).send({
       message: err?.message,
     });
+  }
+};
+
+/**
+ * Generic AI completion endpoint for frontend use
+ * Uses tenant's selected output model
+ */
+export const generateAiCompletionController = async (req, res) => {
+  const tenant_id = req.user.tenant_id;
+
+  if (!tenant_id) {
+    return res.status(400).send({ message: "Invalid tenant context" });
+  }
+
+  try {
+    const { prompt, systemInstruction = "You are a helpful assistant." } =
+      req.body;
+
+    if (!prompt || prompt.trim().length === 0) {
+      return res.status(400).json({ message: "Prompt is required" });
+    }
+
+    // Get tenant's selected output model
+    const outputModel = await getTenantAiModel(tenant_id, "output");
+
+    const response = await openai.chat.completions.create({
+      model: outputModel,
+      messages: [
+        { role: "system", content: systemInstruction },
+        { role: "user", content: prompt },
+      ],
+      temperature: 0.3,
+      max_tokens: 500,
+    });
+
+    // Track token usage
+    await trackAiTokenUsage(tenant_id, "frontend_utility", response).catch(
+      (e) => console.error("[AI-COMPLETION] Token tracking failed:", e.message),
+    );
+
+    const result =
+      response?.choices?.[0]?.message?.content?.trim() ||
+      "No response generated.";
+
+    return res.status(200).json({
+      message: "success",
+      data: { content: result },
+    });
+  } catch (err) {
+    console.error("[AI-COMPLETION] Error:", err.message);
+    return res
+      .status(500)
+      .json({ message: err.message || "Failed to generate AI response" });
   }
 };

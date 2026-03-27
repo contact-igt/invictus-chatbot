@@ -402,13 +402,44 @@ export const checkAvailabilityService = async (
       );
     }
 
-    const formattedTime = normalizeTimeFormat(time);
-
-    // Get doctor's consultation duration
+    // 1. Verify doctor exists in database
     const doctor = await db.Doctors.findOne({
       where: { doctor_id, tenant_id, is_deleted: false },
-      attributes: ["consultation_duration"],
+      attributes: ["consultation_duration", "status"],
     });
+
+    if (!doctor) {
+      console.log(
+        `[CHECK-AVAILABILITY] Doctor ${doctor_id} not found in database`,
+      );
+      return false; // Doctor doesn't exist
+    }
+
+    // 2. Verify doctor works on this day
+    const dateObj = new Date(date + "T00:00:00");
+    const days = [
+      "sunday",
+      "monday",
+      "tuesday",
+      "wednesday",
+      "thursday",
+      "friday",
+      "saturday",
+    ];
+    const dayOfWeek = days[dateObj.getDay()];
+
+    const doctorAvailability = await db.DoctorAvailability.findOne({
+      where: { doctor_id, tenant_id, day_of_week: dayOfWeek },
+    });
+
+    if (!doctorAvailability) {
+      console.log(
+        `[CHECK-AVAILABILITY] Doctor ${doctor_id} does not work on ${dayOfWeek}`,
+      );
+      return false; // Doctor doesn't work this day
+    }
+
+    const formattedTime = normalizeTimeFormat(time);
     const duration = doctor?.consultation_duration || 30;
     const requestedStart = timeToMinutes(formattedTime);
     const requestedEnd = requestedStart + duration;
@@ -787,8 +818,9 @@ export const deleteAppointmentService = async (tenant_id, appointment_id) => {
         { where: { appointment_id, tenant_id }, transaction },
       );
 
-      // Decrement doctor's appointment count
-      if (appointment.doctor_id) {
+      // Decrement doctor's appointment count ONLY if not already cancelled
+      // (prevents double-decrement when dashboard cancels status but AI also cancels)
+      if (appointment.doctor_id && appointment.status !== "Cancelled") {
         await db.Doctors.decrement("appointment_count", {
           by: 1,
           where: { doctor_id: appointment.doctor_id, tenant_id },
@@ -818,7 +850,24 @@ export const deleteAppointmentService = async (tenant_id, appointment_id) => {
 // ─── Get Available Slots for a Doctor on a Date ───
 export const getAvailableSlotsService = async (tenant_id, doctor_id, date) => {
   try {
-    // 1. Determine day_of_week from the date
+    // 1. Verify doctor exists in database first
+    const doctor = await db.Doctors.findOne({
+      where: { doctor_id, tenant_id, is_deleted: false },
+      attributes: ["consultation_duration", "status"],
+    });
+
+    if (!doctor) {
+      console.log(
+        `[GET-AVAILABLE-SLOTS] Doctor ${doctor_id} not found in database`,
+      );
+      return {
+        available: false,
+        reason: "Doctor not found in our system",
+        slots: [],
+      };
+    }
+
+    // 2. Determine day_of_week from the date
     const dateObj = new Date(date + "T00:00:00");
     const days = [
       "sunday",
@@ -831,7 +880,7 @@ export const getAvailableSlotsService = async (tenant_id, doctor_id, date) => {
     ];
     const dayOfWeek = days[dateObj.getDay()];
 
-    // 2. Get doctor's availability for that day
+    // 3. Get doctor's availability for that day
     const availabilitySlots = await db.DoctorAvailability.findAll({
       where: { doctor_id, tenant_id, day_of_week: dayOfWeek },
       order: [["start_time", "ASC"]],
@@ -845,12 +894,7 @@ export const getAvailableSlotsService = async (tenant_id, doctor_id, date) => {
       };
     }
 
-    // 3. Get doctor's consultation_duration
-    const doctor = await db.Doctors.findOne({
-      where: { doctor_id, tenant_id, is_deleted: false },
-      attributes: ["consultation_duration"],
-    });
-    const slotDuration = doctor?.consultation_duration || 30;
+    const slotDuration = doctor.consultation_duration || 30;
 
     // 4. Generate all possible time slots
     const allSlots = [];

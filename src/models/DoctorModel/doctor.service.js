@@ -109,7 +109,7 @@ export const createDoctorService = async (tenant_id, data) => {
 
         if (!spec) {
           throw new Error(
-            `Specialization "${specNameOrId}" not found. Please create it first in the specializations master list.`,
+            `Specialization "${specName}" not found. Please create it first in the specializations master list.`,
           );
         }
 
@@ -349,7 +349,7 @@ export const updateDoctorService = async (doctor_id, tenant_id, data) => {
 
         if (!spec) {
           throw new Error(
-            `Specialization "${specNameOrId}" not found. Please create it first in the specializations master list.`,
+            `Specialization "${specName}" not found. Please create it first in the specializations master list.`,
           );
         }
 
@@ -546,9 +546,14 @@ export const getDoctorsForAIService = async (tenant_id) => {
       const availabilityText =
         availability.length > 0
           ? availability
-              .map((a) => `${a.day_of_week} ${a.start_time}–${a.end_time}`)
-              .join(", ")
-          : "Contact clinic for availability";
+              .map((a) => {
+                const dayCapitalized =
+                  a.day_of_week.charAt(0).toUpperCase() +
+                  a.day_of_week.slice(1);
+                return `    ${dayCapitalized}: ${a.start_time}–${a.end_time}`;
+              })
+              .join("\n")
+          : "    Contact clinic for availability";
 
       const title = doc.title ? `${doc.title} ` : "";
       const exp =
@@ -559,7 +564,7 @@ export const getDoctorsForAIService = async (tenant_id) => {
         `• Doctor ID: ${doc.doctor_id} | ${title}${doc.name}${qual}${exp}\n` +
           `  Specializations: ${specializationNames}\n` +
           `  Current Status: ${doc.status.toUpperCase()}\n` +
-          `  Available: ${availabilityText}\n` +
+          `  Working Days (each day has DIFFERENT hours):\n${availabilityText}\n` +
           `  Slot Duration: ${doc.consultation_duration || 30} mins`,
       );
     }

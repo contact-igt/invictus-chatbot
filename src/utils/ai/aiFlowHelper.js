@@ -11,6 +11,11 @@ import { getLeadByContactIdService } from "../../models/LeadsModel/leads.service
 import { getDoctorsForAIService } from "../../models/DoctorModel/doctor.service.js";
 import { getRecentAppointmentsForAIService } from "../../models/AppointmentModel/appointment.service.js";
 import { getTenantSettingsService } from "../../models/TenantModel/tenant.service.js";
+import {
+  getCurrentDateTimeForAI,
+  getCalendarReferenceForAI,
+  DEFAULT_TIMEZONE,
+} from "../helpers/timezone.js";
 
 /**
  * Shared utility to build the complete System Prompt for the AI flow.
@@ -29,41 +34,42 @@ export const buildAiSystemPrompt = async (
 ) => {
   // Use cached tenant settings or fetch if not provided
   let businessName = "our clinic";
-  let tenantTimezone = "Asia/Kolkata"; // Default for backward compatibility
+  let tenantTimezone = DEFAULT_TIMEZONE; // Default for backward compatibility
   try {
     const tenantSettings =
       cachedData.tenantSettings || (await getTenantSettingsService(tenant_id));
     if (tenantSettings?.company_name)
       businessName = tenantSettings.company_name;
-    if (tenantSettings?.timezone) tenantTimezone = tenantSettings.timezone;
+    // Check ai_settings.timezone first, then fallback to tenantSettings.timezone
+    if (tenantSettings?.ai_settings?.timezone) {
+      tenantTimezone = tenantSettings.ai_settings.timezone;
+    } else if (tenantSettings?.timezone) {
+      tenantTimezone = tenantSettings.timezone;
+    }
   } catch (_) {}
+
+  // Use timezone helper for consistent date/time formatting
+  const dateTimeInfo = getCurrentDateTimeForAI(tenantTimezone);
+  const calendarReference = getCalendarReferenceForAI(tenantTimezone);
 
   const now = new Date(
     new Date().toLocaleString("en-US", { timeZone: tenantTimezone }),
   );
 
-  const currentDateFormatted = now.toLocaleDateString("en-GB", {
-    day: "2-digit",
-    month: "long",
-    year: "numeric",
-  });
-
-  const currentDayFormatted = now.toLocaleDateString("en-US", {
-    weekday: "long",
-  });
-
-  const currentTimeFormatted = now.toLocaleTimeString("en-US", {
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: true,
-  });
+  const currentDateFormatted = dateTimeInfo.date;
+  const currentDayFormatted = dateTimeInfo.day;
+  const currentTimeFormatted = dateTimeInfo.time;
 
   // 1. Fetch Prompts & Knowledge
   let hospitalPrompt = DEFAULT_SYSTEM_PROMPT;
   try {
-    hospitalPrompt = (await getActivePromptService(tenant_id)) || DEFAULT_SYSTEM_PROMPT;
+    hospitalPrompt =
+      (await getActivePromptService(tenant_id)) || DEFAULT_SYSTEM_PROMPT;
   } catch (promptErr) {
-    console.error("[AI-FLOW-HELPER] Active prompt fetch failed:", promptErr.message);
+    console.error(
+      "[AI-FLOW-HELPER] Active prompt fetch failed:",
+      promptErr.message,
+    );
   }
 
   const commonBasePrompt = getCommonBasePrompt(languageInfo, businessName);
@@ -72,10 +78,7 @@ export const buildAiSystemPrompt = async (
   let resolvedLogs = [];
   let sources = [];
   try {
-    const searchResult = await searchKnowledgeChunks(
-      tenant_id,
-      userMessage,
-    );
+    const searchResult = await searchKnowledgeChunks(tenant_id, userMessage);
     chunks = searchResult.chunks || [];
     resolvedLogs = searchResult.resolvedLogs || [];
     sources = searchResult.sources || [];
@@ -145,7 +148,7 @@ ${resolvedContext}
     const doctorsList = await getDoctorsForAIService(tenant_id);
     const doctorsSection = doctorsList
       ? `AVAILABLE DOCTORS:\n${doctorsList}`
-      : "No doctors are currently available for booking.";
+      : "⚠️ NO DOCTORS CONFIGURED ⚠️\nNo doctors are currently available for booking. The clinic has not added any doctors to the system yet. DO NOT attempt to book appointments or show any doctor list. Inform user that booking is not available and offer to connect them with the team.";
 
     let existingAppointmentsSection = "";
     if (contact_id) {
@@ -160,13 +163,18 @@ ${resolvedContext}
           (a) =>
             !a.is_deleted &&
             a.status !== "Cancelled" &&
+            a.status !== "Completed" &&
             a.appointment_date >= todayStr,
         );
-        const pastAppts = recentAppts.filter(
+        const expiredConfirmedAppts = recentAppts.filter(
           (a) =>
             !a.is_deleted &&
             a.status !== "Cancelled" &&
+            a.status !== "Completed" &&
             a.appointment_date < todayStr,
+        );
+        const completedAppts = recentAppts.filter(
+          (a) => !a.is_deleted && a.status === "Completed",
         );
         const cancelledAppts = recentAppts.filter(
           (a) => a.is_deleted || a.status === "Cancelled",
@@ -182,23 +190,78 @@ ${resolvedContext}
                   "en-GB",
                   { day: "2-digit", month: "long", year: "numeric" },
                 );
-                return `  - Appointment ${a.appointment_id} (Token: ${a.token_number}) on ${dateStr} at ${a.appointment_time} with ${a.doctor?.name || "Unknown Doctor"} [Status: ${a.status}]`;
+                const doctorInfo = a.doctor
+                  ? `${a.doctor.name} (${a.doctor_id})`
+                  : "Unknown Doctor";
+                const notesInfo = a.notes ? ` | Notes: ${a.notes}` : "";
+                return `  - Appointment ${a.appointment_id} (Token: ${a.token_number}) on ${dateStr} at ${a.appointment_time} with ${doctorInfo} [Status: ${a.status}]${notesInfo}`;
+              })
+              .join("\n") +
+            "\n";
+        }
+
+        let expiredText = "";
+        if (expiredConfirmedAppts.length > 0) {
+          expiredText =
+            "\nEXPIRED APPOINTMENTS (Date passed but NOT completed/cancelled):\n" +
+            expiredConfirmedAppts
+              .map((a) => {
+                const dateStr = new Date(a.appointment_date).toLocaleDateString(
+                  "en-GB",
+                  { day: "2-digit", month: "long", year: "numeric" },
+                );
+                const doctorInfo = a.doctor
+                  ? `${a.doctor.name} (${a.doctor_id})`
+                  : "Unknown Doctor";
+                const notesInfo = a.notes ? ` | Notes: ${a.notes}` : "";
+                return `  - Appointment ${a.appointment_id} on ${dateStr} at ${a.appointment_time} with ${doctorInfo} [Status: ${a.status} - EXPIRED]${notesInfo}`;
+              })
+              .join("\n") +
+            "\n";
+        }
+
+        let completedText = "";
+        if (completedAppts.length > 0) {
+          completedText =
+            "\nCOMPLETED APPOINTMENTS (HISTORY):\n" +
+            completedAppts
+              .map((a) => {
+                const dateStr = new Date(a.appointment_date).toLocaleDateString(
+                  "en-GB",
+                  { day: "2-digit", month: "long", year: "numeric" },
+                );
+                const doctorInfo = a.doctor
+                  ? `with ${a.doctor.name} (${a.doctor_id})`
+                  : "";
+                return `  - Appointment ${a.appointment_id} on ${dateStr} at ${a.appointment_time} ${doctorInfo} [Completed]`;
               })
               .join("\n") +
             "\n";
         }
 
         let pastText = "";
-        if (pastAppts.length > 0) {
+        // Keep a combined past section for non-completed, non-expired past appts (edge case)
+        const otherPastAppts = recentAppts.filter(
+          (a) =>
+            !a.is_deleted &&
+            a.status !== "Cancelled" &&
+            a.status !== "Completed" &&
+            a.appointment_date < todayStr &&
+            !expiredConfirmedAppts.includes(a),
+        );
+        if (otherPastAppts.length > 0) {
           pastText =
             "\nPAST APPOINTMENTS (HISTORY):\n" +
-            pastAppts
+            otherPastAppts
               .map((a) => {
                 const dateStr = new Date(a.appointment_date).toLocaleDateString(
                   "en-GB",
                   { day: "2-digit", month: "long", year: "numeric" },
                 );
-                return `  - Appointment ${a.appointment_id} on ${dateStr} at ${a.appointment_time} [Status: ${a.status}]`;
+                const doctorInfo = a.doctor
+                  ? `with ${a.doctor.name} (${a.doctor_id})`
+                  : "";
+                return `  - Appointment ${a.appointment_id} on ${dateStr} at ${a.appointment_time} ${doctorInfo} [Status: ${a.status}]`;
               })
               .join("\n") +
             "\n";
@@ -219,7 +282,8 @@ ${resolvedContext}
               .join("\n") +
             "\n";
         }
-        existingAppointmentsSection = activeText + pastText + cancelledText;
+        existingAppointmentsSection =
+          activeText + expiredText + completedText + pastText + cancelledText;
       }
     }
     appointmentBookingPrompt = getAppointmentBookingPrompt(
@@ -233,10 +297,13 @@ ${resolvedContext}
 
   const systemPrompt = `
 STRICT SOURCE OF TRUTH MANDATE:
+- The DATA SECTIONS in the appointment prompt are REFRESHED FROM DATABASE for EVERY message you receive.
+- BEFORE responding to ANY message, READ and VERIFY all data sections first.
 - Use ONLY the "UPCOMING ACTIVE APPOINTMENTS" section to verify if a user has a valid appointment.
 - If an appointment ID is NOT in the lists below, it does NOT exist. Do NOT assume, estimate, or hallucinate status.
 - If an appointment is in "PAST APPOINTMENTS", it has already happened; do not try to cancel or update it unless explicitly requested for a reschedule.
 - If a doctor is listed with status 'busy' or 'off duty', they are currently unavailable for new bookings.
+- Data from a previous message in chat history may no longer be accurate — ALWAYS use the current DATA SECTIONS.
 
 KNOWLEDGE BASE STRICT RULE:
 - For ANY factual or informational question (about services, clinic, policies, procedures, prices, timings, etc.), you MUST answer ONLY from the "UPLOADED KNOWLEDGE" section below.
@@ -252,10 +319,13 @@ ${commonBasePrompt}
 
 ${hospitalPrompt}
 
-CURRENT DATE & DAY & TIME (IST):
+CURRENT DATE & TIME (${dateTimeInfo.timezoneDisplay}):
 Date: ${currentDateFormatted}
 Day: ${currentDayFormatted}
 Time: ${currentTimeFormatted}
+Timezone: ${tenantTimezone}
+
+${calendarReference}
 
 UPLOADED KNOWLEDGE:
 ${combinedKnowledge}

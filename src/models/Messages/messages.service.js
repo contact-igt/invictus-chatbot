@@ -139,6 +139,11 @@ export const getChatListService = async (tenant_id, limit = 200) => {
 };
 
 export const getChatByPhoneService = async (phone, tenant_id) => {
+  // Validate inputs
+  if (!phone || !tenant_id) {
+    throw new Error("Phone number and tenant ID are required");
+  }
+
   try {
     const contact = await getContactByPhoneAndTenantIdService(tenant_id, phone);
 

@@ -72,9 +72,28 @@ export const verifyRazorpayPaymentService = async (tenant_id, paymentData) => {
     .digest("hex");
 
   if (expectedSignature === razorpay_signature) {
-    // 1. Transaction to credit wallet and log record
+    // 1. Check for duplicate payment verification (idempotency)
+    const existingPayment = await db.PaymentHistory.findOne({
+      where: { razorpay_payment_id },
+    });
+    if (existingPayment) {
+      console.log(
+        `[PAYMENT] Payment ${razorpay_payment_id} already verified, skipping duplicate`,
+      );
+      return { success: true, message: "Payment already verified" };
+    }
+
+    // 2. Transaction to credit wallet and log record
     const amountInPaise = paymentData.amount || 0;
     const amountInRupees = amountInPaise / 100;
+
+    // Generate invoice number: INV-YYYYMMDD-XXXXX
+    const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+    const randomSuffix = Math.random()
+      .toString(36)
+      .substring(2, 7)
+      .toUpperCase();
+    const invoiceNumber = `INV-${dateStr}-${randomSuffix}`;
 
     await db.sequelize.transaction(async (t) => {
       let [wallet] = await db.Wallets.findOrCreate({
@@ -83,9 +102,12 @@ export const verifyRazorpayPaymentService = async (tenant_id, paymentData) => {
         transaction: t,
       });
 
-      const newBalance = parseFloat(wallet.balance) + amountInRupees;
+      // NaN protection: ensure balance is a valid number
+      const currentBalance = parseFloat(wallet.balance) || 0;
+      const newBalance = currentBalance + amountInRupees;
       await wallet.update({ balance: newBalance }, { transaction: t });
 
+      // Save to WalletTransactions (for legacy compatibility)
       await db.WalletTransactions.create(
         {
           tenant_id,
@@ -97,9 +119,31 @@ export const verifyRazorpayPaymentService = async (tenant_id, paymentData) => {
         },
         { transaction: t },
       );
+
+      // Save to PaymentHistory (dedicated payment tracking)
+      await db.PaymentHistory.create(
+        {
+          tenant_id,
+          razorpay_order_id,
+          razorpay_payment_id,
+          amount: amountInRupees,
+          currency: "INR",
+          status: "success",
+          payment_method: "Online",
+          description: "Wallet Recharge",
+          balance_before: currentBalance,
+          balance_after: newBalance,
+          invoice_number: invoiceNumber,
+          metadata: {
+            order_id: razorpay_order_id,
+            verified_at: new Date().toISOString(),
+          },
+        },
+        { transaction: t },
+      );
     });
 
-    // 2. Check if wallet was restored from suspension and emit socket update
+    // 3. Check if wallet was restored from suspension and emit socket update
     try {
       const wallet = await db.Wallets.findOne({ where: { tenant_id } });
       const newBalance = parseFloat(wallet.balance);
@@ -129,5 +173,38 @@ export const verifyRazorpayPaymentService = async (tenant_id, paymentData) => {
     return { success: true, message: "Payment verified and wallet credited" };
   } else {
     throw new Error("Invalid payment signature");
+  }
+};
+
+/**
+ * Fetch payment history for a tenant from the dedicated PaymentHistory table.
+ * Only shows successful recharge payments.
+ */
+export const getPaymentHistoryService = async (
+  tenant_id,
+  page = 1,
+  limit = 50,
+) => {
+  try {
+    const offset = (page - 1) * limit;
+    const { count, rows } = await db.PaymentHistory.findAndCountAll({
+      where: { tenant_id, status: "success" },
+      order: [["created_at", "DESC"]],
+      limit: parseInt(limit),
+      offset,
+    });
+
+    return {
+      payments: rows,
+      pagination: {
+        total: count,
+        page: parseInt(page),
+        limit: parseInt(limit),
+        totalPages: Math.ceil(count / limit),
+      },
+    };
+  } catch (error) {
+    console.error("[PAYMENT] Error fetching payment history:", error);
+    throw error;
   }
 };

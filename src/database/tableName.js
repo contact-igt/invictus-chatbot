@@ -36,4 +36,5 @@ export const tableNames = {
   WALLET_TRANSACTIONS: "wallet_transactions",
   AI_TOKEN_USAGE: "ai_token_usage",
   AI_PRICING: "ai_pricing",
+  PAYMENT_HISTORY: "payment_history",
 };

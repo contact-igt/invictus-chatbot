@@ -25,6 +25,12 @@ RULES:
 - No filler phrases
 - One question at a time
 
+DATA VALIDATION:
+- Don't blindly trust past chat history — verify against current context
+- If user changes their mind (said X, now says Y), use Y without questioning
+- Current message takes priority over history
+- Don't assume data from conversation — verify from KNOWLEDGE and context sections
+
 Date: ${currentDayFormatted}, ${currentDateFormatted}
 Time: ${currentTimeFormatted}
 

@@ -1,6 +1,7 @@
 import * as AppointmentService from "../../../models/AppointmentModel/appointment.service.js";
 import { sendWhatsAppMessage } from "../../../models/AuthWhatsapp/AuthWhatsapp.service.js";
 import { createUserMessageService } from "../../../models/Messages/messages.service.js";
+import { getDoctorByIdService } from "../../../models/DoctorModel/doctor.service.js";
 
 export const execute = async (payload, context) => {
   try {
@@ -115,7 +116,7 @@ export const execute = async (payload, context) => {
       return;
     }
 
-    // Fetch existing appointment to fill in missing values for availability check
+    // ─── DATABASE VERIFICATION: Appointment Exists ───
     let existingAppt = null;
     try {
       const activeAppts =
@@ -130,6 +131,50 @@ export const execute = async (payload, context) => {
         "[TAG-HANDLER-UPDATE-APPOINTMENT] Existing appointment found:",
         existingAppt?.appointment_id || "NOT FOUND",
       );
+
+      // If appointment doesn't exist, notify user with their actual appointments
+      if (!existingAppt) {
+        console.error(
+          `[TAG-HANDLER-UPDATE-APPOINTMENT] Appointment ${data.appointment_id} not found in database`,
+        );
+        let apptListText = "";
+        if (activeAppts && activeAppts.length > 0) {
+          apptListText =
+            "\n\nYour current appointments:\n" +
+            activeAppts
+              .map((a) => {
+                const dateStr = new Date(a.appointment_date).toLocaleDateString(
+                  "en-GB",
+                  { day: "2-digit", month: "long", year: "numeric" },
+                );
+                return `  - *${a.appointment_id}* on ${dateStr} at ${a.appointment_time}`;
+              })
+              .join("\n");
+        } else {
+          apptListText = "\n\nYou don't have any active appointments.";
+        }
+
+        const notFoundMsg =
+          `❌ I couldn't find appointment *${data.appointment_id}* in your records.${apptListText}\n\n` +
+          `Please provide the correct appointment ID to update.`;
+        await sendWhatsAppMessage(tenant_id, phone, notFoundMsg).catch(
+          () => {},
+        );
+        try {
+          await createUserMessageService(
+            tenant_id,
+            contact_id,
+            phone_number_id,
+            phone,
+            null,
+            null,
+            "bot",
+            null,
+            notFoundMsg,
+          );
+        } catch (_) {}
+        return; // Exit early - appointment doesn't exist
+      }
     } catch (fetchErr) {
       console.error(
         "[TAG-HANDLER-UPDATE-APPOINTMENT] Failed to fetch existing appointment:",
@@ -137,8 +182,95 @@ export const execute = async (payload, context) => {
       );
     }
 
-    // Timezone-safe date extraction (avoids UTC shift with toISOString)
+    // Safety check: If fetch failed and existingAppt is still null, exit early
+    if (!existingAppt) {
+      console.error(
+        "[TAG-HANDLER-UPDATE-APPOINTMENT] Could not verify appointment existence, aborting update",
+      );
+      const errMsg =
+        "❌ I'm having trouble verifying your appointment. Please try again in a moment.";
+      await sendWhatsAppMessage(tenant_id, phone, errMsg).catch(() => {});
+      try {
+        await createUserMessageService(
+          tenant_id,
+          contact_id,
+          phone_number_id,
+          phone,
+          null,
+          null,
+          "bot",
+          null,
+          errMsg,
+        );
+      } catch (_) {}
+      return;
+    }
+
+    // ─── DATABASE VERIFICATION: New Doctor Exists (if changing doctor) ───
+    if (data.doctor_id && data.doctor_id !== existingAppt?.doctor_id) {
+      const doctorExists = await getDoctorByIdService(
+        data.doctor_id,
+        tenant_id,
+      );
+      if (!doctorExists) {
+        console.log(
+          `[TAG-HANDLER-UPDATE-APPOINTMENT] New doctor not found in database: ${data.doctor_id}`,
+        );
+        const doctorNotFoundMsg =
+          `❌ I couldn't find doctor *${data.doctor_id}* in our system. ` +
+          `Please select a valid doctor for your appointment update.`;
+        await sendWhatsAppMessage(tenant_id, phone, doctorNotFoundMsg).catch(
+          () => {},
+        );
+        try {
+          await createUserMessageService(
+            tenant_id,
+            contact_id,
+            phone_number_id,
+            phone,
+            null,
+            null,
+            "bot",
+            null,
+            doctorNotFoundMsg,
+          );
+        } catch (_) {}
+        return; // Do NOT proceed with update
+      }
+
+      // Check doctor status
+      if (
+        doctorExists.status &&
+        doctorExists.status.toLowerCase() !== "available"
+      ) {
+        const statusMsg =
+          `❌ Sorry, *${doctorExists.name || "this doctor"}* is currently *${doctorExists.status}* and not available for bookings.\n\n` +
+          `Please choose a different doctor.`;
+        await sendWhatsAppMessage(tenant_id, phone, statusMsg).catch(() => {});
+        try {
+          await createUserMessageService(
+            tenant_id,
+            contact_id,
+            phone_number_id,
+            phone,
+            null,
+            null,
+            "bot",
+            null,
+            statusMsg,
+          );
+        } catch (_) {}
+        return;
+      }
+    }
+
+    // Timezone-safe date extraction: DATEONLY returns "YYYY-MM-DD" strings,
+    // so use string directly instead of parsing through new Date() which shifts by timezone
     const toDateStr = (d) => {
+      if (typeof d === "string" && /^\d{4}-\d{2}-\d{2}/.test(d)) {
+        return d.substring(0, 10); // Extract YYYY-MM-DD from string
+      }
+      // Fallback for Date objects: use local date parts to avoid UTC shift
       const dt = new Date(d);
       return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
     };
@@ -256,7 +388,15 @@ export const execute = async (payload, context) => {
     const changes = [];
     if (data.date) changes.push(`📅 New Date: ${dateStr}`);
     if (data.time) changes.push(`🕐 New Time: ${data.time}`);
-    if (data.doctor_id) changes.push(`👨‍⚕️ New Doctor: Updated`);
+    if (data.doctor_id) {
+      // Get actual doctor name for the message
+      let newDocName = data.doctor_id;
+      try {
+        const docInfo = await getDoctorByIdService(data.doctor_id, tenant_id);
+        if (docInfo?.name) newDocName = docInfo.name;
+      } catch (_) {}
+      changes.push(`👨‍⚕️ New Doctor: ${newDocName}`);
+    }
 
     // Add email notification note if email exists
     const emailNote = updated.email
