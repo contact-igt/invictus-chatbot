@@ -294,7 +294,7 @@ export const sendTypingIndicator = async (
       console.error("[TYPING] Socket Emit Error:", socketErr.message);
     }
 
-    // 2. Fetch token and send read receipt + typing indicator to Meta
+    // 2. Fetch token and send typing indicator to Meta
     if (!message_id) return;
 
     const [rows] = await db.sequelize.query(
@@ -316,7 +316,6 @@ export const sendTypingIndicator = async (
     if (!access_token) return;
 
     try {
-      // WhatsApp Cloud API: mark as read + show typing indicator in one call
       await axios.post(
         `https://graph.facebook.com/${META_API_VERSION}/${phone_number_id}/messages`,
         {

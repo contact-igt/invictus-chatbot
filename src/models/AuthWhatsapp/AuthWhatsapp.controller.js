@@ -10,6 +10,7 @@ import {
   markMessageProcessed,
   sendWhatsAppMessage,
   sendTypingIndicator,
+  sendReadReceipt,
   unlockChat,
 } from "./AuthWhatsapp.service.js";
 
@@ -336,9 +337,9 @@ export const receiveMessage = async (req, res) => {
     if (ismessage?.length > 0) return res.sendStatus(200);
     await markMessageProcessed(tenant_id, phone_number_id, messageId, phone);
 
-    // 4.5 Send Read Receipt + Typing Indicator to Meta (Blue Tick + Typing)
+    // 4.5 Send Read Receipt to Meta (Blue Tick only — typing indicator sent later if AI will respond)
     setImmediate(() => {
-      sendTypingIndicator(tenant_id, phone_number_id, phone, messageId);
+      sendReadReceipt(tenant_id, phone_number_id, messageId);
     });
 
     // 5. Manage Contact and LiveChat
@@ -562,15 +563,11 @@ export const receiveMessage = async (req, res) => {
           console.log(
             `[WEBHOOK] AI is silenced for specific contact: ${phone}`,
           );
-          // Clear the indicator we started earlier since we won't be replying
-          const ioInst = getIO();
-          ioInst.to(`tenant-${tenant_id}`).emit("ai-typing", {
-            tenant_id,
-            phone,
-            status: false,
-          });
           return;
         }
+
+        // AI will respond — send typing indicator now
+        sendTypingIndicator(tenant_id, phone_number_id, phone, messageId);
 
         // Check wallet status before AI processing
         const walletCheck = await canUseAI(tenant_id);

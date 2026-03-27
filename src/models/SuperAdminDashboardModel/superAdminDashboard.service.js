@@ -122,36 +122,31 @@ export const getSuperAdminDashboardStatsService = async (period = "30days") => {
         db.Whatsappaccount.count({ where: { status: { [Op.ne]: "active" }, is_deleted: false } }),
     ]);
 
-    // ─── 8. Top Tenants by Messages ──────────────────────────────────
-    const topTenantsByMessages = await db.Messages.findAll({
-        where: { ...periodWhere },
-        attributes: [
-            "tenant_id",
-            [Sequelize.fn("COUNT", Sequelize.col("id")), "messageCount"],
-        ],
-        group: ["tenant_id"],
-        order: [[Sequelize.literal("messageCount"), "DESC"]],
-        limit: 5,
-        raw: true,
+    // ─── 8. Top Tenants by Messages (INNER JOIN to skip deleted tenants) ─────
+    const topTenantsQuery = periodStart
+        ? `SELECT m.tenant_id, t.company_name, t.status, COUNT(m.id) as messageCount
+           FROM messages m
+           INNER JOIN tenants t ON m.tenant_id = t.tenant_id
+           WHERE m.created_at >= :periodStart
+           GROUP BY m.tenant_id, t.company_name, t.status
+           ORDER BY messageCount DESC
+           LIMIT 5`
+        : `SELECT m.tenant_id, t.company_name, t.status, COUNT(m.id) as messageCount
+           FROM messages m
+           INNER JOIN tenants t ON m.tenant_id = t.tenant_id
+           GROUP BY m.tenant_id, t.company_name, t.status
+           ORDER BY messageCount DESC
+           LIMIT 5`;
+
+    const topTenantsByMessages = await db.sequelize.query(topTenantsQuery, {
+        replacements: periodStart ? { periodStart } : {},
+        type: Sequelize.QueryTypes.SELECT,
     });
-
-    // Enrich with tenant names
-    const tenantIds = topTenantsByMessages.map((t) => t.tenant_id);
-    const tenantDetails = tenantIds.length > 0
-        ? await db.Tenants.findAll({
-            where: { tenant_id: tenantIds },
-            attributes: ["tenant_id", "company_name", "status"],
-            raw: true,
-        })
-        : [];
-
-    const tenantMap = {};
-    tenantDetails.forEach((t) => { tenantMap[t.tenant_id] = t; });
 
     const topTenantsEnriched = topTenantsByMessages.map((t) => ({
         tenantId: t.tenant_id,
-        companyName: tenantMap[t.tenant_id]?.company_name || "Unknown",
-        status: tenantMap[t.tenant_id]?.status || "unknown",
+        companyName: t.company_name || "Unknown",
+        status: t.status || "unknown",
         messageCount: parseInt(t.messageCount, 10),
     }));
 
@@ -262,54 +257,36 @@ export const getSuperAdminDashboardStatsService = async (period = "30days") => {
         raw: true,
     });
 
-    const topRevenueTenants = await db.BillingLedger.findAll({
-        where: { ...periodWhere },
-        attributes: [
-            "tenant_id",
-            [Sequelize.fn("SUM", Sequelize.col("total_cost")), "totalRevenue"],
-        ],
-        group: ["tenant_id"],
-        order: [[Sequelize.literal("totalRevenue"), "DESC"]],
-        limit: 5,
-        raw: true,
-    });
+    const topRevenueTenantQuery = periodStart
+        ? `SELECT b.tenant_id, t.company_name, SUM(b.total_cost) as totalRevenue
+           FROM billing_ledger b
+           INNER JOIN tenants t ON b.tenant_id = t.tenant_id
+           WHERE b.created_at >= :periodStart
+           GROUP BY b.tenant_id, t.company_name
+           ORDER BY totalRevenue DESC
+           LIMIT 5`
+        : `SELECT b.tenant_id, t.company_name, SUM(b.total_cost) as totalRevenue
+           FROM billing_ledger b
+           INNER JOIN tenants t ON b.tenant_id = t.tenant_id
+           GROUP BY b.tenant_id, t.company_name
+           ORDER BY totalRevenue DESC
+           LIMIT 5`;
 
-    // Enrich revenue tenants with names
-    const revTenantIds = topRevenueTenants.map((t) => t.tenant_id);
-    const revTenantDetails = revTenantIds.length > 0
-        ? await db.Tenants.findAll({
-            where: { tenant_id: revTenantIds },
-            attributes: ["tenant_id", "company_name"],
-            raw: true,
-        })
-        : [];
-    const revTenantMap = {};
-    revTenantDetails.forEach((t) => { revTenantMap[t.tenant_id] = t; });
+    const topRevenueTenants = await db.sequelize.query(topRevenueTenantQuery, {
+        replacements: periodStart ? { periodStart } : {},
+        type: Sequelize.QueryTypes.SELECT,
+    });
 
     // ─── 19. Platform Live Ops ───────────────────────────────────────
-    const activeChatsByTenant = await db.LiveChat.findAll({
-        where: { status: "active" },
-        attributes: [
-            "tenant_id",
-            [Sequelize.fn("COUNT", Sequelize.col("id")), "chatCount"],
-        ],
-        group: ["tenant_id"],
-        order: [[Sequelize.literal("chatCount"), "DESC"]],
-        limit: 5,
-        raw: true,
-    });
-
-    // Enrich active chats with tenant names
-    const liveOpsTenantIds = activeChatsByTenant.map((t) => t.tenant_id);
-    const liveOpsTenantDetails = liveOpsTenantIds.length > 0
-        ? await db.Tenants.findAll({
-            where: { tenant_id: liveOpsTenantIds },
-            attributes: ["tenant_id", "company_name"],
-            raw: true,
-        })
-        : [];
-    const liveOpsTenantMap = {};
-    liveOpsTenantDetails.forEach((t) => { liveOpsTenantMap[t.tenant_id] = t; });
+    const [activeChatsByTenant] = await db.sequelize.query(
+        `SELECT lc.tenant_id, t.company_name, COUNT(lc.id) as chatCount
+         FROM live_chats lc
+         INNER JOIN tenants t ON lc.tenant_id = t.tenant_id
+         WHERE lc.status = 'active'
+         GROUP BY lc.tenant_id, t.company_name
+         ORDER BY chatCount DESC
+         LIMIT 5`,
+    );
 
     const totalAgents = await db.TenantUsers.count({
         where: { is_deleted: false, role: { [Op.in]: ["agent", "staff"] } },
@@ -330,27 +307,13 @@ export const getSuperAdminDashboardStatsService = async (period = "30days") => {
         raw: true,
     });
 
-    const warningAccounts = await db.Whatsappaccount.findAll({
-        where: {
-            is_deleted: false,
-            quality: { [Op.in]: ["YELLOW", "RED"] },
-        },
-        attributes: ["tenant_id", "whatsapp_number", "quality", "status"],
-        limit: 10,
-        raw: true,
-    });
-
-    // Enrich warning accounts
-    const warnTenantIds = warningAccounts.map((a) => a.tenant_id);
-    const warnTenantDetails = warnTenantIds.length > 0
-        ? await db.Tenants.findAll({
-            where: { tenant_id: warnTenantIds },
-            attributes: ["tenant_id", "company_name"],
-            raw: true,
-        })
-        : [];
-    const warnTenantMap = {};
-    warnTenantDetails.forEach((t) => { warnTenantMap[t.tenant_id] = t; });
+    const [warningAccounts] = await db.sequelize.query(
+        `SELECT wa.tenant_id, t.company_name, wa.whatsapp_number, wa.quality, wa.status
+         FROM whatsapp_accounts wa
+         INNER JOIN tenants t ON wa.tenant_id = t.tenant_id
+         WHERE wa.is_deleted = false AND wa.quality IN ('YELLOW', 'RED')
+         LIMIT 10`,
+    );
 
     // ─── 21. AI Token Usage (Aggregated) ─────────────────────────────
     const aiTokenUsage = await db.AiTokenUsage.findAll({
@@ -367,30 +330,25 @@ export const getSuperAdminDashboardStatsService = async (period = "30days") => {
         raw: true,
     });
 
-    const topAiConsumers = await db.AiTokenUsage.findAll({
-        where: { ...periodWhere },
-        attributes: [
-            "tenant_id",
-            [Sequelize.fn("SUM", Sequelize.col("total_tokens")), "tokensUsed"],
-            [Sequelize.fn("SUM", Sequelize.col("estimated_cost")), "cost"],
-        ],
-        group: ["tenant_id"],
-        order: [[Sequelize.literal("cost"), "DESC"]],
-        limit: 5,
-        raw: true,
-    });
+    const topAiConsumerQuery = periodStart
+        ? `SELECT a.tenant_id, t.company_name, SUM(a.total_tokens) as tokensUsed, SUM(a.estimated_cost) as cost
+           FROM ai_token_usage a
+           INNER JOIN tenants t ON a.tenant_id = t.tenant_id
+           WHERE a.created_at >= :periodStart
+           GROUP BY a.tenant_id, t.company_name
+           ORDER BY cost DESC
+           LIMIT 5`
+        : `SELECT a.tenant_id, t.company_name, SUM(a.total_tokens) as tokensUsed, SUM(a.estimated_cost) as cost
+           FROM ai_token_usage a
+           INNER JOIN tenants t ON a.tenant_id = t.tenant_id
+           GROUP BY a.tenant_id, t.company_name
+           ORDER BY cost DESC
+           LIMIT 5`;
 
-    // Enrich AI consumers
-    const aiConsumerIds = topAiConsumers.map((t) => t.tenant_id);
-    const aiConsumerDetails = aiConsumerIds.length > 0
-        ? await db.Tenants.findAll({
-            where: { tenant_id: aiConsumerIds },
-            attributes: ["tenant_id", "company_name"],
-            raw: true,
-        })
-        : [];
-    const aiConsumerMap = {};
-    aiConsumerDetails.forEach((t) => { aiConsumerMap[t.tenant_id] = t; });
+    const topAiConsumers = await db.sequelize.query(topAiConsumerQuery, {
+        replacements: periodStart ? { periodStart } : {},
+        type: Sequelize.QueryTypes.SELECT,
+    });
 
     // ─── 22. Tenant Growth (monthly registrations, last 12 months) ───
     const tenantGrowth = await db.sequelize.query(`
@@ -572,7 +530,7 @@ export const getSuperAdminDashboardStatsService = async (period = "30days") => {
             })),
             topTenants: topRevenueTenants.map((t) => ({
                 tenantId: t.tenant_id,
-                companyName: revTenantMap[t.tenant_id]?.company_name || "Unknown",
+                companyName: t.company_name || "Unknown",
                 revenue: parseFloat(t.totalRevenue || 0),
             })),
         },
@@ -581,7 +539,7 @@ export const getSuperAdminDashboardStatsService = async (period = "30days") => {
             totalAgents,
             topActiveTenants: activeChatsByTenant.map((t) => ({
                 tenantId: t.tenant_id,
-                companyName: liveOpsTenantMap[t.tenant_id]?.company_name || "Unknown",
+                companyName: t.company_name || "Unknown",
                 activeChats: parseInt(t.chatCount, 10),
             })),
         },
@@ -592,7 +550,7 @@ export const getSuperAdminDashboardStatsService = async (period = "30days") => {
             })),
             warningAccounts: warningAccounts.map((a) => ({
                 tenantId: a.tenant_id,
-                companyName: warnTenantMap[a.tenant_id]?.company_name || "Unknown",
+                companyName: a.company_name || "Unknown",
                 number: a.whatsapp_number,
                 quality: a.quality,
                 status: a.status,
@@ -608,7 +566,7 @@ export const getSuperAdminDashboardStatsService = async (period = "30days") => {
             })),
             topConsumers: topAiConsumers.map((t) => ({
                 tenantId: t.tenant_id,
-                companyName: aiConsumerMap[t.tenant_id]?.company_name || "Unknown",
+                companyName: t.company_name || "Unknown",
                 tokensUsed: parseInt(t.tokensUsed || 0, 10),
                 cost: parseFloat(t.cost || 0),
             })),
