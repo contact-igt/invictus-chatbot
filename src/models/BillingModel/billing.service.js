@@ -157,10 +157,12 @@ export const processBillingFromWebhook = async (tenant_id, statusUpdate) => {
     }
 
     // 3. Create BillingLedger Record and Deduct Wallet Balance (Atomic Transaction)
+    // Use findOrCreate to prevent duplicate billing for the same message
     await db.sequelize.transaction(async (t) => {
-      // Create the ledger entry
-      const ledger = await db.BillingLedger.create(
-        {
+      // Prevent duplicate billing - check if ledger already exists for this message
+      const [ledger, ledgerCreated] = await db.BillingLedger.findOrCreate({
+        where: { message_usage_id: usageRecord.id },
+        defaults: {
           tenant_id,
           message_usage_id: usageRecord.id,
           template_name: template_name,
@@ -173,8 +175,16 @@ export const processBillingFromWebhook = async (tenant_id, statusUpdate) => {
           total_cost: totalCost,
           markup_percent: markupPercent,
         },
-        { transaction: t },
-      );
+        transaction: t,
+      });
+
+      // If ledger already existed, skip wallet deduction (already billed)
+      if (!ledgerCreated) {
+        console.log(
+          `[BILLING] Skipping duplicate billing for message_usage_id ${usageRecord.id}`,
+        );
+        return;
+      }
 
       if (totalCost > 0) {
         // Find or create wallet
@@ -190,7 +200,7 @@ export const processBillingFromWebhook = async (tenant_id, statusUpdate) => {
 
         await wallet.update({ balance: newBalance }, { transaction: t });
 
-        // Record the transaction
+        // Record the transaction with balance_after for audit trail
         await db.WalletTransactions.create(
           {
             tenant_id,
@@ -198,6 +208,7 @@ export const processBillingFromWebhook = async (tenant_id, statusUpdate) => {
             amount: totalCost,
             reference_id: `ledger_${ledger.id}`,
             description: `Message Billing: ${category} (${country})`,
+            balance_after: newBalance,
           },
           { transaction: t },
         );
@@ -987,6 +998,7 @@ export const addManualCreditService = async (
           amount: amountInRupees,
           reference_id: reference_id || `admin_credit_${Date.now()}`,
           description: `Manual Credit: ${reason} (by admin: ${admin_id})`,
+          balance_after: newBalance,
         },
         { transaction: t },
       );

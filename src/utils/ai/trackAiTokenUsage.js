@@ -172,6 +172,7 @@ export const trackAiTokenUsage = async (tenant_id, source, response) => {
             amount: estimatedCostInr,
             reference_id: `ai_usage_${usageRecord.id}`,
             description: `AI Usage: ${model} (${source}) - ${total_tokens} tokens`,
+            balance_after: newBalance,
           },
           { transaction: t },
         );

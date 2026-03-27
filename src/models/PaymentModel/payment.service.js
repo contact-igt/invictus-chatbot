@@ -93,6 +93,7 @@ export const verifyRazorpayPaymentService = async (tenant_id, paymentData) => {
           amount: amountInRupees,
           reference_id: razorpay_payment_id,
           description: "Wallet Recharge (Online)",
+          balance_after: newBalance,
         },
         { transaction: t },
       );
