@@ -15,6 +15,7 @@ import {
   getOnboardedTenantListController,
   getTenantSettingsController,
   updateTenantAiSettingsController,
+  validateOpenAIKeyController,
 } from "./tenant.controller.js";
 import {
   authenticate,
@@ -61,6 +62,16 @@ Router.post(
     roles: ["platform_admin", "super_admin"],
   }),
   createTenantController,
+);
+
+Router.post(
+  "/validate-openai-key",
+  authenticate,
+  authorize({
+    user_type: "management",
+    roles: ["platform_admin", "super_admin"],
+  }),
+  validateOpenAIKeyController,
 );
 
 Router.get(

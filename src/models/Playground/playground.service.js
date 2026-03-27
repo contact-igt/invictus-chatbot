@@ -5,10 +5,7 @@ import { processResponse } from "../../utils/ai/aiTagHandlers/index.js";
 import { classifyResponse } from "../../utils/ai/responseClassifier.js";
 import { getTenantAiModel } from "../../utils/ai/getTenantAiModel.js";
 import { trackAiTokenUsage } from "../../utils/ai/trackAiTokenUsage.js";
-
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+import { getOpenAIClient } from "../../utils/ai/getOpenAIClient.js";
 
 /**
  * Main playground chat service.
@@ -52,6 +49,7 @@ export const playgroundChatService = async (
     messages.push({ role: "user", content: message });
 
     const outputModel = await getTenantAiModel(tenant_id, "output");
+    const openai = await getOpenAIClient(tenant_id);
 
     const response = await openai.chat.completions.create({
       model: outputModel,

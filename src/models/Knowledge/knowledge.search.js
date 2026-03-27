@@ -4,10 +4,7 @@ import { tableNames } from "../../database/tableName.js";
 import { SEARCH_REFINE_PROMPT } from "../../utils/ai/prompts/index.js";
 import { getTenantAiModel } from "../../utils/ai/getTenantAiModel.js";
 import { trackAiTokenUsage } from "../../utils/ai/trackAiTokenUsage.js";
-
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+import { getOpenAIClient } from "../../utils/ai/getOpenAIClient.js";
 
 /**
  * Uses a fast LLM to refine a user's question into optimized search keywords.
@@ -17,6 +14,7 @@ export const analyzeQuestionForSearch = async (question, tenant_id = null) => {
     const prompt = SEARCH_REFINE_PROMPT.replace("{QUESTION}", question);
 
     const inputModel = await getTenantAiModel(tenant_id, "input");
+    const openai = await getOpenAIClient(tenant_id);
 
     const response = await openai.chat.completions.create({
       model: inputModel,

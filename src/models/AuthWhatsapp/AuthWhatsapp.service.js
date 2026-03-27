@@ -12,11 +12,8 @@ import { classifyResponse } from "../../utils/ai/responseClassifier.js";
 import { handleClassification } from "../../utils/ai/classificationHandler.js";
 import { trackAiTokenUsage } from "../../utils/ai/trackAiTokenUsage.js";
 import { getTenantAiModel } from "../../utils/ai/getTenantAiModel.js";
+import { getOpenAIClient } from "../../utils/ai/getOpenAIClient.js";
 import { getIO } from "../../middlewares/socket/socket.js";
-
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
 
 const httpsAgent = new https.Agent({
   family: 4,
@@ -109,8 +106,8 @@ export const sendWhatsAppLocation = async (tenant_id, to, locationParams) => {
     to,
     type: "location",
     location: {
-      latitude: Number(locationParams.latitude),
-      longitude: Number(locationParams.longitude),
+      latitude: String(locationParams.latitude),
+      longitude: String(locationParams.longitude),
       name: locationParams.name || "",
       address: locationParams.address || "",
     },
@@ -516,6 +513,7 @@ export const getOpenAIReply = async (
     ];
 
     const outputModel = await getTenantAiModel(tenant_id, "output");
+    const openai = await getOpenAIClient(tenant_id);
 
     let response = await openai.chat.completions.create({
       model: outputModel,

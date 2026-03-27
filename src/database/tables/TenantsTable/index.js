@@ -153,6 +153,7 @@ export const TenantsTable = (sequelize, Sequelize) => {
           content_generation: true,
           input_model: "gpt-4o-mini",
           output_model: "gpt-4o",
+          openai_api_key: "",
         },
       },
 

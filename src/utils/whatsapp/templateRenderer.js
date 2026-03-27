@@ -40,6 +40,15 @@ export const renderTemplateContent = async (template_id, dynamicComponents = [])
           }
         });
         messageContent += headerText + "\n";
+      } else if (header.header_format === 'location') {
+        // Location Header
+        const headerComp = dynamicComponents?.find((c) => c.type === "header");
+        const loc = headerComp?.parameters?.[0]?.location;
+        if (loc?.name) {
+          messageContent += `[LOCATION: ${loc.name}${loc.address ? ` - ${loc.address}` : ""}]\n`;
+        } else {
+          messageContent += `[LOCATION]\n`;
+        }
       } else if (header.header_format && header.header_format !== 'text') {
         // Media Header (IMAGE, VIDEO, DOCUMENT)
         const format = header.header_format.toUpperCase();

@@ -1,10 +1,7 @@
 import OpenAI from "openai";
 import { getTenantAiModel } from "./getTenantAiModel.js";
 import { trackAiTokenUsage } from "./trackAiTokenUsage.js";
-
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+import { getOpenAIClient } from "./getOpenAIClient.js";
 
 /**
  * Processes scraped text based on a user-provided prompt or a default cleaning prompt.
@@ -27,6 +24,7 @@ export const processKnowledgeWithAi = async (
 
   try {
     const inputModel = await getTenantAiModel(tenant_id, "input");
+    const openai = await getOpenAIClient(tenant_id);
 
     const response = await openai.chat.completions.create({
       model: inputModel,

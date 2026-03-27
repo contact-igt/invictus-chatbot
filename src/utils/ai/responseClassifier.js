@@ -3,13 +3,10 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
-
 import { CLASSIFIER_PROMPT } from "./prompts/index.js";
 import { getTenantAiModel } from "./getTenantAiModel.js";
 import { trackAiTokenUsage } from "./trackAiTokenUsage.js";
+import { getOpenAIClient } from "./getOpenAIClient.js";
 
 /**
  * Classifies an AI response into a specific category with reasoning.
@@ -30,6 +27,7 @@ export const classifyResponse = async (
     ).replace("{AI_RESPONSE}", aiResponse);
 
     const inputModel = await getTenantAiModel(tenant_id, "input");
+    const openai = await getOpenAIClient(tenant_id);
 
     const completion = await openai.chat.completions.create({
       model: inputModel,
