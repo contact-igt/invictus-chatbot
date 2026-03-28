@@ -516,7 +516,7 @@ export const getDoctorsForAIService = async (tenant_id) => {
     const [doctors] = await db.sequelize.query(
       `SELECT d.doctor_id, d.title, d.name, d.status, d.consultation_duration, d.experience_years, d.qualification
        FROM ${tableNames.DOCTORS} d
-       WHERE d.tenant_id = ? AND d.is_deleted = false AND d.status IN ('available', 'busy', 'off duty')
+       WHERE d.tenant_id = ? AND d.is_deleted = false AND d.status IN ('available', 'busy', 'off_duty')
        ORDER BY d.name ASC`,
       { replacements: [tenant_id] },
     );
@@ -543,17 +543,23 @@ export const getDoctorsForAIService = async (tenant_id) => {
 
       const specializationNames =
         specs.map((s) => s.name).join(", ") || "General";
-      const availabilityText =
-        availability.length > 0
-          ? availability
-              .map((a) => {
-                const dayCapitalized =
-                  a.day_of_week.charAt(0).toUpperCase() +
-                  a.day_of_week.slice(1);
-                return `    ${dayCapitalized}: ${a.start_time}–${a.end_time}`;
-              })
-              .join("\n")
-          : "    Contact clinic for availability";
+
+      // Group time slots by day so AI sees all slots per day on one line
+      let availabilityText = "    Contact clinic for availability";
+      if (availability.length > 0) {
+        const dayMap = new Map();
+        for (const a of availability) {
+          const dayCapitalized =
+            a.day_of_week.charAt(0).toUpperCase() + a.day_of_week.slice(1);
+          if (!dayMap.has(dayCapitalized)) {
+            dayMap.set(dayCapitalized, []);
+          }
+          dayMap.get(dayCapitalized).push(`${a.start_time}–${a.end_time}`);
+        }
+        availabilityText = Array.from(dayMap.entries())
+          .map(([day, slots]) => `    ${day}: ${slots.join(", ")}`)
+          .join("\n");
+      }
 
       const title = doc.title ? `${doc.title} ` : "";
       const exp =

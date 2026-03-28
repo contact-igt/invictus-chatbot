@@ -186,10 +186,14 @@ ${resolvedContext}
             "\nUPCOMING ACTIVE APPOINTMENTS (SOURCE OF TRUTH):\n" +
             futureAppts
               .map((a) => {
-                const dateStr = new Date(a.appointment_date).toLocaleDateString(
-                  "en-GB",
-                  { day: "2-digit", month: "long", year: "numeric" },
-                );
+                const dateStr = new Date(
+                  a.appointment_date + "T12:00:00Z",
+                ).toLocaleDateString("en-GB", {
+                  timeZone: tenantTimezone,
+                  day: "2-digit",
+                  month: "long",
+                  year: "numeric",
+                });
                 const doctorInfo = a.doctor
                   ? `${a.doctor.name} (${a.doctor_id})`
                   : "Unknown Doctor";
@@ -206,10 +210,14 @@ ${resolvedContext}
             "\nEXPIRED APPOINTMENTS (Date passed but NOT completed/cancelled):\n" +
             expiredConfirmedAppts
               .map((a) => {
-                const dateStr = new Date(a.appointment_date).toLocaleDateString(
-                  "en-GB",
-                  { day: "2-digit", month: "long", year: "numeric" },
-                );
+                const dateStr = new Date(
+                  a.appointment_date + "T12:00:00Z",
+                ).toLocaleDateString("en-GB", {
+                  timeZone: tenantTimezone,
+                  day: "2-digit",
+                  month: "long",
+                  year: "numeric",
+                });
                 const doctorInfo = a.doctor
                   ? `${a.doctor.name} (${a.doctor_id})`
                   : "Unknown Doctor";
@@ -226,10 +234,14 @@ ${resolvedContext}
             "\nCOMPLETED APPOINTMENTS (HISTORY):\n" +
             completedAppts
               .map((a) => {
-                const dateStr = new Date(a.appointment_date).toLocaleDateString(
-                  "en-GB",
-                  { day: "2-digit", month: "long", year: "numeric" },
-                );
+                const dateStr = new Date(
+                  a.appointment_date + "T12:00:00Z",
+                ).toLocaleDateString("en-GB", {
+                  timeZone: tenantTimezone,
+                  day: "2-digit",
+                  month: "long",
+                  year: "numeric",
+                });
                 const doctorInfo = a.doctor
                   ? `with ${a.doctor.name} (${a.doctor_id})`
                   : "";
@@ -254,10 +266,14 @@ ${resolvedContext}
             "\nPAST APPOINTMENTS (HISTORY):\n" +
             otherPastAppts
               .map((a) => {
-                const dateStr = new Date(a.appointment_date).toLocaleDateString(
-                  "en-GB",
-                  { day: "2-digit", month: "long", year: "numeric" },
-                );
+                const dateStr = new Date(
+                  a.appointment_date + "T12:00:00Z",
+                ).toLocaleDateString("en-GB", {
+                  timeZone: tenantTimezone,
+                  day: "2-digit",
+                  month: "long",
+                  year: "numeric",
+                });
                 const doctorInfo = a.doctor
                   ? `with ${a.doctor.name} (${a.doctor_id})`
                   : "";
@@ -273,10 +289,14 @@ ${resolvedContext}
             "\nRECENTLY CANCELLED/DELETED APPOINTMENTS (PAST 24H):\n" +
             cancelledAppts
               .map((a) => {
-                const dateStr = new Date(a.appointment_date).toLocaleDateString(
-                  "en-GB",
-                  { day: "2-digit", month: "long", year: "numeric" },
-                );
+                const dateStr = new Date(
+                  a.appointment_date + "T12:00:00Z",
+                ).toLocaleDateString("en-GB", {
+                  timeZone: tenantTimezone,
+                  day: "2-digit",
+                  month: "long",
+                  year: "numeric",
+                });
                 return `  - Appointment ${a.appointment_id} on ${dateStr} was CANCELLED or DELETED.`;
               })
               .join("\n") +

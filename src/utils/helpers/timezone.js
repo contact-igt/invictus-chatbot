@@ -48,7 +48,7 @@ export const getCurrentDateTimeForAI = (timezone = DEFAULT_TIMEZONE) => {
   const tz = SUPPORTED_TIMEZONES.includes(timezone)
     ? timezone
     : DEFAULT_TIMEZONE;
-  const now = getDateInTimezone(tz);
+  const now = new Date(); // Always use real UTC Date object
 
   // Get timezone display name
   const tzDisplay =
@@ -59,26 +59,50 @@ export const getCurrentDateTimeForAI = (timezone = DEFAULT_TIMEZONE) => {
       .formatToParts(now)
       .find((p) => p.type === "timeZoneName")?.value || tz;
 
+  // Extract date parts directly using Intl with timezone (no double-conversion)
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    weekday: "long",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: true,
+  }).formatToParts(now);
+
+  const get = (type) => parts.find((p) => p.type === type)?.value || "";
+  const year = parseInt(get("year"));
+  const month = parseInt(get("month"));
+  const dayOfMonth = parseInt(get("day"));
+  const dayName = get("weekday");
+  const hour = get("hour");
+  const minute = get("minute");
+  const dayPeriod = get("dayPeriod");
+
+  // Get day of week number (0=Sunday)
+  const dayOfWeekDate = new Date(
+    now.toLocaleDateString("en-CA", { timeZone: tz }) + "T12:00:00Z",
+  );
+  const dayOfWeek = dayOfWeekDate.getUTCDay();
+
   return {
     date: now.toLocaleDateString("en-GB", {
+      timeZone: tz,
       day: "2-digit",
       month: "long",
       year: "numeric",
     }),
-    day: now.toLocaleDateString("en-US", { weekday: "long" }),
-    time: now.toLocaleTimeString("en-US", {
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: true,
-    }),
+    day: dayName,
+    time: `${hour}:${minute} ${dayPeriod}`,
     timezone: tz,
     timezoneDisplay: tzDisplay,
-    dateISO: `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`,
+    dateISO: `${year}-${String(month).padStart(2, "0")}-${String(dayOfMonth).padStart(2, "0")}`,
     // For calendar calculations
-    year: now.getFullYear(),
-    month: now.getMonth() + 1,
-    dayOfMonth: now.getDate(),
-    dayOfWeek: now.getDay(), // 0 = Sunday
+    year,
+    month,
+    dayOfMonth,
+    dayOfWeek,
   };
 };
 
