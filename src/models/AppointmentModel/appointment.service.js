@@ -867,8 +867,8 @@ export const getAvailableSlotsService = async (tenant_id, doctor_id, date) => {
       };
     }
 
-    // 2. Determine day_of_week from the date
-    const dateObj = new Date(date + "T00:00:00");
+    // 2. Determine day_of_week from the date (use noon UTC to avoid timezone day-shift)
+    const dateObj = new Date(date + "T12:00:00Z");
     const days = [
       "sunday",
       "monday",

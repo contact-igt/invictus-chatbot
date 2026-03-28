@@ -84,17 +84,15 @@ export const getLeadByLeadIdService = async (tenant_id, lead_id) => {
 
     const lead = leads[0];
 
-    // Fetch last 4 messages for this lead
+    // Fetch last 4 messages for this lead (MySQL 5.7 compatible)
     const messagesQuery = `
-      SELECT contact_id, sender, message, created_at
-      FROM (
-        SELECT 
-          contact_id, sender, message, created_at,
-          ROW_NUMBER() OVER(PARTITION BY contact_id ORDER BY created_at DESC) as rn
+      SELECT contact_id, sender, message, created_at FROM (
+        SELECT contact_id, sender, message, created_at
         FROM ${tableNames.MESSAGES}
         WHERE tenant_id = ? AND contact_id = ?
-      ) as ranked
-      WHERE rn <= 4
+        ORDER BY created_at DESC
+        LIMIT 4
+      ) as recent
       ORDER BY created_at ASC
     `;
 
@@ -700,31 +698,43 @@ export const getDeletedLeadListService = async (tenant_id) => {
       return { leads: [] };
     }
 
-    // 2. Fetch last 4 messages for these leads for preview
+    // 2. Fetch last 4 messages per lead (MySQL 5.7 compatible)
     const contactIds = leads.map((l) => l.contact_id);
-    const messagesQuery = `
-      SELECT contact_id, sender, message, created_at
-      FROM (
-        SELECT 
-          contact_id, sender, message, created_at,
-          ROW_NUMBER() OVER(PARTITION BY contact_id ORDER BY created_at DESC) as rn
-        FROM ${tableNames.MESSAGES}
-        WHERE tenant_id = ? AND contact_id IN (?)
-      ) as ranked
-      WHERE rn <= 4
-      ORDER BY contact_id, created_at ASC
-    `;
+    let messagesMap = {};
 
-    const [allMessages] = await db.sequelize.query(messagesQuery, {
-      replacements: [tenant_id, contactIds],
-    });
+    if (contactIds.length > 0) {
+      const messagesQuery = `
+        SELECT m.contact_id, m.sender, m.message, m.created_at
+        FROM ${tableNames.MESSAGES} m
+        INNER JOIN (
+          SELECT contact_id, MAX(created_at) as max_created
+          FROM ${tableNames.MESSAGES}
+          WHERE tenant_id = ? AND contact_id IN (?)
+          GROUP BY contact_id
+        ) latest ON m.contact_id = latest.contact_id
+        WHERE m.tenant_id = ? AND m.contact_id IN (?)
+        AND m.created_at >= DATE_SUB(latest.max_created, INTERVAL 7 DAY)
+        ORDER BY m.contact_id, m.created_at DESC
+      `;
 
-    // 3. Group messages by contact_id and attach to leads
-    const messagesMap = allMessages.reduce((acc, msg) => {
-      if (!acc[msg.contact_id]) acc[msg.contact_id] = [];
-      acc[msg.contact_id].push(msg);
-      return acc;
-    }, {});
+      const [allMessages] = await db.sequelize.query(messagesQuery, {
+        replacements: [tenant_id, contactIds, tenant_id, contactIds],
+      });
+
+      // Group by contact_id and keep only last 4 per contact
+      const grouped = allMessages.reduce((acc, msg) => {
+        if (!acc[msg.contact_id]) acc[msg.contact_id] = [];
+        if (acc[msg.contact_id].length < 4) {
+          acc[msg.contact_id].push(msg);
+        }
+        return acc;
+      }, {});
+
+      // Reverse to chronological order
+      messagesMap = Object.fromEntries(
+        Object.entries(grouped).map(([id, msgs]) => [id, msgs.reverse()]),
+      );
+    }
 
     const leadsWithMessages = leads.map((lead) => ({
       ...lead,
