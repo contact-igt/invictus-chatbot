@@ -40,6 +40,7 @@ export const buildAppointmentEmailHtml = ({
   doctorName,
   reason,
   changes,
+  companyName,
 }) => {
   const folderName = TEMPLATE_FOLDERS[type] || TEMPLATE_FOLDERS.Confirmed;
   const template = getTemplate(folderName);
@@ -61,6 +62,7 @@ export const buildAppointmentEmailHtml = ({
     time: time || "—",
     reason: reason || "—",
     changes_html,
+    company_name: companyName || "WhatsNexus",
   });
 };
 
