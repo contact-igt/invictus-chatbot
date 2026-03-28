@@ -4,10 +4,7 @@ import { tableNames } from "../../database/tableName.js";
 import { SEARCH_REFINE_PROMPT } from "../../utils/ai/prompts/index.js";
 import { getTenantAiModel } from "../../utils/ai/getTenantAiModel.js";
 import { trackAiTokenUsage } from "../../utils/ai/trackAiTokenUsage.js";
-
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+import { getOpenAIClient } from "../../utils/ai/getOpenAIClient.js";
 
 /**
  * Uses a fast LLM to refine a user's question into optimized search keywords.
@@ -17,6 +14,7 @@ export const analyzeQuestionForSearch = async (question, tenant_id = null) => {
     const prompt = SEARCH_REFINE_PROMPT.replace("{QUESTION}", question);
 
     const inputModel = await getTenantAiModel(tenant_id, "input");
+    const openai = await getOpenAIClient(tenant_id);
 
     const response = await openai.chat.completions.create({
       model: inputModel,
@@ -41,7 +39,7 @@ export const analyzeQuestionForSearch = async (question, tenant_id = null) => {
 };
 
 export const searchKnowledgeChunks = async (tenant_id, question) => {
-  if (!tenant_id || !question) return [];
+  if (!tenant_id || !question) return { chunks: [], resolvedLogs: [], sources: [] };
 
   // Step 1: AI-Refined Keywords (Query Expansion)
   const aiKeywords = await analyzeQuestionForSearch(question, tenant_id);
@@ -79,7 +77,7 @@ export const searchKnowledgeChunks = async (tenant_id, question) => {
   // Combine both (favoring unique terms)
   const keywords = [...new Set([...manualKeywords, ...refinedKeywords])];
 
-  if (!keywords.length) return [];
+  if (!keywords.length) return { chunks: [], resolvedLogs: [], sources: [] };
 
   const conditions = keywords.map(() => "kc.chunk_text LIKE ?").join(" OR ");
   const values = keywords.map((k) => `%${k}%`);
@@ -92,40 +90,74 @@ export const searchKnowledgeChunks = async (tenant_id, question) => {
       ON ks.id = kc.source_id
     WHERE ks.status = 'active'
       AND ks.is_deleted = false
+      AND kc.is_deleted = false
       AND ks.tenant_id IN (?)
       AND (${conditions})
     ORDER BY LENGTH(kc.chunk_text) ASC
     LIMIT 10
   `;
 
-  const [knowledgeRows] = await db.sequelize.query(query, {
-    replacements: [tenant_id, ...values],
-  });
+  let knowledgeRows = [];
+  try {
+    const [rows] = await db.sequelize.query(query, {
+      replacements: [tenant_id, ...values],
+    });
+    knowledgeRows = rows;
+  } catch (queryErr) {
+    // Fallback: try without kc.is_deleted filter (column may not exist in older DBs)
+    console.error("[KNOWLEDGE-SEARCH] Primary query failed:", queryErr.message);
+    try {
+      const fallbackQuery = `
+        SELECT kc.chunk_text, ks.id as source_id, ks.title as source_title, ks.type as source_type
+        FROM ${tableNames.KNOWLEDGECHUNKS} kc
+        INNER JOIN ${tableNames.KNOWLEDGESOURCE} ks
+          ON ks.id = kc.source_id
+        WHERE ks.status = 'active'
+          AND ks.is_deleted = false
+          AND ks.tenant_id IN (?)
+          AND (${conditions})
+        ORDER BY LENGTH(kc.chunk_text) ASC
+        LIMIT 10
+      `;
+      const [rows] = await db.sequelize.query(fallbackQuery, {
+        replacements: [tenant_id, ...values],
+      });
+      knowledgeRows = rows;
+    } catch (fallbackErr) {
+      console.error("[KNOWLEDGE-SEARCH] Fallback query also failed:", fallbackErr.message);
+    }
+  }
 
   /* 2️⃣ Search Resolved AI Logs (Real-time Feedback Loop) */
-  const logConditions = keywords
-    .map(() => "(user_message LIKE ? OR resolution LIKE ? OR payload LIKE ?)")
-    .join(" OR ");
-  const logValues = [];
-  keywords.forEach((k) => {
-    logValues.push(`%${k}%`);
-    logValues.push(`%${k}%`);
-    logValues.push(`%${k}%`);
-  });
+  let logRows = [];
+  try {
+    const logConditions = keywords
+      .map(() => "(user_message LIKE ? OR resolution LIKE ? OR payload LIKE ?)")
+      .join(" OR ");
+    const logValues = [];
+    keywords.forEach((k) => {
+      logValues.push(`%${k}%`);
+      logValues.push(`%${k}%`);
+      logValues.push(`%${k}%`);
+    });
 
-  const logQuery = `
-    SELECT user_message, resolution
-    FROM ${tableNames.AI_ANALYSIS_LOGS}
-    WHERE tenant_id IN (?)
-      AND status = 'resolved'
-      AND (${logConditions})
-    ORDER BY created_at DESC
-    LIMIT 5
-  `;
+    const logQuery = `
+      SELECT user_message, resolution
+      FROM ${tableNames.AI_ANALYSIS_LOGS}
+      WHERE tenant_id IN (?)
+        AND status = 'resolved'
+        AND (${logConditions})
+      ORDER BY created_at DESC
+      LIMIT 5
+    `;
 
-  const [logRows] = await db.sequelize.query(logQuery, {
-    replacements: [tenant_id, ...logValues],
-  });
+    const [rows] = await db.sequelize.query(logQuery, {
+      replacements: [tenant_id, ...logValues],
+    });
+    logRows = rows;
+  } catch (logErr) {
+    console.error("[KNOWLEDGE-SEARCH] AI logs query failed:", logErr.message);
+  }
 
   const logsFormatted = logRows.map(
     (r) =>

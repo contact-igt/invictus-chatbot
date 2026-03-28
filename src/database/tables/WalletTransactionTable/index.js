@@ -37,6 +37,12 @@ export const WalletTransactionTable = (sequelize, Sequelize) => {
         allowNull: true,
       },
 
+      balance_after: {
+        type: Sequelize.DECIMAL(15, 4),
+        allowNull: true,
+        comment: "Wallet balance after this transaction for audit trail",
+      },
+
       createdAt: {
         type: Sequelize.DATE,
         allowNull: false,
@@ -64,7 +70,15 @@ export const WalletTransactionTable = (sequelize, Sequelize) => {
           name: "idx_wallet_transactions_type",
           fields: ["type"],
         },
+        {
+          name: "idx_wallet_transactions_reference",
+          fields: ["reference_id"],
+        },
+        {
+          name: "idx_wallet_transactions_created",
+          fields: ["created_at"],
+        },
       ],
-    }
+    },
   );
 };

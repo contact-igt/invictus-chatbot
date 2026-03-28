@@ -1,10 +1,7 @@
 import OpenAI from "openai";
 import { trackAiTokenUsage } from "./trackAiTokenUsage.js";
 import { getTenantAiModel } from "./getTenantAiModel.js";
-
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+import { getOpenAIClient } from "./getOpenAIClient.js";
 
 export const AiService = async (
   system,
@@ -14,6 +11,7 @@ export const AiService = async (
 ) => {
   try {
     const inputModel = await getTenantAiModel(tenant_id, "input");
+    const openai = await getOpenAIClient(tenant_id);
 
     const response = await openai.chat.completions.create({
       model: inputModel,

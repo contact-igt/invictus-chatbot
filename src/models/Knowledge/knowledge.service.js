@@ -231,16 +231,32 @@ export const restoreKnowledgeService = async (id, tenant_id) => {
       throw new Error("Knowledge source not found or not deleted");
     }
 
-    // Use raw query to avoid ON UPDATE CURRENT_TIMESTAMP conflict
-    await db.sequelize.query(
-      `UPDATE ${tableNames.KNOWLEDGESOURCE} 
-     SET is_deleted = false, deleted_at = NULL 
-     WHERE id = ? AND tenant_id = ?`,
-      {
-        replacements: [id, tenant_id],
-        type: db.Sequelize.QueryTypes.UPDATE
-      }
-    );
+    // Restore source and its chunks in one transaction
+    await db.sequelize.transaction(async (t) => {
+      // Restore the source
+      await db.sequelize.query(
+        `UPDATE ${tableNames.KNOWLEDGESOURCE} 
+       SET is_deleted = false, deleted_at = NULL 
+       WHERE id = ? AND tenant_id = ?`,
+        {
+          replacements: [id, tenant_id],
+          type: db.Sequelize.QueryTypes.UPDATE,
+          transaction: t,
+        }
+      );
+
+      // Restore chunks that belong to this source
+      await db.sequelize.query(
+        `UPDATE ${tableNames.KNOWLEDGECHUNKS} 
+       SET is_deleted = false, deleted_at = NULL 
+       WHERE source_id = ? AND tenant_id = ?`,
+        {
+          replacements: [id, tenant_id],
+          type: db.Sequelize.QueryTypes.UPDATE,
+          transaction: t,
+        }
+      );
+    });
 
     return { message: "Knowledge source restored successfully" };
   } catch (err) {

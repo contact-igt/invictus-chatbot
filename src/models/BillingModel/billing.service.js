@@ -157,10 +157,12 @@ export const processBillingFromWebhook = async (tenant_id, statusUpdate) => {
     }
 
     // 3. Create BillingLedger Record and Deduct Wallet Balance (Atomic Transaction)
+    // Use findOrCreate to prevent duplicate billing for the same message
     await db.sequelize.transaction(async (t) => {
-      // Create the ledger entry
-      const ledger = await db.BillingLedger.create(
-        {
+      // Prevent duplicate billing - check if ledger already exists for this message
+      const [ledger, ledgerCreated] = await db.BillingLedger.findOrCreate({
+        where: { message_usage_id: usageRecord.id },
+        defaults: {
           tenant_id,
           message_usage_id: usageRecord.id,
           template_name: template_name,
@@ -173,8 +175,16 @@ export const processBillingFromWebhook = async (tenant_id, statusUpdate) => {
           total_cost: totalCost,
           markup_percent: markupPercent,
         },
-        { transaction: t },
-      );
+        transaction: t,
+      });
+
+      // If ledger already existed, skip wallet deduction (already billed)
+      if (!ledgerCreated) {
+        console.log(
+          `[BILLING] Skipping duplicate billing for message_usage_id ${usageRecord.id}`,
+        );
+        return;
+      }
 
       if (totalCost > 0) {
         // Find or create wallet
@@ -184,13 +194,13 @@ export const processBillingFromWebhook = async (tenant_id, statusUpdate) => {
           transaction: t,
         });
 
-        // Deduct balance (can go negative if we allow, or we could add a check here)
-        const oldBalance = parseFloat(wallet.balance);
+        // NaN protection: ensure balance is a valid number
+        const oldBalance = parseFloat(wallet.balance) || 0;
         const newBalance = oldBalance - totalCost;
 
         await wallet.update({ balance: newBalance }, { transaction: t });
 
-        // Record the transaction
+        // Record the transaction with balance_after for audit trail
         await db.WalletTransactions.create(
           {
             tenant_id,
@@ -198,6 +208,7 @@ export const processBillingFromWebhook = async (tenant_id, statusUpdate) => {
             amount: totalCost,
             reference_id: `ledger_${ledger.id}`,
             description: `Message Billing: ${category} (${country})`,
+            balance_after: newBalance,
           },
           { transaction: t },
         );
@@ -899,6 +910,17 @@ export const updateAutoRechargeSettingsService = async (
       updateData.auto_recharge_amount = a;
     }
 
+    // Validate that recharge amount is greater than threshold to prevent ineffective auto-recharge
+    const finalThreshold =
+      updateData.auto_recharge_threshold ??
+      (parseFloat(wallet.auto_recharge_threshold) || 100);
+    const finalAmount =
+      updateData.auto_recharge_amount ??
+      (parseFloat(wallet.auto_recharge_amount) || 500);
+    if (finalAmount <= finalThreshold) {
+      throw new Error("Auto-recharge amount must be greater than threshold");
+    }
+
     await wallet.update(updateData);
 
     return {
@@ -944,4 +966,101 @@ export const getAvailableAiModelsService = async () => {
       usd_to_inr_rate: usdToInr,
     };
   });
+};
+
+/**
+ * Super Admin: Add manual credit to a tenant's wallet
+ * Used for bank transfers, refunds, or promotional credits
+ */
+export const addManualCreditService = async (
+  tenant_id,
+  amount,
+  reason,
+  reference_id,
+  admin_id,
+) => {
+  try {
+    if (!amount || amount <= 0) {
+      throw new Error("Amount must be positive");
+    }
+    if (!reason) {
+      throw new Error("Reason is required");
+    }
+
+    const amountInRupees = parseFloat(amount);
+
+    let newBalance = 0;
+    await db.sequelize.transaction(async (t) => {
+      // Find or create wallet
+      let [wallet] = await db.Wallets.findOrCreate({
+        where: { tenant_id },
+        defaults: { tenant_id, balance: 0, currency: "INR" },
+        transaction: t,
+      });
+
+      newBalance = parseFloat(wallet.balance) + amountInRupees;
+      await wallet.update({ balance: newBalance }, { transaction: t });
+
+      // Log the transaction with admin reference
+      await db.WalletTransactions.create(
+        {
+          tenant_id,
+          type: "credit",
+          amount: amountInRupees,
+          reference_id: reference_id || `admin_credit_${Date.now()}`,
+          description: `Manual Credit: ${reason} (by admin: ${admin_id})`,
+          balance_after: newBalance,
+        },
+        { transaction: t },
+      );
+    });
+
+    // Emit socket update to tenant
+    try {
+      const io = getIO();
+      io.to(`tenant-${tenant_id}`).emit("payment-update", {
+        type: "ADMIN_CREDIT",
+        amount: amountInRupees,
+        balance: newBalance,
+        message: `₹${amountInRupees.toFixed(2)} credited: ${reason}`,
+      });
+
+      // If balance was restored from suspended state, emit restoration event
+      if (newBalance > 0) {
+        const { checkAndRestoreWallet } =
+          await import("../../utils/billing/walletGuard.js");
+        await checkAndRestoreWallet(tenant_id, newBalance);
+      }
+    } catch (err) {
+      console.error("[BILLING] Socket emit error:", err.message);
+    }
+
+    console.log(
+      `[BILLING] Admin ${admin_id} credited ₹${amountInRupees.toFixed(2)} to tenant ${tenant_id}. Reason: ${reason}. New balance: ₹${newBalance.toFixed(2)}`,
+    );
+
+    return {
+      success: true,
+      tenant_id,
+      amount: amountInRupees,
+      newBalance,
+      reason,
+      message: "Credit added successfully",
+    };
+  } catch (error) {
+    throw error;
+  }
+};
+
+/**
+ * Get wallet status for a tenant (used by management panel)
+ */
+export const getWalletStatusService = async (tenant_id) => {
+  try {
+    const { checkWalletStatus } =
+      await import("../../utils/billing/walletGuard.js");
+    return await checkWalletStatus(tenant_id);
+  } catch (error) {
+    throw error;
+  }
 };

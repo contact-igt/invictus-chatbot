@@ -564,8 +564,8 @@ export const executeCampaignBatchService = async (
                 {
                   type: "location",
                   location: {
-                    latitude: Number(campaignLocationParams.latitude),
-                    longitude: Number(campaignLocationParams.longitude),
+                    latitude: String(campaignLocationParams.latitude),
+                    longitude: String(campaignLocationParams.longitude),
                     name: campaignLocationParams.name || "",
                     address: campaignLocationParams.address || "",
                   },

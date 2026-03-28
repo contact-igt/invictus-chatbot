@@ -3,6 +3,10 @@ import { tableNames } from "../../database/tableName.js";
 import { generateReadableIdFromLast } from "../../utils/helpers/generateReadableIdFromLast.js";
 import { missingFieldsChecker } from "../../utils/helpers/missingFields.js";
 import { formatPhoneNumber } from "../../utils/helpers/formatPhoneNumber.js";
+import {
+  SUPPORTED_TIMEZONES,
+  DEFAULT_TIMEZONE,
+} from "../../utils/helpers/timezone.js";
 import crypto from "crypto";
 import {
   createTenantService,
@@ -18,6 +22,7 @@ import {
   getOnboardedTenantListService,
   getTenantSettingsService,
   updateTenantAiSettingsService,
+  
 } from "./tenant.service.js";
 
 import {
@@ -38,6 +43,8 @@ import {
 } from "../TenantUserModel/tenantuser.service.js";
 
 import { getComprehensiveWebhookStatusService } from "../WhatsappAccountModel/whatsappAccount.service.js";
+import { encrypt, decrypt, maskApiKey } from "../../utils/encryption.js";
+import OpenAI from "openai";
 
 export const createTenantController = async (req, res) => {
   const loginUSer = req.user;
@@ -123,7 +130,14 @@ export const createTenantController = async (req, res) => {
       subscriptionPlan || "basic",
       profile || null,
       null, // verify_token
-      ai_settings || null,
+      (() => {
+        if (!ai_settings) return null;
+        const settings = { ...ai_settings };
+        if (settings.openai_api_key) {
+          settings.openai_api_key = encrypt(settings.openai_api_key);
+        }
+        return settings;
+      })(),
     );
 
     const tenant_user_id = await generateReadableIdFromLast(
@@ -278,7 +292,14 @@ export const updateTenantController = async (req, res) => {
       maxUsers,
       subscriptionPlan,
       profile,
-      ai_settings,
+      (() => {
+        if (!ai_settings) return ai_settings;
+        const settings = { ...ai_settings };
+        if (settings.openai_api_key) {
+          settings.openai_api_key = encrypt(settings.openai_api_key);
+        }
+        return settings;
+      })(),
       id,
     );
 
@@ -553,6 +574,26 @@ export const getTenantSettingsController = async (req, res) => {
     console.log(`[SETTINGS GET] tenant_id=${tenant_id}`);
     const settings = await getTenantSettingsService(tenant_id);
     if (!settings) return res.status(404).json({ message: "Tenant not found" });
+
+    // NEVER send raw or encrypted key to frontend — only masked status
+    if (settings.ai_settings) {
+      const encryptedKey = settings.ai_settings.openai_api_key;
+      if (encryptedKey) {
+        try {
+          const rawKey = decrypt(encryptedKey);
+          settings.ai_settings.openai_api_key_masked = maskApiKey(rawKey);
+          settings.ai_settings.has_openai_key = true;
+        } catch {
+          settings.ai_settings.openai_api_key_masked = "••••••••";
+          settings.ai_settings.has_openai_key = true;
+        }
+      } else {
+        settings.ai_settings.openai_api_key_masked = "";
+        settings.ai_settings.has_openai_key = false;
+      }
+      delete settings.ai_settings.openai_api_key;
+    }
+
     return res.status(200).json({ message: "success", data: settings });
   } catch (err) {
     return res.status(500).json({ message: err.message });
@@ -591,9 +632,107 @@ export const updateTenantAiSettingsController = async (req, res) => {
       }
     }
 
+    // Validate timezone if provided
+    if (ai_settings?.timezone) {
+      if (!SUPPORTED_TIMEZONES.includes(ai_settings.timezone)) {
+        return res.status(400).json({
+          message: `Invalid timezone: ${ai_settings.timezone}. Please select a supported timezone.`,
+          supportedTimezones: SUPPORTED_TIMEZONES,
+        });
+      }
+    }
+
     await updateTenantAiSettingsService(tenant_id, ai_settings);
-    return res.status(200).json({ message: "Settings updated successfully" });
+
+    // Return refreshed settings with masked key so frontend cache stays consistent
+    const refreshed = await getTenantSettingsService(tenant_id);
+    if (refreshed?.ai_settings) {
+      const encryptedKey = refreshed.ai_settings.openai_api_key;
+      if (encryptedKey) {
+        try {
+          const rawKey = decrypt(encryptedKey);
+          refreshed.ai_settings.openai_api_key_masked = maskApiKey(rawKey);
+          refreshed.ai_settings.has_openai_key = true;
+        } catch {
+          refreshed.ai_settings.openai_api_key_masked = "••••••••";
+          refreshed.ai_settings.has_openai_key = true;
+        }
+      } else {
+        refreshed.ai_settings.openai_api_key_masked = "";
+        refreshed.ai_settings.has_openai_key = false;
+      }
+      delete refreshed.ai_settings.openai_api_key;
+    }
+
+    return res.status(200).json({ message: "Settings updated successfully", data: refreshed });
   } catch (err) {
     return res.status(500).json({ message: err.message });
   }
 };
+
+/**
+ * Validate an OpenAI API key by making a lightweight test call.
+ * Used during organization create/edit before saving.
+ */
+export const validateOpenAIKeyController = async (req, res) => {
+  try {
+    const { openai_api_key } = req.body;
+
+    if (!openai_api_key || !openai_api_key.trim()) {
+      return res.status(400).json({ message: "OpenAI API key is required" });
+    }
+
+    const trimmedKey = openai_api_key.trim();
+
+    // Quick format check
+    if (!trimmedKey.startsWith("sk-")) {
+      return res.status(400).json({
+        message: "Invalid key format. OpenAI keys start with 'sk-'",
+      });
+    }
+
+    // Test the key with a minimal API call
+    const testClient = new OpenAI({ apiKey: trimmedKey });
+    await testClient.models.list();
+
+    return res.status(200).json({
+      message: "OpenAI API key is valid",
+      valid: true,
+    });
+  } catch (err) {
+    const status = err?.status || 500;
+    if (status === 401) {
+      return res.status(400).json({
+        message: "Invalid OpenAI API key. Authentication failed.",
+        valid: false,
+      });
+    }
+    if (status === 429) {
+      return res.status(400).json({
+        message:
+          "OpenAI API key is rate-limited or has exceeded quota. Please check your billing.",
+        valid: false,
+      });
+    }
+    return res.status(400).json({
+      message: `OpenAI API key validation failed: ${err.message}`,
+      valid: false,
+    });
+  }
+};
+
+
+
+export const getAvailableTimezonesController = async (req, res) => {
+  try {
+    return res.status(200).json({
+      message: "success",
+      data: {
+        timezones: SUPPORTED_TIMEZONES,
+        default: DEFAULT_TIMEZONE,
+      },
+    });
+  } catch (err) {
+    return res.status(500).json({ message: err.message });
+  }
+}

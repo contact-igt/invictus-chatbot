@@ -4,6 +4,8 @@ import { createUserMessageService } from "../../../models/Messages/messages.serv
 import {
   findDoctorByNameService,
   getDoctorAvailabilityService,
+  getDoctorByIdService,
+  getDoctorsForAIService,
 } from "../../../models/DoctorModel/doctor.service.js";
 
 export const execute = async (payload, context, cleanMessage) => {
@@ -143,8 +145,13 @@ Please provide these details.`;
       return t;
     };
 
-    // Timezone-safe date extraction (avoids UTC shift with toISOString)
+    // Timezone-safe date extraction: DATEONLY returns "YYYY-MM-DD" strings,
+    // so use string directly instead of parsing through new Date() which shifts by timezone
     const toDateStr = (d) => {
+      if (typeof d === "string" && /^\d{4}-\d{2}-\d{2}/.test(d)) {
+        return d.substring(0, 10); // Extract YYYY-MM-DD from string
+      }
+      // Fallback for Date objects: use local date parts to avoid UTC shift
       const dt = new Date(d);
       return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
     };
@@ -245,7 +252,78 @@ Please provide these details.`;
       }
     }
 
-    // ─── Availability Check Before Booking ───
+    // ─── DATABASE VERIFICATION: Doctor Exists ───
+    if (data.doctor_id) {
+      const doctorExists = await getDoctorByIdService(
+        data.doctor_id,
+        tenant_id,
+      );
+      if (!doctorExists) {
+        console.log(
+          `[TAG-HANDLER-APPOINTMENT] Doctor not found in database: ${data.doctor_id}`,
+        );
+        // Fetch available doctors to show user
+        let altDoctorsList = "";
+        try {
+          const doctorsList = await getDoctorsForAIService(tenant_id);
+          if (doctorsList) {
+            altDoctorsList = `\n\nAvailable doctors:\n${doctorsList}`;
+          }
+        } catch (_) {}
+
+        const doctorNotFoundMsg =
+          `❌ I couldn't find the doctor *${data.doctor_id}* in our system. ` +
+          `This doctor may have been removed or the ID is incorrect.${altDoctorsList}\n\n` +
+          `Please select a valid doctor and I'll book your appointment.`;
+        await sendWhatsAppMessage(tenant_id, phone, doctorNotFoundMsg).catch(
+          () => {},
+        );
+        try {
+          await createUserMessageService(
+            tenant_id,
+            contact_id,
+            phone_number_id,
+            phone,
+            null,
+            null,
+            "bot",
+            null,
+            doctorNotFoundMsg,
+          );
+        } catch (_) {}
+        return; // Do NOT proceed with booking
+      }
+
+      // Check doctor status (must be AVAILABLE)
+      if (
+        doctorExists.status &&
+        doctorExists.status.toLowerCase() !== "available"
+      ) {
+        console.log(
+          `[TAG-HANDLER-APPOINTMENT] Doctor ${data.doctor_id} status is ${doctorExists.status}`,
+        );
+        const statusMsg =
+          `❌ Sorry, *${doctorExists.name || "this doctor"}* is currently *${doctorExists.status}* and not available for bookings.\n\n` +
+          `Please choose a different doctor.`;
+        await sendWhatsAppMessage(tenant_id, phone, statusMsg).catch(() => {});
+        try {
+          await createUserMessageService(
+            tenant_id,
+            contact_id,
+            phone_number_id,
+            phone,
+            null,
+            null,
+            "bot",
+            null,
+            statusMsg,
+          );
+        } catch (_) {}
+        return; // Do NOT proceed with booking
+      }
+    }
+
+    // ─── DATABASE VERIFICATION: Slot Availability ───
     if (data.doctor_id && data.date && data.time) {
       const isAvailable = await AppointmentService.checkAvailabilityService(
         tenant_id,

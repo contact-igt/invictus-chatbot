@@ -19,6 +19,9 @@ export const BillingLedgerTable = (sequelize, Sequelize) => {
       message_usage_id: {
         type: Sequelize.INTEGER,
         allowNull: false,
+        unique: true,
+        comment:
+          "Unique constraint prevents duplicate billing for the same message",
       },
 
       template_name: {
@@ -60,7 +63,7 @@ export const BillingLedgerTable = (sequelize, Sequelize) => {
         type: Sequelize.DECIMAL(10, 4),
         allowNull: false,
       },
-      
+
       markup_percent: {
         type: Sequelize.DECIMAL(5, 2),
         allowNull: false,
@@ -94,7 +97,16 @@ export const BillingLedgerTable = (sequelize, Sequelize) => {
           name: "idx_billing_ledger_created_at",
           fields: ["created_at"],
         },
+        {
+          name: "idx_billing_ledger_message_usage",
+          unique: true,
+          fields: ["message_usage_id"],
+        },
+        {
+          name: "idx_billing_ledger_category",
+          fields: ["category"],
+        },
       ],
-    }
+    },
   );
 };

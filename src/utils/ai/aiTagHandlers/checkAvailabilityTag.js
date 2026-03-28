@@ -102,7 +102,16 @@ export const execute = async (payload, context, cleanMessage) => {
     const result = await getAvailableSlotsService(tenant_id, doctor_id, date);
 
     let message;
-    if (!result.available && result.reason) {
+    // Handle "Doctor not found" case first
+    if (
+      !result.available &&
+      result.reason === "Doctor not found in our system"
+    ) {
+      message =
+        `📅 *Availability Check*\n\n` +
+        `❌ I couldn't find this doctor (${doctor_name || doctor_id}) in our system.\n\n` +
+        `Please select a valid doctor from our available doctors list.`;
+    } else if (!result.available && result.reason) {
       // Doctor doesn't work on this day - show their actual available days
       const availability = await getDoctorAvailabilityService(
         tenant_id,

@@ -13,6 +13,7 @@ import {
   getAutoRechargeSettingsController,
   updateAutoRechargeSettingsController,
   getAvailableAiModelsController,
+  getOwnWalletStatusController,
 } from "./billing.controller.js";
 import { authenticate } from "../../middlewares/auth/authMiddlewares.js";
 
@@ -65,6 +66,13 @@ router.put(
   "/billing/auto-recharge",
   authenticate,
   updateAutoRechargeSettingsController,
+);
+
+// WALLET STATUS (for tenant to check their own suspension status)
+router.get(
+  "/billing/wallet/status",
+  authenticate,
+  getOwnWalletStatusController,
 );
 
 export default router;

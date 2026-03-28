@@ -15,6 +15,20 @@ const STATUS_MAP = {
   DISABLED: "disabled",
 };
 
+// Valid Meta WhatsApp language codes
+const VALID_META_LANGUAGE_CODES = new Set([
+  'af', 'sq', 'ar', 'az', 'bn', 'bg', 'ca',
+  'zh_CN', 'zh_HK', 'zh_TW', 'hr', 'cs', 'da', 'nl',
+  'en', 'en_GB', 'en_US', 'et', 'fil', 'fi', 'fr',
+  'ka', 'de', 'el', 'gu', 'ha', 'he', 'hi',
+  'hu', 'id', 'ga', 'it', 'ja', 'kn', 'kk', 'rw_RW',
+  'ko', 'ky_KG', 'lo', 'lv', 'lt', 'mk', 'ms', 'ml',
+  'mr', 'nb', 'fa', 'pl', 'pt_BR', 'pt_PT', 'pa',
+  'ro', 'ru', 'sr', 'sk', 'sl', 'es', 'es_AR',
+  'es_ES', 'es_MX', 'sw', 'sv', 'ta', 'te',
+  'th', 'tr', 'uk', 'ur', 'uz', 'vi', 'zu',
+]);
+
 export const checkTemplateNameExistsOnMetaService = async (
   tenant_id,
   template_name,
@@ -65,6 +79,13 @@ export const createWhatsappTemplateService = async (
   const transaction = await db.sequelize.transaction();
 
   try {
+    // Validate language code
+    if (!language || !VALID_META_LANGUAGE_CODES.has(language)) {
+      throw new Error(
+        `Invalid language code "${language}". Please select a valid template language.`,
+      );
+    }
+
     const bodyText = components.body.text.trim();
 
     if (/^{{\d+}}/.test(bodyText)) {
@@ -1289,6 +1310,13 @@ export const updateWhatsappTemplateService = async (
     ) {
       throw new Error(
         `Cannot edit template with status: ${template.status}. Only draft, rejected, paused, or approved templates can be edited.`,
+      );
+    }
+
+    // Validate language code
+    if (language && !VALID_META_LANGUAGE_CODES.has(language)) {
+      throw new Error(
+        `Invalid language code "${language}". Please select a valid template language.`,
       );
     }
 

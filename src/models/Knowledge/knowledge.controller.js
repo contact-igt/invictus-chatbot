@@ -231,6 +231,11 @@ export const updateKnowledgeStatusController = async (req, res) => {
     });
   }
 
+  const allowedStatuses = ["active", "inactive"];
+  if (!allowedStatuses.includes(status)) {
+    return res.status(400).send({ message: "Invalid status value. Must be 'active' or 'inactive'" });
+  }
+
   try {
     await updateKnowledgeStatusService(status, id, tenant_id);
 

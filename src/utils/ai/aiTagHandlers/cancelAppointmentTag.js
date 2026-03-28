@@ -54,21 +54,57 @@ export const execute = async (payload, context) => {
       `[TAG-HANDLER-CANCEL-APPOINTMENT] Cancelling ${appointment_id} for tenant ${tenant_id}`,
     );
 
-    // Get appointment email before deletion for notification
+    // ─── DATABASE VERIFICATION: Appointment Exists AND Belongs to This Contact ───
     const appointment = await db.Appointments.findOne({
-      where: { appointment_id, tenant_id, is_deleted: false },
-      attributes: ["email", "patient_name"],
+      where: { appointment_id, tenant_id, contact_id, is_deleted: false },
+      attributes: [
+        "email",
+        "patient_name",
+        "appointment_date",
+        "appointment_time",
+        "status",
+      ],
     });
 
     console.log(
       `[TAG-HANDLER-CANCEL-APPOINTMENT] Found appointment:`,
       appointment
-        ? { id: appointment_id, email: appointment.email }
+        ? {
+            id: appointment_id,
+            email: appointment.email,
+            status: appointment.status,
+          }
         : "NOT FOUND",
     );
 
     if (!appointment) {
-      const notFoundMsg = `❌ I couldn't find appointment *${appointment_id}*. It may have already been cancelled or the ID is incorrect.`;
+      // Fetch user's actual appointments to show them
+      let apptListText = "";
+      try {
+        const activeAppts =
+          await AppointmentService.getActiveAppointmentsByContactService(
+            tenant_id,
+            contact_id,
+          );
+        if (activeAppts && activeAppts.length > 0) {
+          apptListText =
+            "\n\nYour current appointments:\n" +
+            activeAppts
+              .map((a) => {
+                const dateStr = new Date(a.appointment_date).toLocaleDateString(
+                  "en-GB",
+                  { day: "2-digit", month: "long", year: "numeric" },
+                );
+                return `  - *${a.appointment_id}* on ${dateStr} at ${a.appointment_time}`;
+              })
+              .join("\n");
+        } else {
+          apptListText =
+            "\n\nYou don't have any active appointments to cancel.";
+        }
+      } catch (_) {}
+
+      const notFoundMsg = `❌ I couldn't find appointment *${appointment_id}* in your records.${apptListText}\n\nPlease provide the correct appointment ID to cancel.`;
       await sendWhatsAppMessage(tenant_id, phone, notFoundMsg).catch(() => {});
       try {
         await createUserMessageService(
@@ -81,6 +117,28 @@ export const execute = async (payload, context) => {
           "bot",
           null,
           notFoundMsg,
+        );
+      } catch (_) {}
+      return;
+    }
+
+    // ─── Check if appointment is already cancelled ───
+    if (appointment.status === "Cancelled") {
+      const alreadyCancelledMsg = `ℹ️ Appointment *${appointment_id}* has already been cancelled.`;
+      await sendWhatsAppMessage(tenant_id, phone, alreadyCancelledMsg).catch(
+        () => {},
+      );
+      try {
+        await createUserMessageService(
+          tenant_id,
+          contact_id,
+          phone_number_id,
+          phone,
+          null,
+          null,
+          "bot",
+          null,
+          alreadyCancelledMsg,
         );
       } catch (_) {}
       return;

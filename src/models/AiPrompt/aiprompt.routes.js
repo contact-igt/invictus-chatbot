@@ -10,13 +10,24 @@ import {
   uploadAiPrompt,
   getDeletedAiPromptListController,
   restoreAiPromptController,
+  generateAiCompletionController,
 } from "./aiprompt.controller.js";
-import { authenticate, authorize } from "../../middlewares/auth/authMiddlewares.js";
+import {
+  authenticate,
+  authorize,
+} from "../../middlewares/auth/authMiddlewares.js";
 
 const router = express.Router();
 
+// Generic AI completion endpoint for frontend use
+router.post("/ai/completion", authenticate, generateAiCompletionController);
+
 router.post("/prompt", authenticate, uploadAiPrompt);
-router.get("/prompts/deleted/list", authenticate, getDeletedAiPromptListController);
+router.get(
+  "/prompts/deleted/list",
+  authenticate,
+  getDeletedAiPromptListController,
+);
 router.get("/prompts", authenticate, listAiPrompt);
 router.get("/prompt/:id", authenticate, getAiPromptById);
 router.get(

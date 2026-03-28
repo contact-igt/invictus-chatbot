@@ -236,7 +236,10 @@ export const sendTemplateMessageController = async (req, res) => {
     let templateMediaType = "template";
     if (headerComp?.parameters?.[0]) {
       const p = headerComp.parameters[0];
-      if (p.image?.link) {
+      if (p.type === "location" && p.location) {
+        // Location header — no media URL, just mark as location type
+        templateMediaType = "location";
+      } else if (p.image?.link) {
         templateMediaUrl = p.image.link;
         templateMediaType = "image";
       } else if (p.video?.link) {
@@ -249,14 +252,16 @@ export const sendTemplateMessageController = async (req, res) => {
     }
 
     // If no media provided in request, fetch from template definition
-    if (!templateMediaUrl) {
+    if (!templateMediaUrl && templateMediaType === "template") {
       const [headerComponents] = await db.sequelize.query(
         `SELECT header_format, media_url FROM ${tableNames.WHATSAPP_TEMPLATE_COMPONENTS} 
          WHERE template_id = ? AND component_type = 'header'`,
         { replacements: [template_id] },
       );
       const templateHeader = headerComponents?.[0];
-      if (templateHeader?.media_url) {
+      if (templateHeader?.header_format?.toLowerCase() === "location") {
+        templateMediaType = "location";
+      } else if (templateHeader?.media_url) {
         templateMediaUrl = templateHeader.media_url;
         const headerFormat = templateHeader.header_format?.toLowerCase();
         if (headerFormat === "image") templateMediaType = "image";

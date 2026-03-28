@@ -32,6 +32,7 @@ export const createTenantService = async (
       content_generation: true,
       input_model: "gpt-4o-mini",
       output_model: "gpt-4o",
+      openai_api_key: "",
     };
 
     const mergedAiSettings = ai_settings
@@ -285,40 +286,187 @@ export const updateTenantStatusService = async (status, tenant_id) => {
 };
 
 export const softDeleteTenantService = async (tenant_id) => {
-  const Query = `UPDATE ${tableNames?.TENANTS} SET is_deleted = ? , deleted_at = NOW() WHERE tenant_id = ? AND is_deleted = 0`;
-
-  const Query2 = `UPDATE ${tableNames?.TENANT_USERS} SET is_deleted = ? , deleted_at = NOW() WHERE tenant_id IN(?) AND is_deleted = 0`;
+  const transaction = await db.sequelize.transaction();
 
   try {
-    const [result] = await db.sequelize.query(Query, {
-      replacements: [1, tenant_id],
-    });
+    // ── Soft-delete tables (have is_deleted column) ──
+    const softDeleteTables = [
+      tableNames.TENANTS,
+      tableNames.TENANT_USERS,
+      tableNames.CONTACTS,
+      tableNames.CONTACT_GROUPS,
+      tableNames.DOCTORS,
+      tableNames.SPECIALIZATIONS,
+      tableNames.WHATSAPP_TEMPLATE,
+      tableNames.KNOWLEDGESOURCE,
+      tableNames.KNOWLEDGECHUNKS,
+      tableNames.AIPROMPT,
+      tableNames.AI_ANALYSIS_LOGS,
+      tableNames.APPOINTMENTS,
+      tableNames.LEADS,
+      tableNames.LIVECHAT,
+    ];
 
-    const [result2] = await db.sequelize.query(Query2, {
-      replacements: [1, tenant_id],
-    });
+    for (const table of softDeleteTables) {
+      await db.sequelize.query(
+        `UPDATE ${table} SET is_deleted = 1, deleted_at = NOW() WHERE tenant_id = ? AND is_deleted = 0`,
+        { replacements: [tenant_id], transaction },
+      );
+    }
 
-    return [result, result2];
+    // ── Hard-delete child records that have no is_deleted (orphan prevention) ──
+
+    // First, delete child records that reference parent IDs (not tenant_id directly)
+    // Template components, variables, sync logs → via template_id
+    await db.sequelize.query(
+      `DELETE FROM ${tableNames.WHATSAPP_TEMPLATE_COMPONENTS} WHERE template_id IN (SELECT template_id FROM ${tableNames.WHATSAPP_TEMPLATE} WHERE tenant_id = ?)`,
+      { replacements: [tenant_id], transaction },
+    );
+    await db.sequelize.query(
+      `DELETE FROM ${tableNames.WHATSAPP_TEMPLATE_VARIABLES} WHERE template_id IN (SELECT template_id FROM ${tableNames.WHATSAPP_TEMPLATE} WHERE tenant_id = ?)`,
+      { replacements: [tenant_id], transaction },
+    );
+    await db.sequelize.query(
+      `DELETE FROM ${tableNames.WHATSAPP_TEMPLATE_SYNC_LOGS} WHERE template_id IN (SELECT template_id FROM ${tableNames.WHATSAPP_TEMPLATE} WHERE tenant_id = ?)`,
+      { replacements: [tenant_id], transaction },
+    );
+
+    // Campaign recipients → via campaign_id
+    await db.sequelize.query(
+      `DELETE FROM ${tableNames.WHATSAPP_CAMPAIGN_RECIPIENT} WHERE campaign_id IN (SELECT campaign_id FROM ${tableNames.WHATSAPP_CAMPAIGN} WHERE tenant_id = ?)`,
+      { replacements: [tenant_id], transaction },
+    );
+
+    // Contact group members → via group_id
+    await db.sequelize.query(
+      `DELETE FROM ${tableNames.CONTACT_GROUP_MEMBERS} WHERE group_id IN (SELECT group_id FROM ${tableNames.CONTACT_GROUPS} WHERE tenant_id = ?)`,
+      { replacements: [tenant_id], transaction },
+    );
+
+    // Doctor availability & specializations → via doctor_id
+    await db.sequelize.query(
+      `DELETE FROM ${tableNames.DOCTOR_AVAILABILITY} WHERE doctor_id IN (SELECT doctor_id FROM ${tableNames.DOCTORS} WHERE tenant_id = ?)`,
+      { replacements: [tenant_id], transaction },
+    );
+    await db.sequelize.query(
+      `DELETE FROM ${tableNames.DOCTOR_SPECIALIZATIONS} WHERE doctor_id IN (SELECT doctor_id FROM ${tableNames.DOCTORS} WHERE tenant_id = ?)`,
+      { replacements: [tenant_id], transaction },
+    );
+
+    // Now delete tenant-scoped tables without is_deleted
+    const hardDeleteTables = [
+      tableNames.WHATSAPP_CAMPAIGN,
+      tableNames.WHATSAPP_ACCOUNT,
+      tableNames.MESSAGES,
+      tableNames.PROCESSEDMESSAGE,
+      tableNames.CHATLOCKS,
+      tableNames.AI_TOKEN_USAGE,
+      tableNames.MESSAGE_USAGE,
+      tableNames.BILLING_LEDGER,
+      tableNames.WALLET_TRANSACTIONS,
+      tableNames.WALLETS,
+      tableNames.OTP_VERIFICATIONS,
+      tableNames.TENANT_INVITATIONS,
+    ];
+
+    for (const table of hardDeleteTables) {
+      await db.sequelize.query(
+        `DELETE FROM ${table} WHERE tenant_id = ?`,
+        { replacements: [tenant_id], transaction },
+      );
+    }
+
+    await transaction.commit();
+    return true;
   } catch (err) {
+    await transaction.rollback();
     throw err;
   }
 };
 
 export const deleteTenantService = async (tenant_id) => {
-  const Query = `DELETE FROM ${tableNames?.TENANTS} WHERE tenant_id =  ?`;
-  const Query2 = `DELETE FROM ${tableNames?.TENANT_USERS} WHERE tenant_id IN (?) `;
+  const transaction = await db.sequelize.transaction();
 
   try {
-    const [result] = await db.sequelize.query(Query, {
-      replacements: [tenant_id],
-    });
+    // ── Delete child records that reference parent IDs first (FK safety) ──
 
-    const [result2] = await db.sequelize.query(Query2, {
-      replacements: [tenant_id],
-    });
+    // Template components, variables, sync logs → via template_id
+    await db.sequelize.query(
+      `DELETE FROM ${tableNames.WHATSAPP_TEMPLATE_COMPONENTS} WHERE template_id IN (SELECT template_id FROM ${tableNames.WHATSAPP_TEMPLATE} WHERE tenant_id = ?)`,
+      { replacements: [tenant_id], transaction },
+    );
+    await db.sequelize.query(
+      `DELETE FROM ${tableNames.WHATSAPP_TEMPLATE_VARIABLES} WHERE template_id IN (SELECT template_id FROM ${tableNames.WHATSAPP_TEMPLATE} WHERE tenant_id = ?)`,
+      { replacements: [tenant_id], transaction },
+    );
+    await db.sequelize.query(
+      `DELETE FROM ${tableNames.WHATSAPP_TEMPLATE_SYNC_LOGS} WHERE template_id IN (SELECT template_id FROM ${tableNames.WHATSAPP_TEMPLATE} WHERE tenant_id = ?)`,
+      { replacements: [tenant_id], transaction },
+    );
 
-    return [result, result2];
+    // Campaign recipients → via campaign_id
+    await db.sequelize.query(
+      `DELETE FROM ${tableNames.WHATSAPP_CAMPAIGN_RECIPIENT} WHERE campaign_id IN (SELECT campaign_id FROM ${tableNames.WHATSAPP_CAMPAIGN} WHERE tenant_id = ?)`,
+      { replacements: [tenant_id], transaction },
+    );
+
+    // Contact group members → via group_id
+    await db.sequelize.query(
+      `DELETE FROM ${tableNames.CONTACT_GROUP_MEMBERS} WHERE group_id IN (SELECT group_id FROM ${tableNames.CONTACT_GROUPS} WHERE tenant_id = ?)`,
+      { replacements: [tenant_id], transaction },
+    );
+
+    // Doctor availability & specializations → via doctor_id
+    await db.sequelize.query(
+      `DELETE FROM ${tableNames.DOCTOR_AVAILABILITY} WHERE doctor_id IN (SELECT doctor_id FROM ${tableNames.DOCTORS} WHERE tenant_id = ?)`,
+      { replacements: [tenant_id], transaction },
+    );
+    await db.sequelize.query(
+      `DELETE FROM ${tableNames.DOCTOR_SPECIALIZATIONS} WHERE doctor_id IN (SELECT doctor_id FROM ${tableNames.DOCTORS} WHERE tenant_id = ?)`,
+      { replacements: [tenant_id], transaction },
+    );
+
+    // ── Delete all tenant-scoped tables ──
+    const allTenantTables = [
+      tableNames.MESSAGES,
+      tableNames.PROCESSEDMESSAGE,
+      tableNames.CHATLOCKS,
+      tableNames.LIVECHAT,
+      tableNames.WHATSAPP_TEMPLATE,
+      tableNames.WHATSAPP_CAMPAIGN,
+      tableNames.WHATSAPP_ACCOUNT,
+      tableNames.CONTACTS,
+      tableNames.CONTACT_GROUPS,
+      tableNames.DOCTORS,
+      tableNames.SPECIALIZATIONS,
+      tableNames.APPOINTMENTS,
+      tableNames.LEADS,
+      tableNames.KNOWLEDGESOURCE,
+      tableNames.KNOWLEDGECHUNKS,
+      tableNames.AIPROMPT,
+      tableNames.AI_ANALYSIS_LOGS,
+      tableNames.AI_TOKEN_USAGE,
+      tableNames.MESSAGE_USAGE,
+      tableNames.BILLING_LEDGER,
+      tableNames.WALLET_TRANSACTIONS,
+      tableNames.WALLETS,
+      tableNames.OTP_VERIFICATIONS,
+      tableNames.TENANT_INVITATIONS,
+      tableNames.TENANT_USERS,
+      tableNames.TENANTS, // Delete tenant last
+    ];
+
+    for (const table of allTenantTables) {
+      await db.sequelize.query(
+        `DELETE FROM ${table} WHERE tenant_id = ?`,
+        { replacements: [tenant_id], transaction },
+      );
+    }
+
+    await transaction.commit();
+    return true;
   } catch (err) {
+    await transaction.rollback();
     throw err;
   }
 };
@@ -343,38 +491,60 @@ export const getDeletedTenantListService = async () => {
 };
 
 export const restoreTenantService = async (tenant_id) => {
-  // Restore tenant — preserve original status if it was 'invited' or 'trial', otherwise default to 'active'
-  const Query = `
-    UPDATE ${tableNames.TENANTS}
-    SET is_deleted = ?, deleted_at = NULL,
-        status = CASE
-          WHEN status IN ('invited', 'trial', 'pending_setup') THEN status
-          ELSE 'active'
-        END
-    WHERE tenant_id = ?
-  `;
-
-  const Query2 = `
-    UPDATE ${tableNames.TENANT_USERS}
-    SET is_deleted = ?, deleted_at = NULL,
-        status = CASE
-          WHEN (SELECT status FROM ${tableNames.TENANTS} WHERE tenant_id = ?) IN ('active', 'trial', 'grace_period') THEN 'active'
-          ELSE 'inactive'
-        END
-    WHERE tenant_id = ?
-  `;
+  const transaction = await db.sequelize.transaction();
 
   try {
-    const [result] = await db.sequelize.query(Query, {
-      replacements: [0, tenant_id],
-    });
+    // Restore tenant — preserve original status if it was 'invited' or 'trial', otherwise default to 'active'
+    await db.sequelize.query(
+      `UPDATE ${tableNames.TENANTS}
+       SET is_deleted = 0, deleted_at = NULL,
+           status = CASE
+             WHEN status IN ('invited', 'trial', 'pending_setup') THEN status
+             ELSE 'active'
+           END
+       WHERE tenant_id = ?`,
+      { replacements: [tenant_id], transaction },
+    );
 
-    const [result2] = await db.sequelize.query(Query2, {
-      replacements: [0, tenant_id, tenant_id],
-    });
+    // Restore tenant users with appropriate status
+    await db.sequelize.query(
+      `UPDATE ${tableNames.TENANT_USERS}
+       SET is_deleted = 0, deleted_at = NULL,
+           status = CASE
+             WHEN (SELECT status FROM ${tableNames.TENANTS} WHERE tenant_id = ?) IN ('active', 'trial', 'grace_period') THEN 'active'
+             ELSE 'inactive'
+           END
+       WHERE tenant_id = ?`,
+      { replacements: [tenant_id, tenant_id], transaction },
+    );
 
-    return [result, result2];
+    // Restore all other soft-deleted tenant data
+    const softDeleteTables = [
+      tableNames.CONTACTS,
+      tableNames.CONTACT_GROUPS,
+      tableNames.DOCTORS,
+      tableNames.SPECIALIZATIONS,
+      tableNames.WHATSAPP_TEMPLATE,
+      tableNames.KNOWLEDGESOURCE,
+      tableNames.KNOWLEDGECHUNKS,
+      tableNames.AIPROMPT,
+      tableNames.AI_ANALYSIS_LOGS,
+      tableNames.APPOINTMENTS,
+      tableNames.LEADS,
+      tableNames.LIVECHAT,
+    ];
+
+    for (const table of softDeleteTables) {
+      await db.sequelize.query(
+        `UPDATE ${table} SET is_deleted = 0, deleted_at = NULL WHERE tenant_id = ? AND is_deleted = 1`,
+        { replacements: [tenant_id], transaction },
+      );
+    }
+
+    await transaction.commit();
+    return true;
   } catch (err) {
+    await transaction.rollback();
     throw err;
   }
 };

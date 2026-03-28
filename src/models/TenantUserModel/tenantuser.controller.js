@@ -112,11 +112,18 @@ export const updateTenantOrganizationController = async (req, res) => {
       tenant.owner_country_code,
       tenant.owner_mobile,
       type,
+      null, // status
+      null, // subscription_start_date
+      null, // subscription_end_date
       address,
+      city,
       country,
       state,
-      city,
       pincode,
+      null, // max_users
+      null, // subscription_plan
+      null, // profile
+      null, // ai_settings
       loginUser.tenant_id,
     );
 
@@ -157,6 +164,7 @@ export const updateLoggedTenantOrganizationController = async (req, res) => {
       null, // max_users (PROTECTED)
       null, // sub_plan (PROTECTED)
       null, // profile
+      null, // ai_settings
       tenant_id,
     );
 

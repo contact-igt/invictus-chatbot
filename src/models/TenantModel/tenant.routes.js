@@ -15,6 +15,8 @@ import {
   getOnboardedTenantListController,
   getTenantSettingsController,
   updateTenantAiSettingsController,
+  validateOpenAIKeyController,
+  getAvailableTimezonesController
 } from "./tenant.controller.js";
 import {
   authenticate,
@@ -61,6 +63,16 @@ Router.post(
     roles: ["platform_admin", "super_admin"],
   }),
   createTenantController,
+);
+
+Router.post(
+  "/validate-openai-key",
+  authenticate,
+  authorize({
+    user_type: "management",
+    roles: ["platform_admin", "super_admin"],
+  }),
+  validateOpenAIKeyController,
 );
 
 Router.get(
@@ -151,6 +163,17 @@ Router.patch(
     roles: ["tenant_admin"],
   }),
   updateTenantAiSettingsController,
+);
+
+// Get available timezones for configuration
+Router.get(
+  "/settings/timezones",
+  authenticate,
+  authorize({
+    user_type: "tenant",
+    roles: ["tenant_admin", "staff", "doctor", "agent"],
+  }),
+  getAvailableTimezonesController,
 );
 
 Router.get(

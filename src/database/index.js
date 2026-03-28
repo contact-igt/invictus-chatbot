@@ -38,6 +38,7 @@ import { WalletTable } from "./tables/WalletTable/index.js";
 import { WalletTransactionTable } from "./tables/WalletTransactionTable/index.js";
 import { AiTokenUsageTable } from "./tables/AiTokenUsageTable/index.js";
 import { AiPricingTable } from "./tables/AiPricingTable/index.js";
+import { PaymentHistoryTable } from "./tables/PaymentHistoryTable/index.js";
 
 const dbconfig =
   ServerEnvironmentConfig?.server?.line === "production"
@@ -124,6 +125,7 @@ db.Wallets = WalletTable(sequelize, Sequelize);
 db.WalletTransactions = WalletTransactionTable(sequelize, Sequelize);
 db.AiTokenUsage = AiTokenUsageTable(sequelize, Sequelize);
 db.AiPricing = AiPricingTable(sequelize, Sequelize);
+db.PaymentHistory = PaymentHistoryTable(sequelize, Sequelize);
 
 // ========================================
 // IMPORT AND DEFINE ASSOCIATIONS

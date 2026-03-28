@@ -33,9 +33,9 @@ export const getLeadSummaryModeInstruction = (mode, startDate, endDate) => {
   }
 
   // Default / Overall mode
-  return `Provide a simple 4-5 line "Status Report."
+  return `Provide a simple "Status Report" in 3-5 lines.
       - Who is the client and why did they reach out?
       - What are the key details?
       - What is the current status and next steps?
-      Keep it simple and easy to read. Max 3 lines.`;
+      Keep it simple and easy to read.`;
 };
