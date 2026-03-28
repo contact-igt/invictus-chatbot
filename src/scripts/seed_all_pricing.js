@@ -1,4 +1,4 @@
-/**
+﻿/**
  * ============================================================
  * MASTER PRICING SEED SCRIPT
  * ============================================================
@@ -179,7 +179,7 @@ const META_TEMPLATE_PRICING = [
 // Source: OpenAI Official Pricing 2024/2025
 // ============================================================
 const AI_MODEL_PRICING = [
-  // ──────────────── PREMIUM TIER ────────────────
+  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ PREMIUM TIER â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   {
     model: "gpt-4o",
     description: "Most capable model for complex output generation",
@@ -188,7 +188,7 @@ const AI_MODEL_PRICING = [
     input_rate: 2.5, // $2.50 per 1M input tokens
     output_rate: 10.0, // $10.00 per 1M output tokens
     markup_percent: 10,
-    usd_to_inr_rate: 85.0,
+    usd_to_inr_rate: 93.0,
     is_active: true,
   },
   {
@@ -200,7 +200,7 @@ const AI_MODEL_PRICING = [
     input_rate: 75.0,
     output_rate: 150.0,
     markup_percent: 10,
-    usd_to_inr_rate: 85.0,
+    usd_to_inr_rate: 93.0,
     is_active: true,
   },
   {
@@ -211,11 +211,11 @@ const AI_MODEL_PRICING = [
     input_rate: 100.0,
     output_rate: 300.0,
     markup_percent: 10,
-    usd_to_inr_rate: 85.0,
+    usd_to_inr_rate: 93.0,
     is_active: true,
   },
 
-  // ──────────────── MID-TIER ────────────────
+  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ MID-TIER â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   {
     model: "gpt-4.1-mini",
     description: "Balanced performance and cost for general tasks",
@@ -224,7 +224,7 @@ const AI_MODEL_PRICING = [
     input_rate: 0.4,
     output_rate: 1.6,
     markup_percent: 10,
-    usd_to_inr_rate: 85.0,
+    usd_to_inr_rate: 93.0,
     is_active: true,
   },
   {
@@ -235,7 +235,7 @@ const AI_MODEL_PRICING = [
     input_rate: 7.5,
     output_rate: 15.0,
     markup_percent: 10,
-    usd_to_inr_rate: 85.0,
+    usd_to_inr_rate: 93.0,
     is_active: true,
   },
   {
@@ -246,11 +246,11 @@ const AI_MODEL_PRICING = [
     input_rate: 8.0,
     output_rate: 24.0,
     markup_percent: 10,
-    usd_to_inr_rate: 85.0,
+    usd_to_inr_rate: 93.0,
     is_active: true,
   },
 
-  // ──────────────── BUDGET TIER ────────────────
+  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ BUDGET TIER â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   {
     model: "gpt-4o-mini",
     description: "Fast and affordable for input classification tasks",
@@ -259,7 +259,7 @@ const AI_MODEL_PRICING = [
     input_rate: 0.15,
     output_rate: 0.6,
     markup_percent: 10,
-    usd_to_inr_rate: 85.0,
+    usd_to_inr_rate: 93.0,
     is_active: true,
   },
   {
@@ -271,7 +271,7 @@ const AI_MODEL_PRICING = [
     input_rate: 0.1,
     output_rate: 0.4,
     markup_percent: 10,
-    usd_to_inr_rate: 85.0,
+    usd_to_inr_rate: 93.0,
     is_active: true,
   },
   {
@@ -282,11 +282,11 @@ const AI_MODEL_PRICING = [
     input_rate: 1.5,
     output_rate: 3.0,
     markup_percent: 10,
-    usd_to_inr_rate: 85.0,
+    usd_to_inr_rate: 93.0,
     is_active: true,
   },
 
-  // ──────────────── REASONING MODELS ────────────────
+  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ REASONING MODELS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   {
     model: "o3",
     description:
@@ -296,7 +296,7 @@ const AI_MODEL_PRICING = [
     input_rate: 10.0,
     output_rate: 40.0,
     markup_percent: 10,
-    usd_to_inr_rate: 85.0,
+    usd_to_inr_rate: 93.0,
     is_active: true,
   },
   {
@@ -307,7 +307,7 @@ const AI_MODEL_PRICING = [
     input_rate: 1.1,
     output_rate: 4.4,
     markup_percent: 10,
-    usd_to_inr_rate: 85.0,
+    usd_to_inr_rate: 93.0,
     is_active: true,
   },
   {
@@ -318,7 +318,7 @@ const AI_MODEL_PRICING = [
     input_rate: 1.1,
     output_rate: 4.4,
     markup_percent: 10,
-    usd_to_inr_rate: 85.0,
+    usd_to_inr_rate: 93.0,
     is_active: true,
   },
 ];
@@ -328,7 +328,7 @@ const AI_MODEL_PRICING = [
 // ============================================================
 
 const seedMetaTemplatePricing = async () => {
-  console.log("\n📦 Seeding Meta WhatsApp Template Pricing...\n");
+  console.log("\nðŸ“¦ Seeding Meta WhatsApp Template Pricing...\n");
   let added = 0;
   let skipped = 0;
 
@@ -341,32 +341,32 @@ const seedMetaTemplatePricing = async () => {
       if (!existing) {
         await db.PricingTable.create(rule);
         console.log(
-          `  ✅ Added: ${rule.category.padEnd(14)} | ${rule.country.padEnd(6)} | $${rule.rate.toFixed(4)}`,
+          `  âœ… Added: ${rule.category.padEnd(14)} | ${rule.country.padEnd(6)} | $${rule.rate.toFixed(4)}`,
         );
         added++;
       } else {
         // Update existing record to ensure markup is 10%
         await existing.update({ rate: rule.rate, markup_percent: 10 });
         console.log(
-          `  🔄 Updated: ${rule.category.padEnd(14)} | ${rule.country.padEnd(6)} | $${rule.rate.toFixed(4)}`,
+          `  ðŸ”„ Updated: ${rule.category.padEnd(14)} | ${rule.country.padEnd(6)} | $${rule.rate.toFixed(4)}`,
         );
         skipped++;
       }
     } catch (error) {
       console.error(
-        `  ❌ Error: ${rule.category} / ${rule.country}:`,
+        `  âŒ Error: ${rule.category} / ${rule.country}:`,
         error.message,
       );
     }
   }
 
   console.log(
-    `\n  📊 Meta Pricing Summary: ${added} added, ${skipped} updated`,
+    `\n  ðŸ“Š Meta Pricing Summary: ${added} added, ${skipped} updated`,
   );
 };
 
 const seedAiModelPricing = async () => {
-  console.log("\n🤖 Seeding AI Model Pricing...\n");
+  console.log("\nðŸ¤– Seeding AI Model Pricing...\n");
   let added = 0;
   let skipped = 0;
 
@@ -379,7 +379,7 @@ const seedAiModelPricing = async () => {
       if (!existing) {
         await db.AiPricing.create(model);
         console.log(
-          `  ✅ Added: ${model.model.padEnd(20)} | ${model.category.padEnd(9)} | Input: $${model.input_rate.toFixed(2)}/M | Output: $${model.output_rate.toFixed(2)}/M`,
+          `  âœ… Added: ${model.model.padEnd(20)} | ${model.category.padEnd(9)} | Input: $${model.input_rate.toFixed(2)}/M | Output: $${model.output_rate.toFixed(2)}/M`,
         );
         added++;
       } else {
@@ -395,16 +395,16 @@ const seedAiModelPricing = async () => {
           is_active: model.is_active,
         });
         console.log(
-          `  🔄 Updated: ${model.model.padEnd(20)} | ${model.category.padEnd(9)} | Input: $${model.input_rate.toFixed(2)}/M | Output: $${model.output_rate.toFixed(2)}/M`,
+          `  ðŸ”„ Updated: ${model.model.padEnd(20)} | ${model.category.padEnd(9)} | Input: $${model.input_rate.toFixed(2)}/M | Output: $${model.output_rate.toFixed(2)}/M`,
         );
         skipped++;
       }
     } catch (error) {
-      console.error(`  ❌ Error: ${model.model}:`, error.message);
+      console.error(`  âŒ Error: ${model.model}:`, error.message);
     }
   }
 
-  console.log(`\n  📊 AI Model Summary: ${added} added, ${skipped} updated`);
+  console.log(`\n  ðŸ“Š AI Model Summary: ${added} added, ${skipped} updated`);
 };
 
 // ============================================================
@@ -413,17 +413,17 @@ const seedAiModelPricing = async () => {
 
 const seedAllPricing = async () => {
   console.log(
-    "═══════════════════════════════════════════════════════════════",
+    "â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•",
   );
   console.log("       MASTER PRICING SEED SCRIPT - 10% PLATFORM MARKUP");
   console.log(
-    "═══════════════════════════════════════════════════════════════",
+    "â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•",
   );
 
   try {
-    console.log("\n🔌 Connecting to database...");
+    console.log("\nðŸ”Œ Connecting to database...");
     await db.sequelize.authenticate();
-    console.log("✅ Database connected successfully!\n");
+    console.log("âœ… Database connected successfully!\n");
 
     // Seed Meta Template Pricing
     await seedMetaTemplatePricing();
@@ -432,23 +432,23 @@ const seedAllPricing = async () => {
     await seedAiModelPricing();
 
     console.log(
-      "\n═══════════════════════════════════════════════════════════════",
+      "\nâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•",
     );
-    console.log("       ✅ ALL PRICING DATA SEEDED SUCCESSFULLY!");
+    console.log("       âœ… ALL PRICING DATA SEEDED SUCCESSFULLY!");
     console.log(
-      "═══════════════════════════════════════════════════════════════",
+      "â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•",
     );
-    console.log("\n📝 Notes:");
+    console.log("\nðŸ“ Notes:");
     console.log(
       "   \u2022 All markup_percent values are set to 10 (10% platform markup)",
     );
-    console.log("   • Super Admin can adjust markup via dashboard later");
-    console.log("   • USD to INR rate is set to 85.0 for AI models");
+    console.log("   â€¢ Super Admin can adjust markup via dashboard later");
+    console.log("   • USD to INR rate is set to 93.0 for AI models");
     console.log("\n");
 
     process.exit(0);
   } catch (error) {
-    console.error("\n❌ SEED FAILED:", error);
+    console.error("\nâŒ SEED FAILED:", error);
     process.exit(1);
   }
 };
