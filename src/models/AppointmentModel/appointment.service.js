@@ -496,6 +496,17 @@ const sendAppointmentNotificationEmail = async (
     const emailTo = appointment.email || appointment.contact?.email;
     if (!emailTo) return;
 
+    // Fetch tenant company name for email branding
+    let companyName = "WhatsNexus";
+    try {
+      const tenant = await db.Tenants.findOne({
+        where: { tenant_id, is_deleted: false },
+        attributes: ["company_name"],
+        raw: true,
+      });
+      if (tenant?.company_name) companyName = tenant.company_name;
+    } catch (_) {}
+
     const formattedDate = formatAppointmentDate(appointment.appointment_date);
     const patientName =
       appointment.patient_name || appointment.contact?.name || "Patient";
@@ -510,6 +521,7 @@ const sendAppointmentNotificationEmail = async (
       doctorName: appointment.doctor?.name || null,
       reason: appointment.notes || null,
       changes,
+      companyName,
     });
 
     const subject = buildAppointmentEmailSubject({
