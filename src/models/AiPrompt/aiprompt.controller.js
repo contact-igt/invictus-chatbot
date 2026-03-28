@@ -11,13 +11,9 @@ import {
   getDeletedAiPromptListService,
   restoreAiPromptService,
 } from "./aiprompt.service.js";
-import OpenAI from "openai";
+import { getOpenAIClient } from "../../utils/ai/getOpenAIClient.js";
 import { getTenantAiModel } from "../../utils/ai/getTenantAiModel.js";
 import { trackAiTokenUsage } from "../../utils/ai/trackAiTokenUsage.js";
-
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
 
 export const getDeletedAiPromptListController = async (req, res) => {
   const tenant_id = req.user.tenant_id;
@@ -233,8 +229,9 @@ export const generateAiCompletionController = async (req, res) => {
       return res.status(400).json({ message: "Prompt is required" });
     }
 
-    // Get tenant's selected output model
+    // Get tenant's selected output model and tenant-specific OpenAI client
     const outputModel = await getTenantAiModel(tenant_id, "output");
+    const openai = await getOpenAIClient(tenant_id);
 
     const response = await openai.chat.completions.create({
       model: outputModel,
