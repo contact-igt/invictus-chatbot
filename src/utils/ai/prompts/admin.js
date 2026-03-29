@@ -1,6 +1,3 @@
-/**
- * Prompts for the Admin suggested reply feature.
- */
 
 export const getAdminSystemPrompt = (
   leadSourcePrompt,
