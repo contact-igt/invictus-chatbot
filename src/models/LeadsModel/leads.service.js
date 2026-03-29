@@ -165,28 +165,34 @@ export const getLeadListService = async (tenant_id) => {
     // 2. Fetch last 4 messages for these leads for preview
     const contactIds = leads.map((l) => l.contact_id);
     const messagesQuery = `
-      SELECT contact_id, sender, message, created_at
-      FROM (
-        SELECT 
-          contact_id, sender, message, created_at,
-          ROW_NUMBER() OVER(PARTITION BY contact_id ORDER BY created_at DESC) as rn
+      SELECT m.contact_id, m.sender, m.message, m.created_at
+      FROM ${tableNames.MESSAGES} m
+      INNER JOIN (
+        SELECT contact_id, MAX(created_at) as max_created
         FROM ${tableNames.MESSAGES}
         WHERE tenant_id = ? AND contact_id IN (?)
-      ) as ranked
-      WHERE rn <= 4
-      ORDER BY contact_id, created_at ASC
+        GROUP BY contact_id
+      ) latest ON m.contact_id = latest.contact_id
+      WHERE m.tenant_id = ? AND m.contact_id IN (?)
+        AND m.created_at >= DATE_SUB(latest.max_created, INTERVAL 7 DAY)
+      ORDER BY m.contact_id, m.created_at DESC
     `;
 
     const [allMessages] = await db.sequelize.query(messagesQuery, {
-      replacements: [tenant_id, contactIds],
+      replacements: [tenant_id, contactIds, tenant_id, contactIds],
     });
 
-    // 3. Group messages by contact_id and attach to leads
-    const messagesMap = allMessages.reduce((acc, msg) => {
-      if (!acc[msg.contact_id]) acc[msg.contact_id] = [];
-      acc[msg.contact_id].push(msg);
-      return acc;
-    }, {});
+    // 3. Group messages by contact_id, keep last 4, and reverse to chronological
+    const messagesMap = {};
+    for (const msg of allMessages) {
+      if (!messagesMap[msg.contact_id]) messagesMap[msg.contact_id] = [];
+      if (messagesMap[msg.contact_id].length < 4) {
+        messagesMap[msg.contact_id].push(msg);
+      }
+    }
+    for (const cid in messagesMap) {
+      messagesMap[cid].reverse();
+    }
 
     const leadsWithMessages = leads.map((lead) => ({
       ...lead,
