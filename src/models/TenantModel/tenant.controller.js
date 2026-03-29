@@ -22,7 +22,6 @@ import {
   getOnboardedTenantListService,
   getTenantSettingsService,
   updateTenantAiSettingsService,
-  
 } from "./tenant.service.js";
 
 import {
@@ -642,6 +641,11 @@ export const updateTenantAiSettingsController = async (req, res) => {
       }
     }
 
+    // Encrypt the API key before storing
+    if (ai_settings?.openai_api_key) {
+      ai_settings.openai_api_key = encrypt(ai_settings.openai_api_key);
+    }
+
     await updateTenantAiSettingsService(tenant_id, ai_settings);
 
     // Return refreshed settings with masked key so frontend cache stays consistent
@@ -664,7 +668,9 @@ export const updateTenantAiSettingsController = async (req, res) => {
       delete refreshed.ai_settings.openai_api_key;
     }
 
-    return res.status(200).json({ message: "Settings updated successfully", data: refreshed });
+    return res
+      .status(200)
+      .json({ message: "Settings updated successfully", data: refreshed });
   } catch (err) {
     return res.status(500).json({ message: err.message });
   }
@@ -721,8 +727,6 @@ export const validateOpenAIKeyController = async (req, res) => {
   }
 };
 
-
-
 export const getAvailableTimezonesController = async (req, res) => {
   try {
     return res.status(200).json({
@@ -735,4 +739,4 @@ export const getAvailableTimezonesController = async (req, res) => {
   } catch (err) {
     return res.status(500).json({ message: err.message });
   }
-}
+};

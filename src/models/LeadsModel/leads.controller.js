@@ -1,4 +1,7 @@
-import { getContactByContactIdAndTenantIdService, getContactByIdAndTenantIdService } from "../ContactsModel/contacts.service.js";
+import {
+  getContactByContactIdAndTenantIdService,
+  getContactByIdAndTenantIdService,
+} from "../ContactsModel/contacts.service.js";
 import {
   deleteLeadService,
   permanentDeleteLeadService,
@@ -12,8 +15,6 @@ import {
   getBulkLeadSummaryService,
   bulkUpdateLeadsService,
 } from "./leads.service.js";
-
-
 
 export const getLeadListController = async (req, res) => {
   const tenant_id = req.user.tenant_id;
@@ -87,7 +88,9 @@ export const getLeadSummaryController = async (req, res) => {
     );
 
     const { mode, date, start_date, end_date } = req.query;
-    console.log(`Smart Summary Req - Lead: ${lead_id}, Mode: ${mode}, Date: ${date}, Range: ${start_date} to ${end_date}`);
+    console.log(
+      `Smart Summary Req - Lead: ${lead_id}, Mode: ${mode}, Date: ${date}, Range: ${start_date} to ${end_date}`,
+    );
 
     const response = await getLeadSummaryService(
       tenant_id,
@@ -96,7 +99,8 @@ export const getLeadSummaryController = async (req, res) => {
       mode,
       date,
       start_date,
-      end_date
+      end_date,
+      lead.contact_id,
     );
 
     return res.status(200).send({
@@ -114,18 +118,22 @@ export const getBulkLeadSummaryController = async (req, res) => {
   const tenant_id = req.user.tenant_id;
   const { lead_ids, mode, date, start_date, end_date } = req.body;
 
-  console.log("ssss", lead_ids)
+  console.log("ssss", lead_ids);
 
   if (!tenant_id) {
     return res.status(400).send({ message: "Tenant id missing" });
   }
 
   if (!lead_ids || !Array.isArray(lead_ids) || lead_ids.length === 0) {
-    return res.status(400).send({ message: "Invalid or missing lead_ids array" });
+    return res
+      .status(400)
+      .send({ message: "Invalid or missing lead_ids array" });
   }
 
   try {
-    console.log(`Bulk Smart Summary Req - Leads: ${lead_ids.length}, Mode: ${mode}`);
+    console.log(
+      `Bulk Smart Summary Req - Leads: ${lead_ids.length}, Mode: ${mode}`,
+    );
 
     // Call service
     const results = await getBulkLeadSummaryService(
@@ -134,7 +142,7 @@ export const getBulkLeadSummaryController = async (req, res) => {
       mode,
       date,
       start_date,
-      end_date
+      end_date,
     );
 
     return res.status(200).send({
@@ -150,7 +158,15 @@ export const getBulkLeadSummaryController = async (req, res) => {
 
 export const updateLeadController = async (req, res) => {
   const { lead_id } = req.params;
-  const { status, heat_state, lead_stage, assigned_to, priority, source, internal_notes } = req.body;
+  const {
+    status,
+    heat_state,
+    lead_stage,
+    assigned_to,
+    priority,
+    source,
+    internal_notes,
+  } = req.body;
   const tenant_id = req.user.tenant_id;
 
   if (!tenant_id || !lead_id) {
