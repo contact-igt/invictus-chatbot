@@ -65,10 +65,9 @@ export const getLeadByLeadIdService = async (tenant_id, lead_id) => {
       agent.username AS assigned_agent_name,
       led.source,
       led.priority,
-      led.internal_notes,
-      agent.username AS assigned_agent_name
+      led.internal_notes
     FROM ${tableNames?.LEADS} as led
-    LEFT JOIN ${tableNames?.CONTACTS} as cta on (cta.contact_id = led.contact_id)
+    LEFT JOIN ${tableNames?.CONTACTS} as cta on (cta.contact_id = led.contact_id AND cta.tenant_id = led.tenant_id)
     LEFT JOIN ${tableNames?.TENANT_USERS} as agent on (agent.tenant_user_id = led.assigned_to)
     WHERE led.tenant_id = ? AND led.lead_id = ? AND led.is_deleted = false
     LIMIT 1`;
@@ -147,10 +146,9 @@ export const getLeadListService = async (tenant_id) => {
     agent.username AS assigned_agent_name,
     led.source,
     led.priority,
-    led.internal_notes,
-    agent.username AS assigned_agent_name
+    led.internal_notes
   FROM ${tableNames?.LEADS} as led
-  LEFT JOIN ${tableNames?.CONTACTS} as cta on (cta.contact_id = led.contact_id)
+  LEFT JOIN ${tableNames?.CONTACTS} as cta on (cta.contact_id = led.contact_id AND cta.tenant_id = led.tenant_id)
   LEFT JOIN ${tableNames?.TENANT_USERS} as agent on (agent.tenant_user_id = led.assigned_to)
   WHERE led.tenant_id = ? AND led.is_deleted = false
   ORDER BY led.last_user_message_at DESC`;
@@ -416,7 +414,11 @@ export const getLeadSummaryService = async (
     lead_id = activeLeadId;
 
     // 5. No cache? (Status is 'new' OR filters applied) -> Proceed with AI generation
-    const memory = await getConversationMemory(tenant_id, phone);
+    const memory = await getConversationMemory(
+      tenant_id,
+      phone,
+      contact_id || currentLead?.contact_id,
+    );
 
     if (!memory || memory.length === 0) {
       return {
@@ -499,12 +501,24 @@ export const getLeadSummaryService = async (
     );
 
     // 6. Generate Summary
-    const aiSummary = await AiService(
-      "system",
-      SUMMARIZE_PROMPT,
-      tenant_id,
-      "lead_summary",
-    );
+    let aiSummary;
+    try {
+      aiSummary = await AiService(
+        "system",
+        SUMMARIZE_PROMPT,
+        tenant_id,
+        "lead_summary",
+      );
+    } catch (aiErr) {
+      console.error("[AI-SUMMARY] AI generation failed:", aiErr.message);
+      return {
+        summary:
+          "Unable to generate summary at this time. Please try again later.",
+        has_data: false,
+        mode: resultingMode,
+        error: true,
+      };
+    }
 
     // 7. DB UPDATE LOGIC (Strictly Lazy)
     //    We ONLY update the DB if we are in 'overall' mode.
@@ -681,10 +695,9 @@ export const getDeletedLeadListService = async (tenant_id) => {
     led.source,
     led.priority,
     led.internal_notes,
-    led.deleted_at,
-    agent.username AS assigned_agent_name
+    led.deleted_at
   FROM ${tableNames?.LEADS} as led
-  LEFT JOIN ${tableNames?.CONTACTS} as cta on (cta.contact_id = led.contact_id)
+  LEFT JOIN ${tableNames?.CONTACTS} as cta on (cta.contact_id = led.contact_id AND cta.tenant_id = led.tenant_id)
   LEFT JOIN ${tableNames?.TENANT_USERS} as agent on (agent.tenant_user_id = led.assigned_to)
   WHERE led.tenant_id = ? AND led.is_deleted = true
   ORDER BY led.deleted_at DESC`;

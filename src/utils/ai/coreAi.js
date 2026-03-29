@@ -10,14 +10,27 @@ export const AiService = async (
   source = "utility",
 ) => {
   try {
-    const inputModel = await getTenantAiModel(tenant_id, "input");
+    // Use input model for classification tasks, output model for generation tasks
+    const inputSources = ["language_detect", "classifier"];
+    const modelType = inputSources.includes(source) ? "input" : "output";
+    const model = await getTenantAiModel(tenant_id, modelType);
     const openai = await getOpenAIClient(tenant_id);
 
+    // Use appropriate max_tokens based on source
+    const tokenLimits = {
+      language_detect: 80,
+      classifier: 80,
+      lead_summary: 300,
+      smart_reply: 500,
+      utility: 150,
+    };
+    const maxTokens = tokenLimits[source] || 150;
+
     const response = await openai.chat.completions.create({
-      model: inputModel,
+      model,
       messages: [{ role: system, content: prompt }],
       temperature: 0.01,
-      max_tokens: 120,
+      max_tokens: maxTokens,
     });
 
     // Track token usage if tenant_id is available
@@ -30,6 +43,6 @@ export const AiService = async (
     return response.choices[0].message.content.trim();
   } catch (err) {
     console.error("OpenAI error:", err.message);
-    return "Please try again later.";
+    throw new Error(`AI generation failed: ${err.message}`);
   }
 };
