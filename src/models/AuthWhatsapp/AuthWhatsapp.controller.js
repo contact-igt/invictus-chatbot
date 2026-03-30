@@ -815,9 +815,17 @@ export const receiveMessage = async (req, res) => {
                   pending.contact_id,
                   phone_number_id,
                 );
-                if (aiResult?.reply) {
-                  const messageToSend = aiResult.reply;
-                  await createUserMessageService(
+                const finalReply = aiResult?.message;
+                const fallback = aiResult?.tagDetected
+                  ? ""
+                  : "Our team will review your message and contact you shortly.";
+                const messageToSend =
+                  finalReply && finalReply.trim()
+                    ? finalReply.trim()
+                    : fallback;
+
+                if (messageToSend) {
+                  const savedBotMsg = await createUserMessageService(
                     tenant_id,
                     pending.contact_id,
                     phone_number_id,
@@ -828,20 +836,47 @@ export const receiveMessage = async (req, res) => {
                     null,
                     messageToSend,
                   );
-                  await sendWhatsAppMessage(
-                    tenant_id,
-                    phone_number_id,
-                    phone,
-                    messageToSend,
-                  );
+
                   const io = getIO();
+                  io.to(`tenant-${tenant_id}`).emit("ai-typing", {
+                    tenant_id,
+                    phone,
+                    status: false,
+                  });
                   io.to(`tenant-${tenant_id}`).emit("new-message", {
                     tenant_id,
                     phone,
+                    id: savedBotMsg?.id,
                     contact_id: pending.contact_id,
-                    sender: "bot",
+                    phone_number_id,
+                    name: pending.contactsaved?.name || "Bot",
                     message: messageToSend,
+                    message_type: "text",
+                    media_url: null,
+                    status: "sent",
+                    sender: "bot",
+                    created_at: new Date(),
                   });
+
+                  const botMsgResponse = await sendWhatsAppMessage(
+                    tenant_id,
+                    phone,
+                    messageToSend,
+                  ).catch((err) => {
+                    console.error("[WEBHOOK] Queued send failed:", err.message);
+                    return null;
+                  });
+
+                  if (botMsgResponse?.wamid && savedBotMsg?.id) {
+                    try {
+                      await db.sequelize.query(
+                        `UPDATE messages SET wamid = ?, status = 'sent' WHERE id = ?`,
+                        {
+                          replacements: [botMsgResponse.wamid, savedBotMsg.id],
+                        },
+                      );
+                    } catch (_) {}
+                  }
                 }
               } catch (qErr) {
                 console.error(

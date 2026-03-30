@@ -287,6 +287,7 @@ export const importContactsController = async (req, res) => {
     const nameIndex = headers.indexOf("name");
     const phoneIndex = headers.indexOf("phone");
     const emailIndex = headers.indexOf("email");
+    const ageIndex = headers.indexOf("age");
 
     if (nameIndex === -1 || phoneIndex === -1) {
       return res.status(400).send({
@@ -324,11 +325,15 @@ export const importContactsController = async (req, res) => {
       lastVal = lastVal.replace(/^="(.+)"$/, "$1").replace(/^"(.+)"$/, "$1");
       values.push(lastVal);
 
-      if (values.length >= Math.max(nameIndex, phoneIndex, emailIndex) + 1) {
+      if (
+        values.length >=
+        Math.max(nameIndex, phoneIndex, emailIndex, ageIndex) + 1
+      ) {
         contactsToImport.push({
           name: values[nameIndex],
           phone: values[phoneIndex],
           email: emailIndex !== -1 ? values[emailIndex] : null,
+          age: ageIndex !== -1 ? values[ageIndex] : null,
         });
       }
     }

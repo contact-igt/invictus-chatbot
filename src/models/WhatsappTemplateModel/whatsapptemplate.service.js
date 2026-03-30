@@ -17,16 +17,77 @@ const STATUS_MAP = {
 
 // Valid Meta WhatsApp language codes
 const VALID_META_LANGUAGE_CODES = new Set([
-  'af', 'sq', 'ar', 'az', 'bn', 'bg', 'ca',
-  'zh_CN', 'zh_HK', 'zh_TW', 'hr', 'cs', 'da', 'nl',
-  'en', 'en_GB', 'en_US', 'et', 'fil', 'fi', 'fr',
-  'ka', 'de', 'el', 'gu', 'ha', 'he', 'hi',
-  'hu', 'id', 'ga', 'it', 'ja', 'kn', 'kk', 'rw_RW',
-  'ko', 'ky_KG', 'lo', 'lv', 'lt', 'mk', 'ms', 'ml',
-  'mr', 'nb', 'fa', 'pl', 'pt_BR', 'pt_PT', 'pa',
-  'ro', 'ru', 'sr', 'sk', 'sl', 'es', 'es_AR',
-  'es_ES', 'es_MX', 'sw', 'sv', 'ta', 'te',
-  'th', 'tr', 'uk', 'ur', 'uz', 'vi', 'zu',
+  "af",
+  "sq",
+  "ar",
+  "az",
+  "bn",
+  "bg",
+  "ca",
+  "zh_CN",
+  "zh_HK",
+  "zh_TW",
+  "hr",
+  "cs",
+  "da",
+  "nl",
+  "en",
+  "en_GB",
+  "en_US",
+  "et",
+  "fil",
+  "fi",
+  "fr",
+  "ka",
+  "de",
+  "el",
+  "gu",
+  "ha",
+  "he",
+  "hi",
+  "hu",
+  "id",
+  "ga",
+  "it",
+  "ja",
+  "kn",
+  "kk",
+  "rw_RW",
+  "ko",
+  "ky_KG",
+  "lo",
+  "lv",
+  "lt",
+  "mk",
+  "ms",
+  "ml",
+  "mr",
+  "nb",
+  "fa",
+  "pl",
+  "pt_BR",
+  "pt_PT",
+  "pa",
+  "ro",
+  "ru",
+  "sr",
+  "sk",
+  "sl",
+  "es",
+  "es_AR",
+  "es_ES",
+  "es_MX",
+  "sw",
+  "sv",
+  "ta",
+  "te",
+  "th",
+  "tr",
+  "uk",
+  "ur",
+  "uz",
+  "vi",
+  "zu",
 ]);
 
 export const checkTemplateNameExistsOnMetaService = async (
@@ -1068,10 +1129,18 @@ export const pullTemplatesFromMetaService = async (tenant_id) => {
           "WT",
         );
 
+        // Derive template_type from header component format
+        const headerComp = metaT.components.find(
+          (c) => c.type.toLowerCase() === "header",
+        );
+        const templateType = headerComp?.format
+          ? headerComp.format.toLowerCase()
+          : "text";
+
         await db.sequelize.query(
           `INSERT INTO ${tableNames.WHATSAPP_TEMPLATE} 
-           (template_id, tenant_id, template_name, category, language, status, meta_template_id, created_by)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+           (template_id, tenant_id, template_name, category, language, template_type, status, meta_template_id, created_by)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           {
             replacements: [
               template_id,
@@ -1079,6 +1148,7 @@ export const pullTemplatesFromMetaService = async (tenant_id) => {
               metaT.name,
               metaT.category.toLowerCase(),
               metaT.language,
+              templateType,
               localStatus,
               metaT.id,
               "system", // Imported
@@ -1557,7 +1627,7 @@ export const generateTemplateContentService = async ({
   focus,
   style,
   optimization,
-  language = 'English',
+  language = "English",
   prompt,
   previous_content = null,
   rejection_reason = null,
