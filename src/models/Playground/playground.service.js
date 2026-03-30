@@ -1,11 +1,7 @@
-import OpenAI from "openai";
 import { buildAiSystemPrompt } from "../../utils/ai/aiFlowHelper.js";
-import { searchKnowledgeChunks } from "../Knowledge/knowledge.search.js";
 import { processResponse } from "../../utils/ai/aiTagHandlers/index.js";
 import { classifyResponse } from "../../utils/ai/responseClassifier.js";
-import { getTenantAiModel } from "../../utils/ai/getTenantAiModel.js";
-import { trackAiTokenUsage } from "../../utils/ai/trackAiTokenUsage.js";
-import { getOpenAIClient } from "../../utils/ai/getOpenAIClient.js";
+import { callAI } from "../../utils/ai/coreAi.js";
 
 /**
  * Main playground chat service.
@@ -48,26 +44,16 @@ export const playgroundChatService = async (
     // Add current user message
     messages.push({ role: "user", content: message });
 
-    const outputModel = await getTenantAiModel(tenant_id, "output");
-    const openai = await getOpenAIClient(tenant_id);
-
-    const response = await openai.chat.completions.create({
-      model: outputModel,
-      temperature: 0.1,
-      top_p: 0.9,
-      max_tokens: 1200,
+    const aiResult = await callAI({
       messages,
+      tenant_id,
+      source: "playground",
+      temperature: 0.1,
+      topP: 0.9,
     });
 
-    const rawReply = response?.choices?.[0]?.message?.content?.trim();
-    const tokenUsage = response?.usage || {};
-
-    // Track token usage
-    if (tenant_id) {
-      await trackAiTokenUsage(tenant_id, "playground", response).catch((e) =>
-        console.error("[PLAYGROUND] Token tracking failed:", e.message),
-      );
-    }
+    const rawReply = aiResult.content;
+    const tokenUsage = aiResult.usage;
 
     console.log("[PLAYGROUND-AI-RAW]", rawReply);
 
@@ -85,18 +71,6 @@ export const playgroundChatService = async (
       tagExecutionLog.push(
         `Detected tag: [${processed.tagDetected}${processed.tagPayload ? ": " + processed.tagPayload : ""}]`,
       );
-
-      if (
-        processed.tagDetected === "BOOK_APPOINTMENT" &&
-        processed.tagPayload
-      ) {
-        tagExecutionLog.push("Simulating Appointment Booking Handler...");
-        // If the AI's reply is empty after removing the tag, show a default confirmation
-        if (!finalReply || !finalReply.trim()) {
-          finalReply =
-            "✅ [SIMULATED] Your appointment has been booked! (Data not saved to DB)";
-        }
-      }
     }
 
     // Classify response

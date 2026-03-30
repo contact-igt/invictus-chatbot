@@ -7,7 +7,8 @@
     "build": "npm install",
     "start:dev": "nodemon src/app.js",
     "seed:superadmin": "node src/scripts/seedSuperAdmin.js",
-    "db:truncate": "node src/scripts/truncateAllTables.js"
+    "db:truncate": "node src/scripts/truncateAllTables.js",
+    "seed:all_price" : "node src/scripts/seed_all_pricing.js"
   },
   "dependencies": {
     "@google-cloud/vision": "^5.3.4",

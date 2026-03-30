@@ -10,6 +10,7 @@ export const createContactService = async (
   countryCodeInput = null,
   wa_id = null,
   email = null,
+  age = null,
 ) => {
   try {
     let country_code = countryCodeInput;
@@ -33,8 +34,8 @@ export const createContactService = async (
 
     const Query = `
     INSERT INTO ${tableNames?.CONTACTS} 
-    (contact_id, tenant_id, country_code, phone, name, profile_pic, wa_id, email, is_blocked, last_message_at) 
-    VALUES (?,?,?,?,?,?,?,?,?,NOW())`;
+    (contact_id, tenant_id, country_code, phone, name, profile_pic, wa_id, email, age, is_blocked, last_message_at) 
+    VALUES (?,?,?,?,?,?,?,?,?,?,NOW())`;
 
     const Values = [
       contact_id || null,
@@ -45,6 +46,7 @@ export const createContactService = async (
       profile_pic || null,
       wa_id || null,
       email || null,
+      age || null,
       false,
     ];
 
@@ -319,10 +321,11 @@ export const updateContactService = async (
   email,
   profile_pic,
   is_blocked,
+  age = null,
 ) => {
   const Query = `
   UPDATE ${tableNames?.CONTACTS} 
-  SET name = ?, email = ?, profile_pic = ?, is_blocked = ?
+  SET name = ?, email = ?, profile_pic = ?, is_blocked = ?, age = ?
   WHERE contact_id = ? AND tenant_id = ?`;
 
   try {
@@ -331,6 +334,7 @@ export const updateContactService = async (
       email,
       profile_pic,
       is_blocked,
+      age,
       contact_id,
       tenant_id,
     ];
@@ -513,7 +517,7 @@ export const importContactsService = async (tenant_id, contactsData) => {
   try {
     for (const contact of contactsData) {
       try {
-        let { name, phone, email } = contact;
+        let { name, phone, email, age } = contact;
         if (!phone) {
           summary.errors.push({
             row: contact,
@@ -562,10 +566,12 @@ export const importContactsService = async (tenant_id, contactsData) => {
           transaction,
         );
 
+        const parsedAge = age != null ? parseInt(age, 10) : null;
+
         const Query = `
           INSERT INTO ${tableNames.CONTACTS} 
-          (contact_id, tenant_id, country_code, phone, name, email, is_blocked, last_message_at) 
-          VALUES (?,?,?,?,?,?,?,NOW())`;
+          (contact_id, tenant_id, country_code, phone, name, email, age, is_blocked, last_message_at) 
+          VALUES (?,?,?,?,?,?,?,?,NOW())`;
 
         await db.sequelize.query(Query, {
           replacements: [
@@ -575,6 +581,7 @@ export const importContactsService = async (tenant_id, contactsData) => {
             phone,
             name || null,
             email || null,
+            parsedAge,
             false,
           ],
           transaction,

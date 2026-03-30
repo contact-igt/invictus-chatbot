@@ -49,6 +49,12 @@ export const ContactsTable = (sequelize, Sequelize) => {
         validate: { isEmail: true },
       },
 
+      age: {
+        type: Sequelize.INTEGER,
+        allowNull: true,
+        validate: { min: 0, max: 150 },
+      },
+
       profile_pic: {
         type: Sequelize.STRING,
         allowNull: true,
@@ -128,6 +134,6 @@ export const ContactsTable = (sequelize, Sequelize) => {
           fields: ["is_deleted"],
         },
       ],
-    }
+    },
   );
 };

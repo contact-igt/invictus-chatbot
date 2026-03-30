@@ -1,10 +1,7 @@
-import OpenAI from "openai";
 import db from "../../database/index.js";
 import { tableNames } from "../../database/tableName.js";
 import { SEARCH_REFINE_PROMPT } from "../../utils/ai/prompts/index.js";
-import { getTenantAiModel } from "../../utils/ai/getTenantAiModel.js";
-import { trackAiTokenUsage } from "../../utils/ai/trackAiTokenUsage.js";
-import { getOpenAIClient } from "../../utils/ai/getOpenAIClient.js";
+import { callAI } from "../../utils/ai/coreAi.js";
 
 /**
  * Uses a fast LLM to refine a user's question into optimized search keywords.
@@ -13,25 +10,14 @@ export const analyzeQuestionForSearch = async (question, tenant_id = null) => {
   try {
     const prompt = SEARCH_REFINE_PROMPT.replace("{QUESTION}", question);
 
-    const inputModel = await getTenantAiModel(tenant_id, "input");
-    const openai = await getOpenAIClient(tenant_id);
-
-    const response = await openai.chat.completions.create({
-      model: inputModel,
+    const result = await callAI({
       messages: [{ role: "user", content: prompt }],
+      tenant_id,
+      source: "knowledge_search",
       temperature: 0,
-      max_tokens: 50,
     });
 
-    // Track token usage
-    if (tenant_id) {
-      await trackAiTokenUsage(tenant_id, "knowledge_search", response).catch(
-        (e) =>
-          console.error("[AI-SEARCH-REFINE] Token tracking failed:", e.message),
-      );
-    }
-
-    return response.choices[0].message.content.trim();
+    return result.content;
   } catch (err) {
     console.error("[AI-SEARCH-REFINE] Error:", err.message);
     return "";
@@ -39,7 +25,8 @@ export const analyzeQuestionForSearch = async (question, tenant_id = null) => {
 };
 
 export const searchKnowledgeChunks = async (tenant_id, question) => {
-  if (!tenant_id || !question) return { chunks: [], resolvedLogs: [], sources: [] };
+  if (!tenant_id || !question)
+    return { chunks: [], resolvedLogs: [], sources: [] };
 
   // Step 1: AI-Refined Keywords (Query Expansion)
   const aiKeywords = await analyzeQuestionForSearch(question, tenant_id);
@@ -124,7 +111,10 @@ export const searchKnowledgeChunks = async (tenant_id, question) => {
       });
       knowledgeRows = rows;
     } catch (fallbackErr) {
-      console.error("[KNOWLEDGE-SEARCH] Fallback query also failed:", fallbackErr.message);
+      console.error(
+        "[KNOWLEDGE-SEARCH] Fallback query also failed:",
+        fallbackErr.message,
+      );
     }
   }
 

@@ -1,7 +1,4 @@
-import OpenAI from "openai";
-import { getTenantAiModel } from "./getTenantAiModel.js";
-import { trackAiTokenUsage } from "./trackAiTokenUsage.js";
-import { getOpenAIClient } from "./getOpenAIClient.js";
+import { callAI } from "./coreAi.js";
 
 /**
  * Processes scraped text based on a user-provided prompt or a default cleaning prompt.
@@ -17,17 +14,12 @@ export const processKnowledgeWithAi = async (
 ) => {
   if (!text) return text;
 
-  // Use a sensible default prompt if none is provided to ensure clean data
   const finalPrompt =
     prompt?.trim() ||
     "Extract the main readable content from this website. Remove all boilerplate like headers, footers, and scripts. If you see raw HTML, parse it to find the actual article or core information. Format the output clearly with headings.";
 
   try {
-    const inputModel = await getTenantAiModel(tenant_id, "input");
-    const openai = await getOpenAIClient(tenant_id);
-
-    const response = await openai.chat.completions.create({
-      model: inputModel,
+    const result = await callAI({
       messages: [
         {
           role: "system",
@@ -39,25 +31,14 @@ export const processKnowledgeWithAi = async (
           content: `Website Content (Raw HTML or Text):\n---\n${text.substring(0, 25000)}\n---\n\nInstruction: ${finalPrompt}`,
         },
       ],
+      tenant_id,
+      source: "knowledge_process",
       temperature: 0.3,
-      max_tokens: 3000,
     });
 
-    // Track token usage
-    if (tenant_id) {
-      await trackAiTokenUsage(tenant_id, "knowledge_process", response).catch(
-        (e) =>
-          console.error(
-            "[KNOWLEDGE-PROCESS-AI] Token tracking failed:",
-            e.message,
-          ),
-      );
-    }
-
-    return response.choices[0].message.content.trim();
+    return result.content;
   } catch (err) {
     console.error("Knowledge Processing AI error:", err.message);
-    // Return original text as fallback if AI fails
     return text;
   }
 };

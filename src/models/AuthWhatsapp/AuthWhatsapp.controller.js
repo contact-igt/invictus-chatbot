@@ -1,4 +1,3 @@
-
 import { createUserMessageService } from "../Messages/messages.service.js";
 import { formatPhoneNumber } from "../../utils/helpers/formatPhoneNumber.js";
 import fs from "fs";
@@ -12,6 +11,9 @@ import {
   sendTypingIndicator,
   sendReadReceipt,
   unlockChat,
+  tryAcquireLock,
+  queuePendingMessage,
+  consumePendingMessage,
 } from "./AuthWhatsapp.service.js";
 
 import { processBillingFromWebhook } from "../BillingModel/billing.service.js";
@@ -25,8 +27,11 @@ import { getTenantByPhoneNumberIdService } from "../WhatsappAccountModel/whatsap
 import { getIO } from "../../middlewares/socket/socket.js";
 import {
   findTenantByIdService,
+  getTenantSettingsService,
   updateTenantWebhookStatusService,
 } from "../TenantModel/tenant.service.js";
+import { classifyResponse } from "../../utils/ai/responseClassifier.js";
+import { handleClassification } from "../../utils/ai/classificationHandler.js";
 import db from "../../database/index.js";
 import {
   createContactService,
@@ -46,8 +51,6 @@ import {
   getLivechatByIdService,
   updateLiveChatTimestampService,
 } from "../LiveChatModel/livechat.service.js";
-
-import { getTenantSettingsService } from "../TenantModel/tenant.service.js";
 
 export const verifyWebhook = async (req, res) => {
   try {
@@ -537,17 +540,27 @@ export const receiveMessage = async (req, res) => {
       contact_id: contactsaved?.contact_id,
     });
 
-    // 10. AI Processing (Background)
-    if (await isChatLocked(tenant_id, phone_number_id, phone)) {
+    // 10. AI Processing (Background) — Atomic lock + message queue
+    const lockAcquired = await tryAcquireLock(
+      tenant_id,
+      phone_number_id,
+      phone,
+    );
+    if (!lockAcquired) {
+      // Another message is being processed — queue this one so it's handled after
+      queuePendingMessage(tenant_id, phone, {
+        text,
+        contact_id: contactsaved?.contact_id,
+        phone_number_id,
+        messageId,
+        contactsaved,
+      });
       return res.sendStatus(200);
     }
-    await lockChat(tenant_id, phone_number_id, phone);
     res.sendStatus(200); // Acknowledge Webhook
 
     setImmediate(async () => {
       try {
-        const { getTenantSettingsService } =
-          await import("../TenantModel/tenant.service.js");
         const tenantSettings = await getTenantSettingsService(tenant_id);
         const autoResponderEnabled =
           tenantSettings?.ai_settings?.auto_responder !== false;
@@ -720,11 +733,50 @@ export const receiveMessage = async (req, res) => {
             messageToSend,
           );
         }
+
+        // Non-blocking classification — runs AFTER reply is already sent to user
+        setImmediate(async () => {
+          try {
+            const classification = await classifyResponse(
+              text,
+              messageToSend,
+              tenant_id,
+            );
+
+            // Honor primary AI tag hints
+            if (
+              aiResult?.tagDetected === "MISSING_KNOWLEDGE" &&
+              classification.category !== "MISSING_KNOWLEDGE"
+            ) {
+              classification.category = "MISSING_KNOWLEDGE";
+              classification.reason =
+                aiResult.tagPayload || classification.reason;
+            } else if (
+              aiResult?.tagDetected === "OUT_OF_SCOPE" &&
+              classification.category !== "OUT_OF_SCOPE"
+            ) {
+              classification.category = "OUT_OF_SCOPE";
+              classification.reason =
+                aiResult.tagPayload || classification.reason;
+            }
+
+            await handleClassification(classification, {
+              tenant_id,
+              userMessage: text,
+              aiResponse: messageToSend,
+            });
+          } catch (classifierError) {
+            console.error(
+              "[CLASSIFIER] Background classification error:",
+              classifierError.message,
+            );
+          }
+        });
       } catch (err) {
         console.error("Background AI error:", err);
       } finally {
         await unlockChat(tenant_id, phone_number_id, phone);
-        // Deactivate Typying Animation on Dashboard
+        // Deactivate Typing Animation on Dashboard
         try {
           const io = getIO();
           if (io) {
@@ -736,6 +788,81 @@ export const receiveMessage = async (req, res) => {
           }
         } catch (socketErr) {
           console.error("[SOCKET] AI typing emit failed:", socketErr.message);
+        }
+
+        // Process queued message if any (user sent more messages while AI was processing)
+        const pending = consumePendingMessage(tenant_id, phone);
+        if (pending) {
+          console.log(`[WEBHOOK] Processing queued message for ${phone}`);
+          const reLock = await tryAcquireLock(
+            tenant_id,
+            phone_number_id,
+            phone,
+          );
+          if (reLock) {
+            setImmediate(async () => {
+              try {
+                sendTypingIndicator(
+                  tenant_id,
+                  phone_number_id,
+                  phone,
+                  pending.messageId,
+                );
+                const aiResult = await getOpenAIReply(
+                  tenant_id,
+                  phone,
+                  pending.text,
+                  pending.contact_id,
+                  phone_number_id,
+                );
+                if (aiResult?.reply) {
+                  const messageToSend = aiResult.reply;
+                  await createUserMessageService(
+                    tenant_id,
+                    pending.contact_id,
+                    phone_number_id,
+                    phone,
+                    null,
+                    pending.contactsaved?.name || "Bot",
+                    "bot",
+                    null,
+                    messageToSend,
+                  );
+                  await sendWhatsAppMessage(
+                    tenant_id,
+                    phone_number_id,
+                    phone,
+                    messageToSend,
+                  );
+                  const io = getIO();
+                  io.to(`tenant-${tenant_id}`).emit("new-message", {
+                    tenant_id,
+                    phone,
+                    contact_id: pending.contact_id,
+                    sender: "bot",
+                    message: messageToSend,
+                  });
+                }
+              } catch (qErr) {
+                console.error(
+                  "[WEBHOOK] Queued message AI error:",
+                  qErr.message,
+                );
+              } finally {
+                await unlockChat(tenant_id, phone_number_id, phone);
+                try {
+                  const io = getIO();
+                  if (io) {
+                    io.to(`tenant-${tenant_id}`).emit("ai-typing", {
+                      tenant_id,
+                      phone,
+                      status: false,
+                    });
+                  }
+                } catch (_) {}
+              }
+            });
+          }
         }
       }
     });

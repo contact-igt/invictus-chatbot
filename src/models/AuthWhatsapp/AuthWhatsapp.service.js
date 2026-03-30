@@ -1,6 +1,5 @@
 import axios from "axios";
 import https from "https";
-import OpenAI from "openai";
 import db from "../../database/index.js";
 import { tableNames } from "../../database/tableName.js";
 import { buildAiSystemPrompt } from "../../utils/ai/aiFlowHelper.js";
@@ -8,11 +7,9 @@ import { getConversationMemory } from "../Messages/messages.memory.js";
 import { detectLanguageAI } from "../../utils/ai/detectLanguageStyle.js";
 import { buildChatHistory } from "../../utils/chat/buildChatHistory.js";
 import { processResponse } from "../../utils/ai/aiTagHandlers/index.js";
-import { classifyResponse } from "../../utils/ai/responseClassifier.js";
-import { handleClassification } from "../../utils/ai/classificationHandler.js";
-import { trackAiTokenUsage } from "../../utils/ai/trackAiTokenUsage.js";
-import { getTenantAiModel } from "../../utils/ai/getTenantAiModel.js";
-import { getOpenAIClient } from "../../utils/ai/getOpenAIClient.js";
+import { callAI } from "../../utils/ai/coreAi.js";
+import { searchKnowledgeChunks } from "../Knowledge/knowledge.search.js";
+import { getActivePromptService } from "../AiPrompt/aiprompt.service.js";
 import { getIO } from "../../middlewares/socket/socket.js";
 
 const httpsAgent = new https.Agent({
@@ -382,6 +379,58 @@ export const markMessageProcessed = async (
   }
 };
 
+/**
+ * Atomic lock acquisition — combines check + acquire + stale cleanup in one operation.
+ * Returns true if lock was acquired, false if already locked by another process.
+ */
+export const tryAcquireLock = async (tenant_id, phone_number_id, phone) => {
+  try {
+    // Step 1: Clean stale locks older than 30 seconds (zombie cleanup)
+    await db.sequelize.query(
+      `DELETE FROM ${tableNames.CHATLOCKS}
+       WHERE tenant_id = ? AND phone_number_id = ? AND phone = ?
+       AND created_at < (NOW() - INTERVAL 30 SECOND)`,
+      { replacements: [tenant_id, phone_number_id, phone] },
+    );
+
+    // Step 2: Atomic insert — if lock exists (not stale), INSERT IGNORE returns 0 affected rows
+    const [, metadata] = await db.sequelize.query(
+      `INSERT IGNORE INTO ${tableNames.CHATLOCKS}
+       (tenant_id, phone_number_id, phone, created_at, updated_at)
+       VALUES (?, ?, ?, NOW(), NOW())`,
+      { replacements: [tenant_id, phone_number_id, phone] },
+    );
+
+    // affectedRows = 1 means we got the lock, 0 means someone else has it
+    return (metadata?.affectedRows ?? metadata) === 1;
+  } catch (err) {
+    console.error("[CHAT-LOCK] Lock acquisition error:", err.message);
+    return false;
+  }
+};
+
+/**
+ * Queue a pending message for a user who is currently locked.
+ * Only the LATEST message is kept (overwrites previous queued message).
+ */
+const pendingMessages = new Map(); // key: "tenant_id:phone" → { text, contact_id, ... }
+
+export const queuePendingMessage = (tenant_id, phone, messageData) => {
+  const key = `${tenant_id}:${phone}`;
+  pendingMessages.set(key, messageData);
+  console.log(`[MSG-QUEUE] Queued pending message for ${key}`);
+};
+
+export const consumePendingMessage = (tenant_id, phone) => {
+  const key = `${tenant_id}:${phone}`;
+  const msg = pendingMessages.get(key);
+  if (msg) {
+    pendingMessages.delete(key);
+    console.log(`[MSG-QUEUE] Consumed pending message for ${key}`);
+  }
+  return msg || null;
+};
+
 export const isChatLocked = async (tenant_id, phone_number_id, phone) => {
   try {
     const [rows] = await db.sequelize.query(
@@ -391,7 +440,7 @@ export const isChatLocked = async (tenant_id, phone_number_id, phone) => {
     WHERE tenant_id = ?
       AND phone_number_id = ?
       AND phone = ?
-      AND created_at > (NOW() - INTERVAL 15 SECOND)
+      AND created_at > (NOW() - INTERVAL 30 SECOND)
     LIMIT 1
     `,
       { replacements: [tenant_id, phone_number_id, phone] },
@@ -448,52 +497,41 @@ export const getOpenAIReply = async (
     const cleanMessage = userMessage.trim();
     if (!cleanMessage) return null;
 
-    // Use cached tenant settings or fetch if not provided
-    const { getTenantSettingsService } =
-      await import("../TenantModel/tenant.service.js");
-    const tenantSettings =
-      cachedData.tenantSettings || (await getTenantSettingsService(tenant_id));
-    const tenantTimezone = tenantSettings?.timezone || "Asia/Kolkata";
-
-    const now = new Date(
-      new Date().toLocaleString("en-US", { timeZone: tenantTimezone }),
-    );
-
-    const currentDateFormatted = now.toLocaleDateString("en-GB", {
-      day: "2-digit",
-      month: "long",
-      year: "numeric",
-    });
-
-    const currentDayFormatted = now.toLocaleDateString("en-US", {
-      weekday: "long",
-    });
-
-    const currentTimeFormatted = now.toLocaleTimeString("en-US", {
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: true,
-    });
-
-    const languageInfo = await detectLanguageAI(cleanMessage, tenant_id).catch(
-      (err) => {
-        console.error("[WHATSAPP-AI] Language detection failed:", err.message);
-        return { language: "unknown", style: "unknown", label: "unknown" };
-      },
-    );
+    // ── Phase 1: Parallel fetch — all independent operations at once ──
+    const [languageInfo, memory, knowledgeResult, activePrompt] =
+      await Promise.all([
+        detectLanguageAI(cleanMessage, tenant_id).catch((err) => {
+          console.error(
+            "[WHATSAPP-AI] Language detection failed:",
+            err.message,
+          );
+          return { language: "unknown", style: "unknown", label: "unknown" };
+        }),
+        getConversationMemory(tenant_id, phone, contact_id).catch((memErr) => {
+          console.error("[WHATSAPP-AI] Memory/history failed:", memErr.message);
+          return [];
+        }),
+        searchKnowledgeChunks(tenant_id, cleanMessage).catch((knErr) => {
+          console.error(
+            "[WHATSAPP-AI] Knowledge search failed:",
+            knErr.message,
+          );
+          return { chunks: [], resolvedLogs: [], sources: [] };
+        }),
+        getActivePromptService(tenant_id).catch((promptErr) => {
+          console.error(
+            "[WHATSAPP-AI] Active prompt fetch failed:",
+            promptErr.message,
+          );
+          return null;
+        }),
+      ]);
 
     console.log("language", languageInfo);
 
-    let chatHistory = [];
-    try {
-      const memory = await getConversationMemory(tenant_id, phone, contact_id);
-      chatHistory = buildChatHistory(memory);
-    } catch (memErr) {
-      console.error("[WHATSAPP-AI] Memory/history failed:", memErr.message);
-    }
+    const chatHistory = buildChatHistory(memory);
 
-    // Use centralized AI flow helper for parity with Playground
-    // Pass cached data including tenantSettings to avoid redundant DB calls
+    // ── Phase 2: Build system prompt (mostly local assembly, data pre-fetched) ──
     let systemPrompt = "";
     try {
       const promptResult = await buildAiSystemPrompt(
@@ -501,7 +539,11 @@ export const getOpenAIReply = async (
         contact_id,
         languageInfo,
         cleanMessage,
-        { ...cachedData, tenantSettings },
+        {
+          ...cachedData,
+          knowledgeResult,
+          activePrompt,
+        },
       );
       systemPrompt = promptResult.systemPrompt;
     } catch (promptErr) {
@@ -520,27 +562,18 @@ export const getOpenAIReply = async (
       { role: "user", content: cleanMessage },
     ];
 
-    const outputModel = await getTenantAiModel(tenant_id, "output");
-    const openai = await getOpenAIClient(tenant_id);
-
-    let response = await openai.chat.completions.create({
-      model: outputModel,
-      temperature: 0.1, // Very low temperature for consistent tagging behavior
-      top_p: 0.9,
-      max_tokens: 1200,
+    let aiResult = await callAI({
       messages: aiMessages,
+      tenant_id,
+      source: "whatsapp",
+      temperature: 0.1,
+      topP: 0.9,
     });
 
-    // Track token usage for the primary AI call
-    await trackAiTokenUsage(tenant_id, "whatsapp", response).catch((e) =>
-      console.error("[WHATSAPP-AI] Token tracking failed:", e.message),
-    );
+    let rawReply = aiResult.content;
 
-    let rawReply = response?.choices?.[0]?.message?.content?.trim();
-
-    // If response was truncated (finish_reason: 'length') and contains a partial tag, retry with more tokens
-    const finishReason = response?.choices?.[0]?.finish_reason;
-    if (finishReason === "length" && rawReply) {
+    // If response was truncated and contains a partial tag, retry with more tokens
+    if (aiResult.finishReason === "length" && rawReply) {
       const hasPartialTag =
         /\[([A-Z_]+)(?::\s*[\s\S]*)?$/.test(rawReply) &&
         !/\[([A-Z_]+)(?::\s*[\s\S]*?)\]/.test(rawReply);
@@ -548,21 +581,14 @@ export const getOpenAIReply = async (
         console.warn(
           "[WHATSAPP-AI] Response truncated with partial tag, retrying with higher token limit...",
         );
-        response = await openai.chat.completions.create({
-          model: outputModel,
-          temperature: 0.1,
-          top_p: 0.9,
-          max_tokens: 1600,
+        aiResult = await callAI({
           messages: aiMessages,
+          tenant_id,
+          source: "whatsapp_retry",
+          temperature: 0.1,
+          topP: 0.9,
         });
-        await trackAiTokenUsage(tenant_id, "whatsapp_retry", response).catch(
-          (e) =>
-            console.error(
-              "[WHATSAPP-AI] Retry token tracking failed:",
-              e.message,
-            ),
-        );
-        rawReply = response?.choices?.[0]?.message?.content?.trim();
+        rawReply = aiResult.content;
       }
     }
 
@@ -584,42 +610,6 @@ export const getOpenAIReply = async (
     }
 
     const finalReply = processed.message;
-
-    // Step 2: NEW Dual-AI Classification (Standardized single logging)
-    try {
-      console.log("[CLASSIFIER] Starting classification...");
-      const classification = await classifyResponse(
-        cleanMessage,
-        finalReply,
-        tenant_id,
-      );
-
-      // If the primary AI explicitly tagged missing knowledge or out of scope, use that as a "hint"
-      if (
-        processed.tagDetected === "MISSING_KNOWLEDGE" &&
-        classification.category !== "MISSING_KNOWLEDGE"
-      ) {
-        classification.category = "MISSING_KNOWLEDGE";
-        classification.reason = processed.tagPayload || classification.reason;
-      } else if (
-        processed.tagDetected === "OUT_OF_SCOPE" &&
-        classification.category !== "OUT_OF_SCOPE"
-      ) {
-        classification.category = "OUT_OF_SCOPE";
-        classification.reason = processed.tagPayload || classification.reason;
-      }
-
-      await handleClassification(classification, {
-        tenant_id,
-        userMessage: cleanMessage,
-        aiResponse: finalReply,
-      });
-    } catch (classifierError) {
-      console.error(
-        "[CLASSIFIER] Error in dual-AI flow:",
-        classifierError.message,
-      );
-    }
 
     console.log("[WHATSAPP-AI-FINAL]", finalReply);
 
