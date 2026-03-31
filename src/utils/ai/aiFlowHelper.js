@@ -21,6 +21,7 @@ import {
  * @param {Object} cachedData.tenantSettings - Tenant settings (timezone, company_name, etc.)
  * @param {Object} cachedData.contact - Contact object (name, email, phone)
  * @param {Object} cachedData.lead - Lead object (source, etc.)
+ * @param {string} cachedData.intent - Classified intent: "GENERAL_QUESTION" or "APPOINTMENT_ACTION"
  */
 export const buildAiSystemPrompt = async (
   tenant_id,
@@ -71,36 +72,56 @@ export const buildAiSystemPrompt = async (
 
   const commonBasePrompt = getCommonBasePrompt(languageInfo, businessName);
 
+  // Determine which data sources are needed (from intent classifier)
+  const requires = cachedData.requires || {
+    knowledge: true,
+    doctors: true,
+    appointments: true,
+  };
+  const intent = cachedData.intent || "GENERAL_QUESTION";
+
+  // 1. Knowledge base — only fetch if requires.knowledge is true
   let chunks = [];
   let resolvedLogs = [];
   let sources = [];
 
-  if (cachedData.knowledgeResult) {
-    // Use pre-fetched knowledge result (parallel fetch optimization)
-    chunks = cachedData.knowledgeResult.chunks || [];
-    resolvedLogs = cachedData.knowledgeResult.resolvedLogs || [];
-    sources = cachedData.knowledgeResult.sources || [];
-  } else {
-    try {
-      const searchResult = await searchKnowledgeChunks(tenant_id, userMessage);
-      chunks = searchResult.chunks || [];
-      resolvedLogs = searchResult.resolvedLogs || [];
-      sources = searchResult.sources || [];
-    } catch (knErr) {
-      console.error("[AI-FLOW-HELPER] Knowledge search failed:", knErr.message);
+  if (requires.knowledge) {
+    if (cachedData.knowledgeResult) {
+      chunks = cachedData.knowledgeResult.chunks || [];
+      resolvedLogs = cachedData.knowledgeResult.resolvedLogs || [];
+      sources = cachedData.knowledgeResult.sources || [];
+    } else {
+      try {
+        const searchResult = await searchKnowledgeChunks(
+          tenant_id,
+          userMessage,
+        );
+        chunks = searchResult.chunks || [];
+        resolvedLogs = searchResult.resolvedLogs || [];
+        sources = searchResult.sources || [];
+      } catch (knErr) {
+        console.error(
+          "[AI-FLOW-HELPER] Knowledge search failed:",
+          knErr.message,
+        );
+      }
     }
   }
 
-  const knowledgeContext =
-    chunks && chunks.length > 0
-      ? chunks.join("\n\n")
-      : "No relevant uploaded documents.";
-  const resolvedContext =
-    resolvedLogs && resolvedLogs.length > 0 ? resolvedLogs.join("\n\n") : "";
+  let knowledgeSection = "";
+  if (requires.knowledge) {
+    const knowledgeContext =
+      chunks && chunks.length > 0
+        ? chunks.join("\n\n")
+        : "No relevant uploaded documents.";
+    const resolvedContext =
+      resolvedLogs && resolvedLogs.length > 0 ? resolvedLogs.join("\n\n") : "";
 
-  const combinedKnowledge = `
+    knowledgeSection = `
+═══════════════════════════════
+UPLOADED KNOWLEDGE
+═══════════════════════════════
 ${knowledgeContext}
-
 ${
   resolvedContext
     ? `
@@ -112,8 +133,8 @@ Use these past resolutions to answer if the user's question matches:
 ${resolvedContext}
 `
     : ""
-}
-`;
+}`;
+  }
 
   // 2. Patient & Lead Source Context
   let patientProfileSection = "";
@@ -151,6 +172,46 @@ ${resolvedContext}
     }
   }
 
+  // 3. Build doctor + appointment context — only fetch what's needed
+  let doctorContext = "";
+  let appointmentContext = "";
+
+  if (intent === "GENERAL_QUESTION") {
+    if (requires.doctors || requires.appointments) {
+      try {
+        const { buildGeneralQuestionContext: buildCtx } =
+          await import("./prompts/appointmentContext.js");
+        // Pass requires flags so it only fetches what's needed
+        const ctx = await buildCtx(
+          tenant_id,
+          contact_id,
+          tenantTimezone,
+          requires,
+        );
+        doctorContext = ctx.doctorContext || "";
+        appointmentContext = ctx.appointmentContext || "";
+      } catch (err) {
+        console.error(
+          "[AI-FLOW-HELPER] General question context build failed:",
+          err.message,
+        );
+      }
+    }
+  }
+
+  // Build knowledge base rule — only include if we have knowledge or doctor data
+  const knowledgeRule =
+    requires.knowledge || requires.doctors
+      ? `
+═══════════════════════════════
+KNOWLEDGE BASE RULE
+═══════════════════════════════
+- For factual questions (services, policies, prices, timings, etc.) → answer ONLY from the data sections below.
+- Do NOT answer factual questions from chat history — it may be outdated.
+- If the answer is not found in any provided data section → say "Let me check with the team." + [MISSING_KNOWLEDGE: topic]
+- Never make up or guess factual information.`
+      : "";
+
   const systemPrompt = `
 ${commonBasePrompt}
 
@@ -161,14 +222,7 @@ ${hospitalPrompt}
 
 ${patientProfileSection ? `${patientProfileSection}\n` : ""}
 ${leadSourcePrompt}
-
-═══════════════════════════════
-KNOWLEDGE BASE RULE
-═══════════════════════════════
-- For factual questions (services, policies, prices, timings, etc.) → answer ONLY from the UPLOADED KNOWLEDGE section below.
-- Do NOT answer factual questions from chat history — it may be outdated.
-- If the answer is not in UPLOADED KNOWLEDGE → say "Let me check with the team." + [MISSING_KNOWLEDGE: topic]
-- Never make up or guess factual information.
+${knowledgeRule}
 
 ═══════════════════════════════
 CURRENT DATE & TIME (${dateTimeInfo.timezoneDisplay})
@@ -179,17 +233,15 @@ Time: ${currentTimeFormatted}
 Timezone: ${tenantTimezone}
 
 ${calendarReference}
-
-═══════════════════════════════
-UPLOADED KNOWLEDGE
-═══════════════════════════════
-${combinedKnowledge}
+${knowledgeSection}
+${doctorContext}
+${appointmentContext}
 `;
 
   return {
     systemPrompt,
     knowledgeSources: sources,
     chunks,
-    resolvedContext,
+    resolvedLogs,
   };
 };

@@ -11,6 +11,7 @@ import { callAI } from "../../utils/ai/coreAi.js";
 import { searchKnowledgeChunks } from "../Knowledge/knowledge.search.js";
 import { getActivePromptService } from "../AiPrompt/aiprompt.service.js";
 import { getIO } from "../../middlewares/socket/socket.js";
+import { classifyIntent } from "../../utils/ai/intentClassifier.js";
 
 const httpsAgent = new https.Agent({
   family: 4,
@@ -497,39 +498,50 @@ export const getOpenAIReply = async (
     const cleanMessage = userMessage.trim();
     if (!cleanMessage) return null;
 
-    // ── Phase 1: Parallel fetch — all independent operations at once ──
-    const [languageInfo, memory, knowledgeResult, activePrompt] =
-      await Promise.all([
-        detectLanguageAI(cleanMessage, tenant_id).catch((err) => {
-          console.error(
-            "[WHATSAPP-AI] Language detection failed:",
-            err.message,
-          );
-          return { language: "unknown", style: "unknown", label: "unknown" };
-        }),
-        getConversationMemory(tenant_id, phone, contact_id).catch((memErr) => {
-          console.error("[WHATSAPP-AI] Memory/history failed:", memErr.message);
-          return [];
-        }),
-        searchKnowledgeChunks(tenant_id, cleanMessage).catch((knErr) => {
-          console.error(
-            "[WHATSAPP-AI] Knowledge search failed:",
-            knErr.message,
-          );
-          return { chunks: [], resolvedLogs: [], sources: [] };
-        }),
-        getActivePromptService(tenant_id).catch((promptErr) => {
-          console.error(
-            "[WHATSAPP-AI] Active prompt fetch failed:",
-            promptErr.message,
-          );
-          return null;
-        }),
-      ]);
+    // ── Phase 1: Parallel fetch — language + memory + active prompt (always needed) ──
+    const [languageInfo, memory, activePrompt] = await Promise.all([
+      detectLanguageAI(cleanMessage, tenant_id).catch((err) => {
+        console.error("[WHATSAPP-AI] Language detection failed:", err.message);
+        return { language: "unknown", style: "unknown", label: "unknown" };
+      }),
+      getConversationMemory(tenant_id, phone, contact_id).catch((memErr) => {
+        console.error("[WHATSAPP-AI] Memory/history failed:", memErr.message);
+        return [];
+      }),
+      getActivePromptService(tenant_id).catch((promptErr) => {
+        console.error(
+          "[WHATSAPP-AI] Active prompt fetch failed:",
+          promptErr.message,
+        );
+        return null;
+      }),
+    ]);
 
     console.log("language", languageInfo);
 
     const chatHistory = buildChatHistory(memory);
+
+    // ── Phase 1.5: Intent Classification — what data does this message need? ──
+    const intentResult = await classifyIntent(
+      cleanMessage,
+      chatHistory,
+      tenant_id,
+    );
+    console.log(
+      `[WHATSAPP-AI] Intent: ${intentResult.intent} | requires: K:${intentResult.requires.knowledge} D:${intentResult.requires.doctors} A:${intentResult.requires.appointments}`,
+    );
+
+    // ── Phase 1.6: Fetch knowledge ONLY if classifier says it's needed ──
+    let knowledgeResult = { chunks: [], resolvedLogs: [], sources: [] };
+    if (intentResult.requires.knowledge) {
+      knowledgeResult = await searchKnowledgeChunks(
+        tenant_id,
+        cleanMessage,
+      ).catch((knErr) => {
+        console.error("[WHATSAPP-AI] Knowledge search failed:", knErr.message);
+        return { chunks: [], resolvedLogs: [], sources: [] };
+      });
+    }
 
     // ── Phase 2: Build system prompt (mostly local assembly, data pre-fetched) ──
     let systemPrompt = "";
@@ -543,6 +555,8 @@ export const getOpenAIReply = async (
           ...cachedData,
           knowledgeResult,
           activePrompt,
+          intent: intentResult.intent,
+          requires: intentResult.requires,
         },
       );
       systemPrompt = promptResult.systemPrompt;
@@ -617,6 +631,7 @@ export const getOpenAIReply = async (
       message: finalReply || null,
       tagDetected: processed.tagDetected,
       tagPayload: processed.tagPayload,
+      intent: intentResult.intent,
     };
   } catch (err) {
     console.error("OpenAI error:", err.message);

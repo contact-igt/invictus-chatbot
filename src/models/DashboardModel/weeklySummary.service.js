@@ -1,6 +1,7 @@
 import db from "../../database/index.js";
 import { tableNames } from "../../database/tableName.js";
 import { Op, Sequelize } from "sequelize";
+import { AiService } from "../../utils/ai/coreAi.js";
 
 /**
  * Gets the start and end dates for the past N weeks
@@ -194,7 +195,7 @@ export const getWeeklySummaryService = async (tenantId) => {
       const resolvedChats = parseInt(resolvedResult?.count || 0, 10);
 
       // Generate AI summary based on metrics
-      const summary = generateWeeklySummary({
+      const summary = await generateWeeklySummary({
         weekNumber: week.weekNumber,
         totalChats,
         newLeads,
@@ -202,6 +203,8 @@ export const getWeeklySummaryService = async (tenantId) => {
         appointments,
         resolvedChats,
         uniqueConversations,
+        startDate: week.startDateStr,
+        endDate: week.endDateStr,
       });
 
       summaries.push({
@@ -226,58 +229,74 @@ export const getWeeklySummaryService = async (tenantId) => {
 };
 
 /**
- * Generate a human-readable summary based on metrics
+ * Generate an AI-powered weekly summary from metrics
  */
-const generateWeeklySummary = (metrics) => {
+const generateWeeklySummary = async (metrics) => {
   const {
     weekNumber,
     totalChats,
     newLeads,
     responseRate,
     appointments,
+    resolvedChats,
     uniqueConversations,
+    startDate,
+    endDate,
   } = metrics;
 
+  // Fast fallback if zero activity
+  if (totalChats === 0 && newLeads === 0 && appointments === 0) {
+    return "No significant activity recorded this week.";
+  }
+
+  const prompt = `You are a business analytics assistant. Generate a concise 2-3 sentence weekly performance summary for a WhatsApp-based business dashboard.
+
+Week: ${startDate} to ${endDate}
+Metrics:
+- Total messages: ${totalChats}
+- Unique conversations: ${uniqueConversations}
+- New leads captured: ${newLeads}
+- AI response rate: ${responseRate}%
+- Appointments booked: ${appointments}
+- Resolved chats: ${resolvedChats}
+
+Rules:
+- Write 2-3 sentences max. Be specific with numbers.
+- Highlight what went well and what needs attention.
+- Compare implicitly (e.g. "strong" or "below average") based on the numbers.
+- No bullet points. No greetings. Just the summary paragraph.
+- Do not repeat the date range.
+
+Summary:`;
+
+  try {
+    const aiSummary = await AiService("system", prompt, null, "weekly_summary");
+    return aiSummary?.trim() || buildFallbackSummary(metrics);
+  } catch (err) {
+    console.error(
+      "[WEEKLY-SUMMARY] AI generation failed, using fallback:",
+      err.message,
+    );
+    return buildFallbackSummary(metrics);
+  }
+};
+
+/**
+ * Fallback summary if AI fails
+ */
+const buildFallbackSummary = (metrics) => {
+  const { totalChats, newLeads, responseRate, appointments } = metrics;
   const parts = [];
-
-  // Activity level
-  if (totalChats > 100) {
-    parts.push("High engagement week with strong message activity.");
-  } else if (totalChats > 50) {
-    parts.push("Moderate engagement with consistent message flow.");
-  } else if (totalChats > 0) {
-    parts.push("Light activity week with fewer conversations.");
-  } else {
-    parts.push("Minimal activity recorded this week.");
-  }
-
-  // Lead performance
-  if (newLeads > 20) {
-    parts.push(`Strong lead generation with ${newLeads} new leads captured.`);
-  } else if (newLeads > 10) {
-    parts.push(`Good lead performance with ${newLeads} new prospects.`);
-  } else if (newLeads > 0) {
-    parts.push(`${newLeads} new lead${newLeads > 1 ? "s" : ""} added.`);
-  }
-
-  // Response rate
-  if (responseRate >= 90) {
+  if (totalChats > 50)
+    parts.push(`High engagement with ${totalChats} messages.`);
+  else if (totalChats > 0) parts.push(`${totalChats} messages exchanged.`);
+  if (newLeads > 0)
+    parts.push(`${newLeads} new lead${newLeads > 1 ? "s" : ""} captured.`);
+  if (responseRate > 0) parts.push(`AI response rate: ${responseRate}%.`);
+  if (appointments > 0)
     parts.push(
-      `Excellent AI response rate at ${responseRate}% - handling queries efficiently.`,
+      `${appointments} appointment${appointments > 1 ? "s" : ""} booked.`,
     );
-  } else if (responseRate >= 75) {
-    parts.push(`AI maintained ${responseRate}% response coverage.`);
-  } else if (responseRate > 0) {
-    parts.push(`Response rate at ${responseRate}% - room for improvement.`);
-  }
-
-  // Appointments
-  if (appointments > 0) {
-    parts.push(
-      `${appointments} appointment${appointments > 1 ? "s" : ""} scheduled.`,
-    );
-  }
-
   return parts.join(" ") || "No significant activity to report.";
 };
 
@@ -396,13 +415,17 @@ export const getContactWeeklySummaryService = async (
           ? Math.round(((messageCount - prevWeekTotal) / prevWeekTotal) * 100)
           : 0;
 
-      // Generate contact-specific summary
-      const summary = generateContactSummary({
+      // Generate AI-powered contact-specific summary
+      const summary = await generateContactSummary({
         contactName: contactInfo?.name || "Contact",
         messageCount,
         sentiment,
         keyTopics,
         actionItems,
+        userMessages,
+        botMessages,
+        startDate: week.startDateStr,
+        endDate: week.endDateStr,
       });
 
       summaries.push({
@@ -622,50 +645,99 @@ const calculateEngagementScore = ({
 };
 
 /**
- * Generate contact-specific summary narrative
+ * Generate AI-powered contact-specific summary narrative
  */
-const generateContactSummary = ({
+const generateContactSummary = async ({
+  contactName,
+  messageCount,
+  sentiment,
+  keyTopics,
+  actionItems,
+  userMessages,
+  botMessages,
+  startDate,
+  endDate,
+}) => {
+  if (messageCount === 0) {
+    return "No conversation activity during this period.";
+  }
+
+  const prompt = `You are a CRM analytics assistant. Write a 2-3 sentence summary of a customer's weekly WhatsApp interaction.
+
+Customer: ${contactName}
+Period: ${startDate} to ${endDate}
+- Total messages: ${messageCount} (Customer: ${userMessages}, Bot/Admin: ${botMessages})
+- Sentiment: ${sentiment}
+- Topics discussed: ${keyTopics.length > 0 ? keyTopics.join(", ") : "General inquiry"}
+- Action items: ${actionItems.length > 0 ? actionItems.join("; ") : "None"}
+
+Rules:
+- 2-3 sentences. Be specific.
+- Mention the customer by name.
+- Highlight sentiment and key topics naturally.
+- If there are action items, mention them.
+- No bullet points. No greetings. Just the summary.
+
+Summary:`;
+
+  try {
+    const aiSummary = await AiService(
+      "system",
+      prompt,
+      null,
+      "contact_weekly_summary",
+    );
+    return (
+      aiSummary?.trim() ||
+      buildFallbackContactSummary({
+        contactName,
+        messageCount,
+        sentiment,
+        keyTopics,
+        actionItems,
+      })
+    );
+  } catch (err) {
+    console.error(
+      "[CONTACT-SUMMARY] AI generation failed, using fallback:",
+      err.message,
+    );
+    return buildFallbackContactSummary({
+      contactName,
+      messageCount,
+      sentiment,
+      keyTopics,
+      actionItems,
+    });
+  }
+};
+
+/**
+ * Fallback contact summary if AI fails
+ */
+const buildFallbackContactSummary = ({
   contactName,
   messageCount,
   sentiment,
   keyTopics,
   actionItems,
 }) => {
-  if (messageCount === 0) {
-    return "No conversation activity during this period.";
-  }
-
   const parts = [];
-
-  // Activity level
-  if (messageCount > 10) {
+  if (messageCount > 10)
     parts.push(
-      `${contactName} showed high engagement this week with active conversations.`,
+      `${contactName} showed high engagement with ${messageCount} messages.`,
     );
-  } else if (messageCount > 5) {
-    parts.push(`Regular interaction with ${contactName} maintained.`);
-  } else {
-    parts.push(`Brief exchange with ${contactName}.`);
-  }
-
-  // Topics discussed
-  if (keyTopics.length > 0) {
-    parts.push(`Key topics discussed: ${keyTopics.join(", ")}.`);
-  }
-
-  // Sentiment
-  if (sentiment === "positive") {
-    parts.push("Positive sentiment throughout conversations.");
-  } else if (sentiment === "negative") {
+  else if (messageCount > 5)
+    parts.push(
+      `Regular interaction with ${contactName} (${messageCount} messages).`,
+    );
+  else parts.push(`Brief exchange with ${contactName}.`);
+  if (keyTopics.length > 0) parts.push(`Topics: ${keyTopics.join(", ")}.`);
+  if (sentiment === "negative")
     parts.push("Some concerns raised that may need attention.");
-  }
-
-  // Action items
-  if (actionItems.length > 0) {
+  if (actionItems.length > 0)
     parts.push(
       `${actionItems.length} action item${actionItems.length > 1 ? "s" : ""} identified.`,
     );
-  }
-
   return parts.join(" ");
 };
