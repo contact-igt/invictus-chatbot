@@ -46,6 +46,17 @@ export const processBillingFromWebhook = async (tenant_id, statusUpdate) => {
     if (!created) {
       if (usageRecord.status !== status) {
         await usageRecord.update({ status });
+        // Emit socket event so frontend ledger table updates live
+        try {
+          const io = getIO();
+          io.to(`tenant-${tenant_id}`).emit("billing-update", {
+            type: "STATUS_UPDATE",
+            tenant_id,
+            message_id,
+            status,
+            timestamp: new Date().toISOString(),
+          });
+        } catch (_) {}
       }
       return;
     }

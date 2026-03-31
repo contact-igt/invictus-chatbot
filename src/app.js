@@ -3,10 +3,8 @@ import cors from "cors";
 import fileUpload from "express-fileupload";
 import http from "http";
 import dns from "dns";
-
 import db from "./database/index.js";
 import { initSocket } from "./middlewares/socket/socket.js";
-
 import AuthWhatsappRouter from "./models/AuthWhatsapp/AuthWhatsapp.routes.js";
 import WhatsappMessageRouter from "./models/Messages/messages.routes.js";
 import KnowledgeRouter from "./models/Knowledge/knowledge.routes.js";
@@ -106,7 +104,7 @@ app.get("/", (req, res) => {
 });
 
 
-await db.sequelize.sync();
+await db.sequelize.sync({ alter: true });
 console.log("DB connected");
 
 startLeadHeatDecayCronService();

@@ -15,6 +15,7 @@ import {
   restoreTenantUserController,
   getLoggedTenantUserController,
   updateTenantOrganizationController,
+  updateLoggedTenantProfileController,
     forgotTenantPasswordController,
   verifyTenantOTPController,
   resetTenantPasswordController,
@@ -42,6 +43,16 @@ Router.get(
     roles: ["tenant_admin", "doctor", "staff", "agent"],
   }),
   getLoggedTenantUserController,
+);
+
+Router.put(
+  "/user/profile",
+  authenticate,
+  authorize({
+    user_type: "tenant",
+    roles: ["tenant_admin", "doctor", "staff", "agent"],
+  }),
+  updateLoggedTenantProfileController,
 );
 
 Router.put(
