@@ -176,6 +176,99 @@ export const updateLoggedTenantOrganizationController = async (req, res) => {
   }
 };
 
+// Combined profile + organization update for logged-in tenant user
+export const updateLoggedTenantProfileController = async (req, res) => {
+  try {
+    const { unique_id, tenant_id, role } = req.user;
+    const { username, country_code, mobile, organization } = req.body;
+
+    if (!unique_id) {
+      return res.status(400).json({ message: "User ID not found in session" });
+    }
+
+    // Update user profile fields
+    const profileData = {};
+    if (username) profileData.username = username;
+    if (country_code) profileData.country_code = cleanCountryCode(country_code);
+    if (mobile) {
+      profileData.mobile = normalizeMobile(
+        profileData.country_code || country_code,
+        mobile,
+      );
+    }
+
+    if (Object.keys(profileData).length > 0) {
+      await updateTenantUserByIdService(unique_id, profileData);
+    }
+
+    // Update organization fields — only tenant_admin allowed
+    if (organization && role === "tenant_admin") {
+      const {
+        company_name,
+        type,
+        address,
+        city,
+        state,
+        country,
+        pincode,
+      } = organization;
+
+      await updateTenantService(
+        company_name,
+        null, // owner_name
+        null, // owner_email
+        null, // owner_country_code
+        null, // owner_mobile
+        type,
+        null, // status
+        null, // subscription_start_date
+        null, // subscription_end_date
+        address,
+        city,
+        country,
+        state,
+        pincode,
+        null, // max_users
+        null, // subscription_plan
+        null, // profile
+        null, // ai_settings
+        tenant_id,
+      );
+    }
+
+    // Fetch updated user to return fresh data
+    const updatedUser = await findTenantUserByIdService(unique_id);
+    if (updatedUser) {
+      delete updatedUser.password_hash;
+
+      const tenant = await findTenantByIdService(tenant_id);
+      if (tenant) {
+        updatedUser.organization = {
+          company_name: tenant.company_name,
+          type: tenant.type,
+          address: tenant.address,
+          country: tenant.country,
+          state: tenant.state,
+          city: tenant.city,
+          pincode: tenant.pincode,
+          subscription_plan: tenant.subscription_plan,
+          subscription_start_date: tenant.subscription_start_date,
+          subscription_end_date: tenant.subscription_end_date,
+          max_users: tenant.max_users,
+        };
+        updatedUser.webhook_verified = !!tenant.webhook_verified;
+      }
+    }
+
+    return res.status(200).json({
+      message: "Profile updated successfully",
+      data: { ...updatedUser, user_type: "tenant" },
+    });
+  } catch (err) {
+    return res.status(500).json({ message: err.message });
+  }
+};
+
 export const createTenantUserController = async (req, res) => {
   const { title, username, email, country_code, mobile, profile, role } =
     req.body;

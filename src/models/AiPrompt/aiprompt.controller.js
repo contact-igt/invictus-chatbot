@@ -11,9 +11,7 @@ import {
   getDeletedAiPromptListService,
   restoreAiPromptService,
 } from "./aiprompt.service.js";
-import { getOpenAIClient } from "../../utils/ai/getOpenAIClient.js";
-import { getTenantAiModel } from "../../utils/ai/getTenantAiModel.js";
-import { trackAiTokenUsage } from "../../utils/ai/trackAiTokenUsage.js";
+import { callAI } from "../../utils/ai/coreAi.js";
 
 export const getDeletedAiPromptListController = async (req, res) => {
   const tenant_id = req.user.tenant_id;
@@ -229,32 +227,19 @@ export const generateAiCompletionController = async (req, res) => {
       return res.status(400).json({ message: "Prompt is required" });
     }
 
-    // Get tenant's selected output model and tenant-specific OpenAI client
-    const outputModel = await getTenantAiModel(tenant_id, "output");
-    const openai = await getOpenAIClient(tenant_id);
-
-    const response = await openai.chat.completions.create({
-      model: outputModel,
+    const result = await callAI({
       messages: [
         { role: "system", content: systemInstruction },
         { role: "user", content: prompt },
       ],
+      tenant_id,
+      source: "frontend_utility",
       temperature: 0.3,
-      max_tokens: 500,
     });
-
-    // Track token usage
-    await trackAiTokenUsage(tenant_id, "frontend_utility", response).catch(
-      (e) => console.error("[AI-COMPLETION] Token tracking failed:", e.message),
-    );
-
-    const result =
-      response?.choices?.[0]?.message?.content?.trim() ||
-      "No response generated.";
 
     return res.status(200).json({
       message: "success",
-      data: { content: result },
+      data: { content: result.content },
     });
   } catch (err) {
     console.error("[AI-COMPLETION] Error:", err.message);

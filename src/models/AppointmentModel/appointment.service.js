@@ -101,6 +101,10 @@ export const createAppointmentService = async (data) => {
         contact_number,
         patient_name || null,
         null,
+        country_code,
+        null,
+        email || null,
+        age || null,
       );
       contact_id = newContact.contact_id;
     }

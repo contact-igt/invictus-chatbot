@@ -43,7 +43,7 @@ export const restoreContactController = async (req, res) => {
 
 export const createContactController = async (req, res) => {
   const tenant_id = req.user.tenant_id;
-  let { country_code, phone, name, email, profile_pic } = req.body;
+  let { country_code, phone, name, email, profile_pic, age } = req.body;
 
   if (!phone) {
     return res.status(400).json({
@@ -95,6 +95,7 @@ export const createContactController = async (req, res) => {
       country_code,
       null, // wa_id
       email || null,
+      age != null ? parseInt(age, 10) : null,
     );
 
     return res.status(201).send({
@@ -160,7 +161,7 @@ export const getContactByIdController = async (req, res) => {
 export const updateContactController = async (req, res) => {
   const tenant_id = req.user.tenant_id;
   const { contact_id } = req.params;
-  const { name, email, profile_pic, is_blocked, phone } = req.body;
+  const { name, email, profile_pic, is_blocked, phone, age } = req.body;
 
   if (!tenant_id) {
     return res.status(400).send({ message: "Tenant id missing" });
@@ -191,6 +192,12 @@ export const updateContactController = async (req, res) => {
       profile_pic !== undefined ? profile_pic : existingContact.profile_pic;
     const finalIsBlocked =
       is_blocked !== undefined ? is_blocked : existingContact.is_blocked;
+    const finalAge =
+      age !== undefined
+        ? age != null
+          ? parseInt(age, 10)
+          : null
+        : existingContact.age;
 
     await updateContactService(
       contact_id,
@@ -199,6 +206,7 @@ export const updateContactController = async (req, res) => {
       finalEmail,
       finalProfilePic,
       finalIsBlocked,
+      finalAge,
     );
     return res.status(200).send({
       message: "Contact updated successfully",
@@ -279,6 +287,7 @@ export const importContactsController = async (req, res) => {
     const nameIndex = headers.indexOf("name");
     const phoneIndex = headers.indexOf("phone");
     const emailIndex = headers.indexOf("email");
+    const ageIndex = headers.indexOf("age");
 
     if (nameIndex === -1 || phoneIndex === -1) {
       return res.status(400).send({
@@ -316,11 +325,15 @@ export const importContactsController = async (req, res) => {
       lastVal = lastVal.replace(/^="(.+)"$/, "$1").replace(/^"(.+)"$/, "$1");
       values.push(lastVal);
 
-      if (values.length >= Math.max(nameIndex, phoneIndex, emailIndex) + 1) {
+      if (
+        values.length >=
+        Math.max(nameIndex, phoneIndex, emailIndex, ageIndex) + 1
+      ) {
         contactsToImport.push({
           name: values[nameIndex],
           phone: values[phoneIndex],
           email: emailIndex !== -1 ? values[emailIndex] : null,
+          age: ageIndex !== -1 ? values[ageIndex] : null,
         });
       }
     }

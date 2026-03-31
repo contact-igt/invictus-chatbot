@@ -1,12 +1,5 @@
-import OpenAI from "openai";
-import dotenv from "dotenv";
-
-dotenv.config();
-
 import { CLASSIFIER_PROMPT } from "./prompts/index.js";
-import { getTenantAiModel } from "./getTenantAiModel.js";
-import { trackAiTokenUsage } from "./trackAiTokenUsage.js";
-import { getOpenAIClient } from "./getOpenAIClient.js";
+import { callAI } from "./coreAi.js";
 
 /**
  * Classifies an AI response into a specific category with reasoning.
@@ -26,29 +19,20 @@ export const classifyResponse = async (
       userQuestion,
     ).replace("{AI_RESPONSE}", aiResponse);
 
-    const inputModel = await getTenantAiModel(tenant_id, "input");
-    const openai = await getOpenAIClient(tenant_id);
-
-    const completion = await openai.chat.completions.create({
-      model: inputModel,
+    const result = await callAI({
       messages: [{ role: "user", content: prompt }],
+      tenant_id,
+      source: "classifier",
       temperature: 0,
-      response_format: { type: "json_object" },
+      responseFormat: { type: "json_object" },
     });
 
-    // Track token usage
-    if (tenant_id) {
-      await trackAiTokenUsage(tenant_id, "classifier", completion).catch((e) =>
-        console.error("[AI-CLASSIFIER] Token tracking failed:", e.message),
-      );
-    }
-
-    const result = JSON.parse(completion.choices[0].message.content.trim());
+    const parsed = JSON.parse(result.content);
     console.log(
-      `[AI-CLASSIFIER] Category: ${result.category}, Reason: ${result.reason}`,
+      `[AI-CLASSIFIER] Category: ${parsed.category}, Reason: ${parsed.reason}`,
     );
 
-    return result;
+    return parsed;
   } catch (err) {
     console.error("[AI-CLASSIFIER] Error:", err.message);
     return { category: "NORMAL", reason: "Error in classification" };

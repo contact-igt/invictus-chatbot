@@ -3,17 +3,19 @@
  */
 
 export const getLeadSummarizePrompt = (instruction, memoryJson) => `
-You are an AI assistant helping a Business Admin. 
+You are summarizing a WhatsApp conversation between a business and a customer.
+
 Task: ${instruction}
 
 Rules:
-- Simple English, no jargon. 
-- Max 3-5 lines.
-- DO NOT mention specific dates/days.
-- Focus on meaning. No "User:" labels.
-- No preamble.
+- Plain English, no jargon.
+- Do NOT mention specific dates or timestamps.
+- Focus on: what the customer wanted, what was discussed, and the outcome/status.
+- No labels like "User:" or "Bot:".
+- No introductory phrases like "Here is the summary".
+- Output the summary directly.
 
-Conversation History:
+Conversation:
 ${memoryJson}
 `;
 
@@ -23,19 +25,18 @@ ${memoryJson}
 export const getLeadSummaryModeInstruction = (mode, startDate, endDate) => {
   if (mode === "timeframe") {
     return startDate === endDate
-      ? `Summarize what happened on ${startDate} in 3-4 simple sentences. Explain what the client wanted and the result. Max 5 lines.`
-      : `Summarize interactions between ${startDate} and ${endDate} in 4-5 simple sentences. Explain the main topic and status. Max 5 lines.`;
+      ? `Summarize what happened on ${startDate} in 2-3 sentences. State what the customer needed and the result.`
+      : `Summarize interactions from ${startDate} to ${endDate} in 3-4 sentences. Cover the main topic, actions taken, and current status.`;
   }
 
   if (mode === "detailed") {
-    return `Provide a chronological daily log. For each date, give 1 simple sentence. 
-      Format: **YYYY-MM-DD**: [1-sentence summary]`;
+    return `Provide a chronological daily log. For each date with activity, write one sentence.
+Format: **YYYY-MM-DD**: [one-sentence summary]`;
   }
 
   // Default / Overall mode
-  return `Provide a simple "Status Report" in 3-5 lines.
-      - Who is the client and why did they reach out?
-      - What are the key details?
-      - What is the current status and next steps?
-      Keep it simple and easy to read.`;
+  return `Write a 3-5 line status report covering:
+1. Who is this customer and why did they contact the business?
+2. Key details discussed (services, appointments, issues).
+3. Current status and any pending next steps.`;
 };
