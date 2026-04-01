@@ -70,6 +70,21 @@ export const BillingLedgerTable = (sequelize, Sequelize) => {
         defaultValue: 0,
       },
 
+      usd_to_inr_rate: {
+        type: Sequelize.DECIMAL(10, 2),
+        allowNull: false,
+        defaultValue: 85.0,
+        comment: "USD to INR conversion rate used at billing time",
+      },
+
+      total_cost_inr: {
+        type: Sequelize.DECIMAL(10, 4),
+        allowNull: false,
+        defaultValue: 0,
+        comment:
+          "Total cost in INR (total_cost × usd_to_inr_rate) — actual wallet deduction",
+      },
+
       createdAt: {
         type: Sequelize.DATE,
         allowNull: false,

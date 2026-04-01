@@ -18,6 +18,7 @@ export const execute = async (payload, context) => {
         console.log("[LEAD_SOURCE] Missing payload or context, skipping.");
         return;
     }
+    
 
     const detectedSource = payload.trim().toLowerCase();
 

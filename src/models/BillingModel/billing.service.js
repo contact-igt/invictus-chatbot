@@ -126,11 +126,26 @@ export const processBillingFromWebhook = async (tenant_id, statusUpdate) => {
       baseRate = pricingRule
         ? parseFloat(pricingRule.rate)
         : defaultRates[category] || 0;
-      markupPercent = pricingRule ? parseFloat(pricingRule.markup_percent) : 0;
+      markupPercent = pricingRule ? parseFloat(pricingRule.markup_percent) : 10; // Default 10% markup
     }
 
     const platformFee = baseRate * (markupPercent / 100);
-    const totalCost = baseRate + platformFee;
+    const totalCostUsd = baseRate + platformFee;
+
+    // Convert USD to INR for wallet deduction
+    const DEFAULT_USD_TO_INR = 85;
+    let usdToInrRate = DEFAULT_USD_TO_INR;
+    try {
+      const aiPricingRule = await db.AiPricing.findOne({
+        where: { is_active: true },
+        attributes: ["usd_to_inr_rate"],
+        raw: true,
+      });
+      if (aiPricingRule?.usd_to_inr_rate) {
+        usdToInrRate = parseFloat(aiPricingRule.usd_to_inr_rate);
+      }
+    } catch (_) {}
+    const totalCostInr = totalCostUsd * usdToInrRate;
 
     let template_name = null;
     let campaign_name = null;
@@ -183,8 +198,10 @@ export const processBillingFromWebhook = async (tenant_id, statusUpdate) => {
           rate: baseRate,
           meta_cost: baseRate,
           platform_fee: platformFee,
-          total_cost: totalCost,
+          total_cost: totalCostUsd,
           markup_percent: markupPercent,
+          usd_to_inr_rate: usdToInrRate,
+          total_cost_inr: totalCostInr,
         },
         transaction: t,
       });
@@ -197,7 +214,7 @@ export const processBillingFromWebhook = async (tenant_id, statusUpdate) => {
         return;
       }
 
-      if (totalCost > 0) {
+      if (totalCostInr > 0) {
         // Find or create wallet
         let [wallet] = await db.Wallets.findOrCreate({
           where: { tenant_id },
@@ -207,7 +224,7 @@ export const processBillingFromWebhook = async (tenant_id, statusUpdate) => {
 
         // NaN protection: ensure balance is a valid number
         const oldBalance = parseFloat(wallet.balance) || 0;
-        const newBalance = oldBalance - totalCost;
+        const newBalance = oldBalance - totalCostInr;
 
         await wallet.update({ balance: newBalance }, { transaction: t });
 
@@ -216,9 +233,9 @@ export const processBillingFromWebhook = async (tenant_id, statusUpdate) => {
           {
             tenant_id,
             type: "debit",
-            amount: totalCost,
+            amount: totalCostInr,
             reference_id: `ledger_${ledger.id}`,
-            description: `Message Billing: ${category} (${country})`,
+            description: `Message Billing: ${category} (${country}) [$${totalCostUsd.toFixed(4)} × ₹${usdToInrRate}]`,
             balance_after: newBalance,
           },
           { transaction: t },
@@ -235,7 +252,7 @@ export const processBillingFromWebhook = async (tenant_id, statusUpdate) => {
     } catch (e) {}
 
     console.log(
-      `[BILLING] Billed ${category} for tenant ${tenant_id}: ₹${totalCost.toFixed(4)}. Ledger and Wallet updated. Balance: ₹${currentBalance.toFixed(4)}`,
+      `[BILLING] Billed ${category} for tenant ${tenant_id}: ₹${totalCostInr.toFixed(4)} ($${totalCostUsd.toFixed(4)} × ${usdToInrRate}). Balance: ₹${currentBalance.toFixed(4)}`,
     );
 
     // 4. Emit real-time update via Socket
@@ -245,7 +262,7 @@ export const processBillingFromWebhook = async (tenant_id, statusUpdate) => {
         type: "NEW_LEDGER_ENTRY",
         tenant_id,
         category,
-        totalCost,
+        totalCost: totalCostInr,
         currentBalance,
         lowBalance: currentBalance < 100,
         timestamp: new Date(),
@@ -307,17 +324,25 @@ export const getBillingKpiService = async (tenant_id, startDate, endDate) => {
       };
     }
 
-    // 1. Calculate category-wise spent using aggregation
+    // 1. Calculate category-wise spent using aggregation (INR — actual wallet deductions)
     const categoryTotals = await db.BillingLedger.findAll({
       attributes: [
         "category",
-        [db.sequelize.fn("SUM", db.sequelize.col("total_cost")), "totalSpent"],
+        [
+          db.sequelize.fn("SUM", db.sequelize.col("total_cost_inr")),
+          "totalSpentInr",
+        ],
+        [
+          db.sequelize.fn("SUM", db.sequelize.col("total_cost")),
+          "totalSpentUsd",
+        ],
       ],
       where: whereClause,
       group: ["category"],
     });
 
-    let totalSpentEstimated = 0;
+    let totalSpentInr = 0;
+    let totalSpentUsd = 0;
     let marketingSpent = 0;
     let utilitySpent = 0;
     let authSpent = 0;
@@ -325,12 +350,14 @@ export const getBillingKpiService = async (tenant_id, startDate, endDate) => {
 
     categoryTotals.forEach((result) => {
       const category = result.category;
-      const total = parseFloat(result.get("totalSpent")) || 0;
-      totalSpentEstimated += total;
-      if (category === "marketing") marketingSpent = total;
-      else if (category === "utility") utilitySpent = total;
-      else if (category === "authentication") authSpent = total;
-      else if (category === "service") serviceSpent = total;
+      const totalInr = parseFloat(result.get("totalSpentInr")) || 0;
+      const totalUsd = parseFloat(result.get("totalSpentUsd")) || 0;
+      totalSpentInr += totalInr;
+      totalSpentUsd += totalUsd;
+      if (category === "marketing") marketingSpent = totalInr;
+      else if (category === "utility") utilitySpent = totalInr;
+      else if (category === "authentication") authSpent = totalInr;
+      else if (category === "service") serviceSpent = totalInr;
     });
 
     // 2. Count messages and conversations using aggregation
@@ -361,7 +388,8 @@ export const getBillingKpiService = async (tenant_id, startDate, endDate) => {
     });
 
     return {
-      totalSpentEstimated,
+      totalSpentEstimated: totalSpentInr,
+      totalSpentUsd,
       marketingSpent,
       utilitySpent,
       authSpent,
@@ -438,6 +466,11 @@ export const getBillingLedgerService = async (
       platformFee: ledger.platform_fee,
       markupPercent: ledger.markup_percent,
       total: ledger.total_cost,
+      usdToInrRate: ledger.usd_to_inr_rate || 85,
+      totalInr:
+        ledger.total_cost_inr ||
+        parseFloat(ledger.total_cost) *
+          (parseFloat(ledger.usd_to_inr_rate) || 85),
       status: ledger.messageUsage?.status || "Unknown",
     }));
 
@@ -487,7 +520,7 @@ export const getBillingSpendChartService = async (
           auth: 0,
         };
       }
-      const cost = parseFloat(l.total_cost) || 0;
+      const cost = parseFloat(l.total_cost_inr) || 0;
       if (l.category === "marketing") spendMap[dateKey].marketing += cost;
       else if (l.category === "utility") spendMap[dateKey].utility += cost;
       else if (l.category === "authentication") spendMap[dateKey].auth += cost;
@@ -619,9 +652,12 @@ export const getBillingTemplateStatsService = async (
       attributes: [
         "template_name",
         "category",
-        [db.sequelize.fn("SUM", db.sequelize.col("total_cost")), "totalCost"],
+        [
+          db.sequelize.fn("SUM", db.sequelize.col("total_cost_inr")),
+          "totalCost",
+        ],
         [db.sequelize.fn("COUNT", db.sequelize.col("id")), "messageCount"],
-        [db.sequelize.fn("AVG", db.sequelize.col("rate")), "avgRate"],
+        [db.sequelize.fn("AVG", db.sequelize.col("total_cost_inr")), "avgRate"],
       ],
       where: whereClause,
       group: ["template_name", "category"],
@@ -661,10 +697,13 @@ export const getBillingCampaignStatsService = async (
       attributes: [
         "campaign_name",
         "template_name",
-        [db.sequelize.fn("SUM", db.sequelize.col("total_cost")), "totalCost"],
+        [
+          db.sequelize.fn("SUM", db.sequelize.col("total_cost_inr")),
+          "totalCost",
+        ],
         [db.sequelize.fn("COUNT", db.sequelize.col("id")), "recipientCount"],
         [
-          db.sequelize.fn("AVG", db.sequelize.col("rate")),
+          db.sequelize.fn("AVG", db.sequelize.col("total_cost_inr")),
           "avgRatePerRecipient",
         ],
       ],

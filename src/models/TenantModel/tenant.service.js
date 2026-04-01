@@ -301,7 +301,6 @@ export const softDeleteTenantService = async (tenant_id) => {
       tableNames.KNOWLEDGESOURCE,
       tableNames.KNOWLEDGECHUNKS,
       tableNames.AIPROMPT,
-      tableNames.AI_ANALYSIS_LOGS,
       tableNames.APPOINTMENTS,
       tableNames.LEADS,
       tableNames.LIVECHAT,
@@ -370,10 +369,10 @@ export const softDeleteTenantService = async (tenant_id) => {
     ];
 
     for (const table of hardDeleteTables) {
-      await db.sequelize.query(
-        `DELETE FROM ${table} WHERE tenant_id = ?`,
-        { replacements: [tenant_id], transaction },
-      );
+      await db.sequelize.query(`DELETE FROM ${table} WHERE tenant_id = ?`, {
+        replacements: [tenant_id],
+        transaction,
+      });
     }
 
     await transaction.commit();
@@ -444,7 +443,6 @@ export const deleteTenantService = async (tenant_id) => {
       tableNames.KNOWLEDGESOURCE,
       tableNames.KNOWLEDGECHUNKS,
       tableNames.AIPROMPT,
-      tableNames.AI_ANALYSIS_LOGS,
       tableNames.AI_TOKEN_USAGE,
       tableNames.MESSAGE_USAGE,
       tableNames.BILLING_LEDGER,
@@ -457,10 +455,10 @@ export const deleteTenantService = async (tenant_id) => {
     ];
 
     for (const table of allTenantTables) {
-      await db.sequelize.query(
-        `DELETE FROM ${table} WHERE tenant_id = ?`,
-        { replacements: [tenant_id], transaction },
-      );
+      await db.sequelize.query(`DELETE FROM ${table} WHERE tenant_id = ?`, {
+        replacements: [tenant_id],
+        transaction,
+      });
     }
 
     await transaction.commit();
@@ -528,7 +526,6 @@ export const restoreTenantService = async (tenant_id) => {
       tableNames.KNOWLEDGESOURCE,
       tableNames.KNOWLEDGECHUNKS,
       tableNames.AIPROMPT,
-      tableNames.AI_ANALYSIS_LOGS,
       tableNames.APPOINTMENTS,
       tableNames.LEADS,
       tableNames.LIVECHAT,

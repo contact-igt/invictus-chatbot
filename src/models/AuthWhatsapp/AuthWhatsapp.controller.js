@@ -30,8 +30,7 @@ import {
   getTenantSettingsService,
   updateTenantWebhookStatusService,
 } from "../TenantModel/tenant.service.js";
-import { classifyResponse } from "../../utils/ai/responseClassifier.js";
-import { handleClassification } from "../../utils/ai/classificationHandler.js";
+
 import db from "../../database/index.js";
 import {
   createContactService,
@@ -733,45 +732,6 @@ export const receiveMessage = async (req, res) => {
             messageToSend,
           );
         }
-
-        // Non-blocking classification — runs AFTER reply is already sent to user
-        setImmediate(async () => {
-          try {
-            const classification = await classifyResponse(
-              text,
-              messageToSend,
-              tenant_id,
-            );
-
-            // Honor primary AI tag hints
-            if (
-              aiResult?.tagDetected === "MISSING_KNOWLEDGE" &&
-              classification.category !== "MISSING_KNOWLEDGE"
-            ) {
-              classification.category = "MISSING_KNOWLEDGE";
-              classification.reason =
-                aiResult.tagPayload || classification.reason;
-            } else if (
-              aiResult?.tagDetected === "OUT_OF_SCOPE" &&
-              classification.category !== "OUT_OF_SCOPE"
-            ) {
-              classification.category = "OUT_OF_SCOPE";
-              classification.reason =
-                aiResult.tagPayload || classification.reason;
-            }
-
-            await handleClassification(classification, {
-              tenant_id,
-              userMessage: text,
-              aiResponse: messageToSend,
-            });
-          } catch (classifierError) {
-            console.error(
-              "[CLASSIFIER] Background classification error:",
-              classifierError.message,
-            );
-          }
-        });
       } catch (err) {
         console.error("Background AI error:", err);
       } finally {

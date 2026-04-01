@@ -101,9 +101,11 @@ export const trackAiTokenUsage = async (tenant_id, source, response) => {
     } else {
       const pricing =
         FALLBACK_PRICING[model] || FALLBACK_PRICING["gpt-4o-mini"];
-      estimatedCostUsd =
+      const baseCost =
         (prompt_tokens / 1_000_000) * pricing.input +
         (completion_tokens / 1_000_000) * pricing.output;
+      // Apply default 10% platform markup even for fallback pricing
+      estimatedCostUsd = baseCost * 1.1;
     }
 
     // Convert USD to INR for wallet deduction

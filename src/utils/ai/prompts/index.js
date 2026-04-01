@@ -1,5 +1,4 @@
 export * from "./system.js";
-export * from "./classifier.js";
 export * from "./language.js";
 export * from "./search.js";
 export * from "./admin.js";

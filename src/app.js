@@ -14,16 +14,15 @@ import TenantRouter from "./models/TenantModel/tenant.routes.js";
 import WhatsappAccountRouter from "./models/WhatsappAccountModel/whatsappAccount.routes.js";
 import ContactRouter from "./models/ContactsModel/contacts.routes.js";
 import LeadRouter from "./models/LeadsModel/leads.routes.js";
-import LiveChatRouter from "./models/LiveChatModel/livechat.routes.js"
+import LiveChatRouter from "./models/LiveChatModel/livechat.routes.js";
 import TenantInvitationRouter from "./models/TenantInvitationModel/tenantinvitation.routes.js";
 import TenantUserRouter from "./models/TenantUserModel/tenantuser.routes.js";
-import WhatsappTemplateRouter from "./models/WhatsappTemplateModel/whatsapptemplate.routes.js"
-import WhatsappCampaignRouter from "./models/WhatsappCampaignModel/whatsappcampaign.routes.js"
-import ContactGroupRouter from "./models/ContactGroupModel/contactGroup.routes.js"
+import WhatsappTemplateRouter from "./models/WhatsappTemplateModel/whatsapptemplate.routes.js";
+import WhatsappCampaignRouter from "./models/WhatsappCampaignModel/whatsappcampaign.routes.js";
+import ContactGroupRouter from "./models/ContactGroupModel/contactGroup.routes.js";
 import { startCampaignSchedulerService } from "./models/WhatsappCampaignModel/whatsappcampaign.service.js";
 import { startLeadHeatDecayCronService } from "./models/LeadsModel/leads.service.js";
 import { startLiveChatCleanupService } from "./models/LiveChatModel/livechat.service.js";
-import AiAnalysisLogRouter from "./models/AiAnalysisLog/aiAnalysisLog.routes.js";
 import DoctorRouter from "./models/DoctorModel/doctor.routes.js";
 import SpecializationRouter from "./models/SpecializationModel/specialization.routes.js";
 import AppointmentRouter from "./models/AppointmentModel/appointment.routes.js";
@@ -35,17 +34,23 @@ import WhatsappOtpRouter from "./models/OtpVerificationModel/otpverification.rou
 import PaymentRouter from "./models/PaymentModel/payment.routes.js";
 import SuperAdminDashboardRouter from "./models/SuperAdminDashboardModel/superAdminDashboard.routes.js";
 
-
 dns.setDefaultResultOrder("ipv4first");
 
 const app = express();
 
-app.use(cors({
-  origin: "*",
-  methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "x-meta-token", "ngrok-skip-browser-warning"],
-  credentials: false,
-}));
+app.use(
+  cors({
+    origin: "*",
+    methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "x-meta-token",
+      "ngrok-skip-browser-warning",
+    ],
+    credentials: false,
+  }),
+);
 
 // Handle preflight requests explicitly
 app.options("*", cors());
@@ -67,12 +72,7 @@ app.use((req, res, next) => {
 
 app.use("/api/management", SuperAdminDashboardRouter, ManagementRouter);
 
-app.use(
-  "/api/tenant",
-  TenantRouter,
-  TenantUserRouter,
-  TenantInvitationRouter
-);
+app.use("/api/tenant", TenantRouter, TenantUserRouter, TenantInvitationRouter);
 
 app.use(
   "/api/whatsapp",
@@ -87,7 +87,6 @@ app.use(
   WhatsappTemplateRouter,
   WhatsappCampaignRouter,
   ContactGroupRouter,
-  AiAnalysisLogRouter,
   DoctorRouter,
   SpecializationRouter,
   AppointmentRouter,
@@ -98,11 +97,9 @@ app.use(
   PaymentRouter,
 );
 
-
 app.get("/", (req, res) => {
   res.json({ status: "OK" });
 });
-
 
 await db.sequelize.sync({ alter: true });
 console.log("DB connected");
@@ -111,7 +108,6 @@ startLeadHeatDecayCronService();
 startLiveChatCleanupService();
 startCampaignSchedulerService();
 startAppointmentSchedulerService();
-
 
 const PORT = process.env.PORT || 8000;
 const server = http.createServer(app);
