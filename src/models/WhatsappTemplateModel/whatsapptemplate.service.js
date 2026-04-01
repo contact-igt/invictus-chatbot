@@ -333,13 +333,11 @@ export const submitWhatsappTemplateService = async ({
       const authMetaComponents = [
         {
           type: "BODY",
-          text: bodyText,
           add_security_recommendation: true,
-          example: { body_text: [[otpSampleValue]] },
         },
         {
           type: "FOOTER",
-          text: "This code expires in 10 minutes.",
+          code_expiration_minutes: 10,
         },
         {
           type: "BUTTONS",
@@ -347,7 +345,6 @@ export const submitWhatsappTemplateService = async ({
             {
               type: "OTP",
               otp_type: "COPY_CODE",
-              text: "Copy Code",
             },
           ],
         },

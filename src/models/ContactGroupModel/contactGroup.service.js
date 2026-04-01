@@ -50,9 +50,12 @@ export const createContactGroupService = async (tenant_id, data) => {
  * Get all groups for a tenant
  */
 // ─── Get all groups for a tenant ───
-export const getContactGroupListService = async (tenant_id) => {
+export const getContactGroupListService = async (tenant_id, search) => {
     try {
         const where = { tenant_id, is_deleted: false };
+        if (search && search.trim()) {
+            where.group_name = { [db.Sequelize.Op.like]: `%${search.trim()}%` };
+        }
 
         const rows = await db.ContactGroups.findAll({
             where,
@@ -342,9 +345,12 @@ export const getAvailableContactsForGroupService = async (group_id, tenant_id) =
  * Retrieves a list of soft-deleted contact groups for a tenant.
  */
 // ─── Retrieves a list of soft-deleted contact groups for a tenant ───
-export const getDeletedContactGroupListService = async (tenant_id) => {
+export const getDeletedContactGroupListService = async (tenant_id, search) => {
     try {
         const where = { tenant_id, is_deleted: true };
+        if (search && search.trim()) {
+            where.group_name = { [db.Sequelize.Op.like]: `%${search.trim()}%` };
+        }
 
         const rows = await db.ContactGroups.findAll({
             where,

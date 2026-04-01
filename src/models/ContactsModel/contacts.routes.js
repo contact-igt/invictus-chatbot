@@ -44,14 +44,14 @@ Router.get(
 Router.put(
   "/contact/:contact_id",
   authenticate,
-  authorize({ user_type: "tenant", roles: tenantRoles }),
+  authorize({ user_type: "tenant", roles: ["tenant_admin"] }),
   updateContactController,
 );
 
 Router.delete(
   "/contact/:contact_id/soft",
   authenticate,
-  authorize({ user_type: "tenant", roles: tenantRoles }),
+  authorize({ user_type: "tenant", roles: ["tenant_admin"] }),
   deleteContactController,
 );
 

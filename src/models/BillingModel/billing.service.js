@@ -4,6 +4,7 @@ import cron from "node-cron";
 import axios from "axios";
 import libphonenumber from "google-libphonenumber";
 import { getIO } from "../../middlewares/socket/socket.js";
+import { tableNames } from "../../database/tableName.js";
 
 const phoneUtil = libphonenumber.PhoneNumberUtil.getInstance();
 
@@ -14,6 +15,23 @@ const phoneUtil = libphonenumber.PhoneNumberUtil.getInstance();
 export const processBillingFromWebhook = async (tenant_id, statusUpdate) => {
   try {
     const { id: message_id, status, pricing, conversation } = statusUpdate;
+
+    // Skip all billing if the tenant's WhatsApp account has a token error.
+    // A broken token means no new messages are being sent, so billing should stop.
+    try {
+      const [acctRows] = await db.sequelize.query(
+        `SELECT status FROM ${tableNames.WHATSAPP_ACCOUNT} WHERE tenant_id = ? AND is_deleted = false LIMIT 1`,
+        { replacements: [tenant_id] },
+      );
+      if (acctRows[0]?.status === "token_error") {
+        console.log(
+          `[BILLING] Skipping Meta billing for tenant ${tenant_id} — account has token_error status`,
+        );
+        return;
+      }
+    } catch (checkErr) {
+      console.error("[BILLING] Token status check failed:", checkErr.message);
+    }
 
     // We only create entries when Meta provides the pricing object on the "sent" status of a new conversation window.
     if (!pricing) {

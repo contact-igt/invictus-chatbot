@@ -75,6 +75,36 @@ export const sendWhatsAppMessage = async (tenant_id, to, message) => {
         const subcode = metaErr.error_subcode
           ? ` (Subcode: ${metaErr.error_subcode})`
           : "";
+
+        // Meta code 190 = Invalid OAuth 2.0 Access Token — flag account immediately
+        if (metaErr.code === 190 || metaErr.type === "OAuthException") {
+          console.error(
+            `[SEND-MSG] Access token error for tenant ${tenant_id} — marking account as token_error`,
+          );
+          try {
+            await db.sequelize.query(
+              `UPDATE ${tableNames.WHATSAPP_ACCOUNT} SET status = 'token_error', last_error = ? WHERE tenant_id = ? AND phone_number_id = ?`,
+              {
+                replacements: [
+                  `Token error: ${metaMsg}`,
+                  tenant_id,
+                  phone_number_id,
+                ],
+              },
+            );
+          } catch (dbErr) {
+            console.error(
+              "[SEND-MSG] Failed to update account token_error status:",
+              dbErr.message,
+            );
+          }
+          const tokenErr = new Error(
+            `Meta Access Token Error: ${metaMsg}${code}${subcode}`,
+          );
+          tokenErr.isTokenError = true;
+          throw tokenErr;
+        }
+
         throw new Error(`Meta API Error: ${metaMsg}${code}${subcode}`);
       }
       throw axiosErr;
