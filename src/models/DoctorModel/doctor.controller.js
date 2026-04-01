@@ -13,6 +13,9 @@ import {
   normalizeMobile,
   cleanCountryCode,
 } from "../../utils/helpers/normalizeMobile.js";
+import { findTenantUserByEmailOrMobileGloballyService } from "../TenantUserModel/tenantuser.service.js";
+import db from "../../database/index.js";
+import { tableNames } from "../../database/tableName.js";
 
 export const createDoctorController = async (req, res) => {
   const tenant_id = req.user.tenant_id;
@@ -93,7 +96,8 @@ export const createDoctorController = async (req, res) => {
     });
   } catch (err) {
     console.error("❌ CREATE DOCTOR ERROR:", err);
-    return res.status(500).send({ message: err.message });
+    const isDuplicate = err.message?.includes('already exists');
+    return res.status(isDuplicate ? 409 : 500).send({ message: err.message });
   }
 };
 
@@ -182,13 +186,37 @@ export const updateDoctorController = async (req, res) => {
       req.body.mobile = normalizeMobile(req.body.country_code, req.body.mobile);
     }
 
+    // Check for duplicate mobile/email (excluding current doctor)
+    if (req.body.mobile || req.body.email) {
+      const existingUser = await findTenantUserByEmailOrMobileGloballyService(
+        req.body.email || '',
+        req.body.mobile || '',
+      );
+      if (existingUser) {
+        // Get current doctor's tenant_user_id to exclude self
+        const [[currentDoctor]] = await db.sequelize.query(
+          `SELECT tenant_user_id FROM ${tableNames.DOCTORS} WHERE doctor_id = ? AND tenant_id = ?`,
+          { replacements: [doctor_id, tenant_id] },
+        );
+        if (currentDoctor && existingUser.tenant_user_id !== currentDoctor.tenant_user_id) {
+          if (req.body.email && existingUser.email === req.body.email) {
+            return res.status(409).send({ message: 'User with this email already exists in the system.' });
+          }
+          if (req.body.mobile && existingUser.mobile === req.body.mobile) {
+            return res.status(409).send({ message: 'User with this mobile number already exists in the system.' });
+          }
+        }
+      }
+    }
+
     const result = await updateDoctorService(doctor_id, tenant_id, req.body);
     return res.status(200).send(result);
   } catch (err) {
     if (err.message === "Doctor not found") {
       return res.status(404).send({ message: err.message });
     }
-    return res.status(500).send({ message: err.message });
+    const isDuplicate = err.message?.includes('already exists');
+    return res.status(isDuplicate ? 409 : 500).send({ message: err.message });
   }
 };
 
