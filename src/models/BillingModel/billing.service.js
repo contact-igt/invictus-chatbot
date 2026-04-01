@@ -774,23 +774,13 @@ export const getAiTokenUsageService = async (tenant_id, startDate, endDate) => {
     // 1. Aggregate totals
     const totals = await db.AiTokenUsage.findOne({
       attributes: [
-        [
-          db.sequelize.fn("SUM", db.sequelize.col("prompt_tokens")),
-          "totalPromptTokens",
-        ],
-        [
-          db.sequelize.fn("SUM", db.sequelize.col("completion_tokens")),
-          "totalCompletionTokens",
-        ],
-        [
-          db.sequelize.fn("SUM", db.sequelize.col("total_tokens")),
-          "totalTokens",
-        ],
-        [
-          db.sequelize.fn("SUM", db.sequelize.col("estimated_cost")),
-          "totalCostUsd",
-        ],
-        [db.sequelize.fn("COUNT", db.sequelize.col("id")), "totalCalls"],
+        [db.sequelize.fn("SUM", db.sequelize.col("prompt_tokens")),     "totalPromptTokens"],
+        [db.sequelize.fn("SUM", db.sequelize.col("completion_tokens")), "totalCompletionTokens"],
+        [db.sequelize.fn("SUM", db.sequelize.col("total_tokens")),      "totalTokens"],
+        [db.sequelize.fn("SUM", db.sequelize.col("estimated_cost")),    "totalCostUsd"],
+        // Use stored final_cost_inr — no frontend recalculation needed
+        [db.sequelize.fn("SUM", db.sequelize.col("final_cost_inr")),   "totalCostInr"],
+        [db.sequelize.fn("COUNT", db.sequelize.col("id")),              "totalCalls"],
       ],
       where: whereClause,
       raw: true,
@@ -800,20 +790,12 @@ export const getAiTokenUsageService = async (tenant_id, startDate, endDate) => {
     const byModel = await db.AiTokenUsage.findAll({
       attributes: [
         "model",
-        [
-          db.sequelize.fn("SUM", db.sequelize.col("prompt_tokens")),
-          "promptTokens",
-        ],
-        [
-          db.sequelize.fn("SUM", db.sequelize.col("completion_tokens")),
-          "completionTokens",
-        ],
-        [
-          db.sequelize.fn("SUM", db.sequelize.col("total_tokens")),
-          "totalTokens",
-        ],
-        [db.sequelize.fn("SUM", db.sequelize.col("estimated_cost")), "costUsd"],
-        [db.sequelize.fn("COUNT", db.sequelize.col("id")), "calls"],
+        [db.sequelize.fn("SUM", db.sequelize.col("prompt_tokens")),     "promptTokens"],
+        [db.sequelize.fn("SUM", db.sequelize.col("completion_tokens")), "completionTokens"],
+        [db.sequelize.fn("SUM", db.sequelize.col("total_tokens")),      "totalTokens"],
+        [db.sequelize.fn("SUM", db.sequelize.col("estimated_cost")),    "costUsd"],
+        [db.sequelize.fn("SUM", db.sequelize.col("final_cost_inr")),   "costInr"],
+        [db.sequelize.fn("COUNT", db.sequelize.col("id")),              "calls"],
       ],
       where: whereClause,
       group: ["model"],
@@ -824,12 +806,10 @@ export const getAiTokenUsageService = async (tenant_id, startDate, endDate) => {
     const bySource = await db.AiTokenUsage.findAll({
       attributes: [
         "source",
-        [
-          db.sequelize.fn("SUM", db.sequelize.col("total_tokens")),
-          "totalTokens",
-        ],
+        [db.sequelize.fn("SUM", db.sequelize.col("total_tokens")),   "totalTokens"],
         [db.sequelize.fn("SUM", db.sequelize.col("estimated_cost")), "costUsd"],
-        [db.sequelize.fn("COUNT", db.sequelize.col("id")), "calls"],
+        [db.sequelize.fn("SUM", db.sequelize.col("final_cost_inr")), "costInr"],
+        [db.sequelize.fn("COUNT", db.sequelize.col("id")),            "calls"],
       ],
       where: whereClause,
       group: ["source"],
@@ -840,12 +820,10 @@ export const getAiTokenUsageService = async (tenant_id, startDate, endDate) => {
     const daily = await db.AiTokenUsage.findAll({
       attributes: [
         [db.sequelize.fn("DATE", db.sequelize.col("created_at")), "date"],
-        [
-          db.sequelize.fn("SUM", db.sequelize.col("total_tokens")),
-          "totalTokens",
-        ],
+        [db.sequelize.fn("SUM", db.sequelize.col("total_tokens")),   "totalTokens"],
         [db.sequelize.fn("SUM", db.sequelize.col("estimated_cost")), "costUsd"],
-        [db.sequelize.fn("COUNT", db.sequelize.col("id")), "calls"],
+        [db.sequelize.fn("SUM", db.sequelize.col("final_cost_inr")), "costInr"],
+        [db.sequelize.fn("COUNT", db.sequelize.col("id")),            "calls"],
       ],
       where: whereClause,
       group: [db.sequelize.fn("DATE", db.sequelize.col("created_at"))],
@@ -861,48 +839,41 @@ export const getAiTokenUsageService = async (tenant_id, startDate, endDate) => {
       raw: true,
     });
 
-    // Convert USD to INR — use DB rate if available, else fallback
-    let usdToInr = 85;
-    try {
-      const aiPricingRule = await db.AiPricing.findOne({
-        where: { is_active: true },
-        attributes: ["usd_to_inr_rate"],
-        raw: true,
-      });
-      if (aiPricingRule?.usd_to_inr_rate) {
-        usdToInr = parseFloat(aiPricingRule.usd_to_inr_rate);
-      }
-    } catch (_) {}
+    // totalCostInr is now summed directly from final_cost_inr column — no conversion needed
     const totalCostUsd = parseFloat(totals?.totalCostUsd) || 0;
+    const totalCostInr = parseFloat(totals?.totalCostInr) || 0;
 
     return {
       summary: {
-        totalPromptTokens: parseInt(totals?.totalPromptTokens) || 0,
+        totalPromptTokens:     parseInt(totals?.totalPromptTokens) || 0,
         totalCompletionTokens: parseInt(totals?.totalCompletionTokens) || 0,
-        totalTokens: parseInt(totals?.totalTokens) || 0,
+        totalTokens:           parseInt(totals?.totalTokens) || 0,
         totalCostUsd,
-        totalCostInr: totalCostUsd * usdToInr,
-        totalCalls: parseInt(totals?.totalCalls) || 0,
+        totalCostInr,          // Authoritative — summed from stored final_cost_inr
+        totalCalls:            parseInt(totals?.totalCalls) || 0,
       },
       byModel: byModel.map((m) => ({
-        model: m.model,
-        promptTokens: parseInt(m.promptTokens) || 0,
-        completionTokens: parseInt(m.completionTokens) || 0,
-        totalTokens: parseInt(m.totalTokens) || 0,
-        costUsd: parseFloat(m.costUsd) || 0,
-        calls: parseInt(m.calls) || 0,
+        model:             m.model,
+        promptTokens:      parseInt(m.promptTokens) || 0,
+        completionTokens:  parseInt(m.completionTokens) || 0,
+        totalTokens:       parseInt(m.totalTokens) || 0,
+        costUsd:           parseFloat(m.costUsd) || 0,
+        costInr:           parseFloat(m.costInr) || 0,
+        calls:             parseInt(m.calls) || 0,
       })),
       bySource: bySource.map((s) => ({
-        source: s.source,
+        source:      s.source,
         totalTokens: parseInt(s.totalTokens) || 0,
-        costUsd: parseFloat(s.costUsd) || 0,
-        calls: parseInt(s.calls) || 0,
+        costUsd:     parseFloat(s.costUsd) || 0,
+        costInr:     parseFloat(s.costInr) || 0,
+        calls:       parseInt(s.calls) || 0,
       })),
       daily: daily.map((d) => ({
-        date: d.date,
+        date:        d.date,
         totalTokens: parseInt(d.totalTokens) || 0,
-        costUsd: parseFloat(d.costUsd) || 0,
-        calls: parseInt(d.calls) || 0,
+        costUsd:     parseFloat(d.costUsd) || 0,
+        costInr:     parseFloat(d.costInr) || 0,
+        calls:       parseInt(d.calls) || 0,
       })),
       recentCalls,
     };

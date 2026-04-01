@@ -48,10 +48,52 @@ export const AiTokenUsageTable = (sequelize, Sequelize) => {
       },
 
       estimated_cost: {
-        type: Sequelize.DECIMAL(10, 6),
+        type: Sequelize.DECIMAL(15, 8),
         allowNull: false,
         defaultValue: 0,
-        comment: "Estimated cost in USD",
+        comment: "Final cost in USD after markup (kept for backward compat)",
+      },
+
+      input_rate: {
+        type: Sequelize.DECIMAL(10, 4),
+        allowNull: true,
+        comment: "Input rate used at call time (USD per 1M tokens)",
+      },
+
+      output_rate: {
+        type: Sequelize.DECIMAL(10, 4),
+        allowNull: true,
+        comment: "Output rate used at call time (USD per 1M tokens)",
+      },
+
+      markup_percent: {
+        type: Sequelize.DECIMAL(5, 2),
+        allowNull: true,
+        comment: "Platform markup % applied at call time",
+      },
+
+      usd_to_inr_rate: {
+        type: Sequelize.DECIMAL(10, 4),
+        allowNull: true,
+        comment: "USD to INR rate used at call time",
+      },
+
+      base_cost_usd: {
+        type: Sequelize.DECIMAL(15, 8),
+        allowNull: true,
+        comment: "Raw cost before markup (USD)",
+      },
+
+      final_cost_usd: {
+        type: Sequelize.DECIMAL(15, 8),
+        allowNull: true,
+        comment: "Cost after markup (USD), same as estimated_cost",
+      },
+
+      final_cost_inr: {
+        type: Sequelize.DECIMAL(15, 6),
+        allowNull: true,
+        comment: "Final cost in INR — authoritative value for display",
       },
 
       createdAt: {

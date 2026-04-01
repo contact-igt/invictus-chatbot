@@ -24,6 +24,29 @@ const FALLBACK_PRICING = {
 
 // Default USD to INR rate
 const DEFAULT_USD_TO_INR = 85;
+// Default platform markup when pricing is not in DB
+const DEFAULT_MARKUP_PERCENT = 10;
+
+/**
+ * Normalize OpenAI versioned model names to base pricing keys.
+ * OpenAI often returns "gpt-4o-2024-08-06" but pricing is stored under "gpt-4o".
+ * Strategy: try exact match first, then find the known base key whose name the
+ * versioned string starts with (longest match wins to avoid e.g. "gpt-4o" beating "gpt-4o-mini").
+ *
+ * @param {string} rawModel  - e.g. "gpt-4o-2024-08-06"
+ * @param {string[]} knownKeys - known pricing keys to match against
+ * @returns {string} - normalized base model name
+ */
+const normalizeModelName = (rawModel, knownKeys) => {
+  if (!rawModel) return "gpt-4o-mini";
+  if (knownKeys.includes(rawModel)) return rawModel;
+  // Sort longest first so "gpt-4o-mini" matches before "gpt-4o"
+  const sorted = [...knownKeys].sort((a, b) => b.length - a.length);
+  for (const key of sorted) {
+    if (rawModel.startsWith(key)) return key;
+  }
+  return rawModel;
+};
 
 // In-memory cache for AI pricing (refreshed every 5 minutes)
 let pricingCache = null;
@@ -84,45 +107,90 @@ export const trackAiTokenUsage = async (tenant_id, source, response) => {
       completion_tokens = 0,
       total_tokens = 0,
     } = response.usage;
-    const model = response.model || "gpt-4o-mini";
+    const rawModel = response.model || "gpt-4o-mini";
 
     // Try DB pricing first, fallback to hardcoded
     const dbPricing = await getAiPricing();
     let estimatedCostUsd;
     let usdToInr = DEFAULT_USD_TO_INR;
+    let appliedMarkup = DEFAULT_MARKUP_PERCENT;
+    let pricingSnapshot = {};
+
+    // Normalize versioned model name (e.g. "gpt-4o-2024-08-06" → "gpt-4o")
+    const dbKeys = dbPricing ? Object.keys(dbPricing) : [];
+    const fallbackKeys = Object.keys(FALLBACK_PRICING);
+    const allKnownKeys = [...new Set([...dbKeys, ...fallbackKeys])];
+    const model = normalizeModelName(rawModel, allKnownKeys);
 
     if (dbPricing && dbPricing[model]) {
       const p = dbPricing[model];
       const baseCost =
         (prompt_tokens / 1_000_000) * p.input +
         (completion_tokens / 1_000_000) * p.output;
+      appliedMarkup = p.markup;
       estimatedCostUsd = baseCost * (1 + p.markup / 100);
       usdToInr = p.usdToInr || DEFAULT_USD_TO_INR;
+
+      // Store full pricing snapshot for audit trail
+      pricingSnapshot = {
+        input_rate: p.input,
+        output_rate: p.output,
+        markup_percent: p.markup,
+        usd_to_inr_rate: usdToInr,
+        base_cost_usd: baseCost,
+      };
     } else {
-      const pricing =
-        FALLBACK_PRICING[model] || FALLBACK_PRICING["gpt-4o-mini"];
+      // Fallback pricing — apply default markup so cost is consistent with DB path
+      const pricing = FALLBACK_PRICING[model] || FALLBACK_PRICING["gpt-4o-mini"];
       const baseCost =
         (prompt_tokens / 1_000_000) * pricing.input +
         (completion_tokens / 1_000_000) * pricing.output;
-      // Apply default 10% platform markup even for fallback pricing
-      estimatedCostUsd = baseCost * 1.1;
+      estimatedCostUsd = baseCost * (1 + DEFAULT_MARKUP_PERCENT / 100);
+
+      pricingSnapshot = {
+        input_rate: pricing.input,
+        output_rate: pricing.output,
+        markup_percent: DEFAULT_MARKUP_PERCENT,
+        usd_to_inr_rate: usdToInr,
+        base_cost_usd: baseCost,
+      };
     }
 
+    // Round only at storage boundary — never round intermediate values
+    const finalCostUsd   = Number(estimatedCostUsd.toFixed(8));
+    const finalCostInr   = Number((estimatedCostUsd * usdToInr).toFixed(6));
+    const baseCostUsdRnd = Number(pricingSnapshot.base_cost_usd.toFixed(8));
+
+    console.log(
+      `[AI-TOKEN-TRACKER] model=${rawModel} → normalized=${model} | ` +
+      `input=${prompt_tokens} output=${completion_tokens} | ` +
+      `input_rate=${pricingSnapshot.input_rate} output_rate=${pricingSnapshot.output_rate} | ` +
+      `base_usd=${baseCostUsdRnd} markup=${appliedMarkup}% final_usd=${finalCostUsd} | ` +
+      `usd_to_inr=${usdToInr} final_inr=${finalCostInr}`
+    );
+
     // Convert USD to INR for wallet deduction
-    const estimatedCostInr = estimatedCostUsd * usdToInr;
+    const estimatedCostInr = finalCostInr;
 
     // Use transaction for atomic operations
     await db.sequelize.transaction(async (t) => {
-      // 1. Create AI token usage record
+      // 1. Create AI token usage record — store normalized model name and full cost breakdown
       const usageRecord = await db.AiTokenUsage.create(
         {
           tenant_id,
-          model,
+          model,                  // normalized (e.g. "gpt-4o", not "gpt-4o-2024-08-06")
           source,
           prompt_tokens,
           completion_tokens,
           total_tokens,
-          estimated_cost: estimatedCostUsd,
+          estimated_cost: finalCostUsd,          // USD after markup (backward compat)
+          input_rate:     pricingSnapshot.input_rate,
+          output_rate:    pricingSnapshot.output_rate,
+          markup_percent: pricingSnapshot.markup_percent,
+          usd_to_inr_rate: pricingSnapshot.usd_to_inr_rate,
+          base_cost_usd:  baseCostUsdRnd,        // USD before markup
+          final_cost_usd: finalCostUsd,          // USD after markup
+          final_cost_inr: finalCostInr,          // INR — authoritative display value
         },
         { transaction: t },
       );
