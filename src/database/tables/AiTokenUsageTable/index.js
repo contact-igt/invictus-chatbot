@@ -96,6 +96,26 @@ export const AiTokenUsageTable = (sequelize, Sequelize) => {
         comment: "Final cost in INR — authoritative value for display",
       },
 
+      pricing_version: {
+        type: Sequelize.INTEGER,
+        allowNull: true,
+        comment: "AiPricingTable version at time of billing",
+      },
+
+      billed: {
+        type: Sequelize.BOOLEAN,
+        allowNull: false,
+        defaultValue: true,
+        comment:
+          "False if usage was tracked but wallet deduction was skipped (insufficient balance)",
+      },
+
+      billing_cycle_id: {
+        type: Sequelize.INTEGER,
+        allowNull: true,
+        comment: "FK to billing_cycles — set for postpaid entries",
+      },
+
       createdAt: {
         type: Sequelize.DATE,
         allowNull: false,

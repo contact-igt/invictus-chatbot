@@ -12,6 +12,10 @@ import {
   authenticate,
   authorize,
 } from "../../middlewares/auth/authMiddlewares.js";
+import {
+  requireSufficientBalance,
+  requireAiAccess,
+} from "../../middlewares/billing/billingAccessGuard.js";
 
 const Router = express.Router();
 
@@ -33,12 +37,14 @@ Router.post(
   "/chats/send",
   authenticate,
   authorize({ user_type: "tenant", roles: tenantRoles }),
+  requireSufficientBalance,
   sendAdminMessage,
 );
 Router.post(
   "/chats/send-template",
   authenticate,
   authorize({ user_type: "tenant", roles: tenantRoles }),
+  requireSufficientBalance,
   sendTemplateMessageController,
 );
 Router.put(
@@ -51,6 +57,7 @@ Router.post(
   "/chats/suggest",
   authenticate,
   authorize({ user_type: "tenant", roles: tenantRoles }),
+  requireAiAccess,
   suggestReplyController,
 );
 
@@ -58,6 +65,7 @@ Router.post(
   "/chats/send-test",
   authenticate,
   authorize({ user_type: "tenant", roles: tenantRoles }),
+  requireSufficientBalance,
   sendTestMessageController,
 );
 

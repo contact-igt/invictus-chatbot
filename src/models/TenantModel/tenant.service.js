@@ -22,6 +22,7 @@ export const createTenantService = async (
   profile,
   verify_token = null,
   ai_settings = null,
+  transaction = null,
 ) => {
   try {
     // Merge default AI settings with provided ones
@@ -39,28 +40,31 @@ export const createTenantService = async (
       ? { ...defaultAiSettings, ...ai_settings }
       : defaultAiSettings;
 
-    const result = await db.Tenants.create({
-      tenant_id,
-      company_name,
-      owner_name,
-      owner_email,
-      owner_country_code,
-      owner_mobile,
-      type,
-      status,
-      subscription_start_date,
-      subscription_end_date,
-      address,
-      city,
-      country,
-      state,
-      pincode,
-      max_users,
-      subscription_plan,
-      profile,
-      verify_token,
-      ai_settings: mergedAiSettings,
-    });
+    const result = await db.Tenants.create(
+      {
+        tenant_id,
+        company_name,
+        owner_name,
+        owner_email,
+        owner_country_code,
+        owner_mobile,
+        type,
+        status,
+        subscription_start_date,
+        subscription_end_date,
+        address,
+        city,
+        country,
+        state,
+        pincode,
+        max_users,
+        subscription_plan,
+        profile,
+        verify_token,
+        ai_settings: mergedAiSettings,
+      },
+      transaction ? { transaction } : undefined,
+    );
 
     return result;
   } catch (err) {
@@ -271,12 +275,17 @@ export const updateTenantService = async (
   }
 };
 
-export const updateTenantStatusService = async (status, tenant_id) => {
+export const updateTenantStatusService = async (
+  status,
+  tenant_id,
+  transaction = null,
+) => {
   const Query = `UPDATE ${tableNames?.TENANTS} SET status = ? WHERE tenant_id = ? AND is_deleted = ? `;
 
   try {
     const [result] = await db.sequelize.query(Query, {
       replacements: [status, tenant_id, 0],
+      ...(transaction && { transaction }),
     });
 
     return result;
@@ -547,7 +556,7 @@ export const restoreTenantService = async (tenant_id) => {
 };
 
 export const activateTenantService = async (tenant_id) => {
-  const Query = `UPDATE ${tableNames?.TENANTS} SET status = ? WHERE tenant_id = ? AND is_deleted = ?`;
+  const Query = `UPDATE ${tableNames?.TENANTS} SET status = ? WHERE tenant_id = ? AND is_deleted = ? AND status IN ('inactive', 'invited')`;
 
   try {
     const values = ["active", tenant_id, 0];

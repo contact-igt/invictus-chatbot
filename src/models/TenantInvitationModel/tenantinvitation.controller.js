@@ -5,6 +5,7 @@ import {
   getInvitationByTokenHashService,
   sendTenantPasswordSetSuccessEmailService,
   updateInvitationStatusService,
+  atomicUpdateInvitationStatusService,
 } from "../TenantInvitationModel/tenantinvitation.service.js";
 import {
   activateTenantUserService,
@@ -129,6 +130,12 @@ export const acceptTenantInvitationController = async (req, res) => {
   try {
     const { token } = req.body;
 
+    if (!token) {
+      return res
+        .status(400)
+        .send({ valid: false, message: "Token is required" });
+    }
+
     const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
 
     const invitation = await getInvitationByTokenHashService(tokenHash);
@@ -149,7 +156,18 @@ export const acceptTenantInvitationController = async (req, res) => {
       });
     }
 
-    await updateInvitationStatusService(invitation.invitation_id, "accepted");
+    // Atomic transition: pending → accepted (prevents double-accept race)
+    const affected = await atomicUpdateInvitationStatusService(
+      invitation.invitation_id,
+      "pending",
+      "accepted",
+    );
+    if (!affected) {
+      return res
+        .status(409)
+        .send({ valid: false, message: "Invitation already processed" });
+    }
+
     await activateTenantUserService(invitation.tenant_user_id);
     await activateTenantService(invitation.tenant_id);
 
@@ -168,6 +186,12 @@ export const acceptTenantInvitationController = async (req, res) => {
 export const rejectTenantInvitationController = async (req, res) => {
   try {
     const { token } = req.body;
+
+    if (!token) {
+      return res
+        .status(400)
+        .send({ valid: false, message: "Token is required" });
+    }
 
     const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
 
@@ -198,10 +222,16 @@ export const setTenantPasswordController = async (req, res) => {
   try {
     const { token, password } = req.body;
 
-    if (!password) {
+    if (!token) {
+      return res
+        .status(400)
+        .send({ valid: false, message: "Token is required" });
+    }
+
+    if (!password || password.trim().length < 8) {
       return res.status(400).send({
         valid: false,
-        message: "Password required",
+        message: "Password must be at least 8 characters",
       });
     }
 
@@ -214,6 +244,26 @@ export const setTenantPasswordController = async (req, res) => {
         valid: false,
         message: "Invalid invitation",
       });
+    }
+
+    // Check expiry (I9 fix)
+    if (new Date(invitation.expires_at) < new Date()) {
+      return res.status(403).send({
+        valid: false,
+        message: "Invitation has expired. Please request a new invitation.",
+      });
+    }
+
+    // Atomic transition: accepted → completed (prevents double-set-password race)
+    const affected = await atomicUpdateInvitationStatusService(
+      invitation.invitation_id,
+      "accepted",
+      "completed",
+    );
+    if (!affected) {
+      return res
+        .status(409)
+        .send({ valid: false, message: "Password already set" });
     }
 
     const tenantuserpaylod = await findTenantUserByIdService(
@@ -234,8 +284,7 @@ export const setTenantPasswordController = async (req, res) => {
       invitation.tenant_user_id,
     );
 
-    // Update invitation status to completed
-    await updateInvitationStatusService(invitation.invitation_id, "completed");
+    // Status already set to "completed" by atomicUpdateInvitationStatusService above
 
     // Fetch full user details (similar to login)
     const user = await findTenantUserByIdService(invitation.tenant_user_id);
@@ -266,7 +315,10 @@ export const setTenantPasswordController = async (req, res) => {
       uniqueVerifyToken = `whatnexus_${sanitizedCompanyName}_2026`;
 
       // Save verify_token to tenant
-      await updateTenantVerifyTokenService(invitation.tenant_id, uniqueVerifyToken);
+      await updateTenantVerifyTokenService(
+        invitation.tenant_id,
+        uniqueVerifyToken,
+      );
     }
 
     // Send success email - webhook details only for tenant_admin

@@ -33,6 +33,11 @@ import BillingRouter from "./models/BillingModel/billing.routes.js";
 import WhatsappOtpRouter from "./models/OtpVerificationModel/otpverification.routes.js";
 import PaymentRouter from "./models/PaymentModel/payment.routes.js";
 import SuperAdminDashboardRouter from "./models/SuperAdminDashboardModel/superAdminDashboard.routes.js";
+import { runBillingCycleCron } from "./models/BillingModel/billingCycle.service.js";
+import { checkHealthAlerts } from "./utils/billing/billingHealthMonitor.js";
+import { runDailyReconciliation } from "./utils/billing/paymentReconciler.js";
+import { initBillingQueue } from "./utils/billing/billingQueue.js";
+import cron from "node-cron";
 
 dns.setDefaultResultOrder("ipv4first");
 
@@ -108,6 +113,24 @@ startLeadHeatDecayCronService();
 startLiveChatCleanupService();
 startCampaignSchedulerService();
 startAppointmentSchedulerService();
+
+// Billing system crons
+cron.schedule("5 0 * * *", () => {
+  console.log("[CRON] Running billing cycle cron...");
+  runBillingCycleCron();
+}); // Daily at 00:05 UTC
+
+cron.schedule("*/15 * * * *", () => {
+  checkHealthAlerts();
+}); // Every 15 minutes
+
+cron.schedule("0 2 * * *", () => {
+  console.log("[CRON] Running daily reconciliation...");
+  runDailyReconciliation();
+}); // Daily at 02:00 UTC
+
+// Initialize billing queue (optional — requires Redis)
+initBillingQueue();
 
 const PORT = process.env.PORT || 8000;
 const server = http.createServer(app);

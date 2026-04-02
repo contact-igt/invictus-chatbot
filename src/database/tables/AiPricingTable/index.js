@@ -60,8 +60,16 @@ export const AiPricingTable = (sequelize, Sequelize) => {
       usd_to_inr_rate: {
         type: Sequelize.DECIMAL(10, 2),
         allowNull: false,
-        defaultValue: 85.0,
-        comment: "USD to INR conversion rate",
+        defaultValue: 94.0,
+        comment:
+          "USD to INR conversion rate — update billing.config.js to change default",
+      },
+
+      pricing_version: {
+        type: Sequelize.INTEGER,
+        allowNull: false,
+        defaultValue: 1,
+        comment: "Incremented on every rate/markup update",
       },
 
       is_active: {

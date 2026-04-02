@@ -18,10 +18,25 @@ export const BillingLedgerTable = (sequelize, Sequelize) => {
 
       message_usage_id: {
         type: Sequelize.INTEGER,
-        allowNull: false,
+        allowNull: true,
         unique: true,
         comment:
-          "Unique constraint prevents duplicate billing for the same message",
+          "Unique constraint prevents duplicate billing for the same message (NULL for AI entries)",
+      },
+
+      ai_token_usage_id: {
+        type: Sequelize.INTEGER,
+        allowNull: true,
+        unique: true,
+        comment:
+          "FK to ai_token_usage — set for AI billing entries (NULL for message entries)",
+      },
+
+      entry_type: {
+        type: Sequelize.ENUM("message", "ai"),
+        allowNull: false,
+        defaultValue: "message",
+        comment: "Discriminator: message billing vs AI token billing",
       },
 
       template_name: {
@@ -41,27 +56,33 @@ export const BillingLedgerTable = (sequelize, Sequelize) => {
 
       country: {
         type: Sequelize.STRING,
-        allowNull: false,
+        allowNull: true,
+        comment: "NULL for AI entries",
       },
 
       rate: {
         type: Sequelize.DECIMAL(10, 4),
-        allowNull: false,
+        allowNull: true,
+        comment: "Meta rate per message — NULL for AI entries",
       },
 
       meta_cost: {
         type: Sequelize.DECIMAL(10, 4),
-        allowNull: false,
+        allowNull: true,
+        comment: "Meta cost — NULL for AI entries",
       },
 
       platform_fee: {
         type: Sequelize.DECIMAL(10, 4),
-        allowNull: false,
+        allowNull: true,
+        defaultValue: 0,
+        comment: "Platform fee — NULL for AI entries",
       },
 
       total_cost: {
         type: Sequelize.DECIMAL(10, 4),
-        allowNull: false,
+        allowNull: true,
+        comment: "Total cost in USD — NULL for AI entries",
       },
 
       markup_percent: {
@@ -73,7 +94,7 @@ export const BillingLedgerTable = (sequelize, Sequelize) => {
       usd_to_inr_rate: {
         type: Sequelize.DECIMAL(10, 2),
         allowNull: false,
-        defaultValue: 85.0,
+        defaultValue: 94.0,
         comment: "USD to INR conversion rate used at billing time",
       },
 
@@ -83,6 +104,24 @@ export const BillingLedgerTable = (sequelize, Sequelize) => {
         defaultValue: 0,
         comment:
           "Total cost in INR (total_cost × usd_to_inr_rate) — actual wallet deduction",
+      },
+
+      conversion_rate_used: {
+        type: Sequelize.DECIMAL(12, 6),
+        allowNull: true,
+        comment: "Exact USD→INR rate used at billing time for audit",
+      },
+
+      pricing_version: {
+        type: Sequelize.INTEGER,
+        allowNull: true,
+        comment: "PricingTable version at time of billing",
+      },
+
+      billing_cycle_id: {
+        type: Sequelize.INTEGER,
+        allowNull: true,
+        comment: "FK to billing_cycles — set for postpaid entries",
       },
 
       createdAt: {
@@ -120,6 +159,15 @@ export const BillingLedgerTable = (sequelize, Sequelize) => {
         {
           name: "idx_billing_ledger_category",
           fields: ["category"],
+        },
+        {
+          name: "idx_billing_ledger_ai_token_usage",
+          unique: true,
+          fields: ["ai_token_usage_id"],
+        },
+        {
+          name: "idx_billing_ledger_entry_type",
+          fields: ["entry_type"],
         },
       ],
     },

@@ -227,6 +227,13 @@ export const sendTemplateMessageController = async (req, res) => {
       return res.status(404).send({ message: "Template not found" });
     }
 
+    // Check template approval status
+    if (template.status !== "APPROVED" && template.status !== "approved") {
+      return res.status(400).send({
+        message: `Template is not approved (current status: ${template.status}). Only approved templates can be sent.`,
+      });
+    }
+
     // 2. Render content for DB
     const messageContent = await renderTemplateContent(template_id, components);
 

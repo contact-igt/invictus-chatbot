@@ -37,4 +37,12 @@ export const tableNames = {
   AI_PRICING: "ai_pricing",
   PAYMENT_HISTORY: "payment_history",
   BOOKING_SESSIONS: "booking_sessions",
+  BILLING_CYCLES: "billing_cycles",
+  MONTHLY_INVOICES: "monthly_invoices",
+  ADMIN_AUDIT_LOG: "admin_audit_log",
+  CURRENCY_RATES: "currency_rates",
+  BILLING_SYSTEM_HEALTH: "billing_system_health",
+  DAILY_USAGE_SUMMARY: "daily_usage_summary",
+  MONTHLY_USAGE_SUMMARY: "monthly_usage_summary",
+  CRON_EXECUTION_LOG: "cron_execution_log",
 };

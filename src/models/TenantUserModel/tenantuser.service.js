@@ -13,7 +13,7 @@ export const createTenantUserService = async (
   role,
   password_hash,
   status = "inactive",
-  transaction = null
+  transaction = null,
 ) => {
   const query = `
     INSERT INTO ${tableNames.TENANT_USERS}
@@ -71,7 +71,10 @@ export const findTenantUserByEmailGloballyService = async (email) => {
   }
 };
 
-export const findTenantUserByEmailOrMobileGloballyService = async (email, mobile) => {
+export const findTenantUserByEmailOrMobileGloballyService = async (
+  email,
+  mobile,
+) => {
   try {
     const query = `
       SELECT * FROM ${tableNames.TENANT_USERS} 
@@ -121,7 +124,9 @@ export const findTenantUserByIdService = async (tenant_user_id) => {
   }
 };
 
-export const findTenantUserByIdIgnoringDeleteService = async (tenant_user_id) => {
+export const findTenantUserByIdIgnoringDeleteService = async (
+  tenant_user_id,
+) => {
   const Query = `SELECT * FROM ${tableNames?.TENANT_USERS} WHERE tenant_user_id = ? LIMIT 1`;
 
   try {
@@ -165,7 +170,6 @@ export const updateTenantUserPasswordService = async (
 };
 
 // ----------------------
-
 
 export const getAllTenantUsersService = async (tenant_id) => {
   const dataQuery = `
@@ -236,8 +240,10 @@ export const updateTenantUserByIdService = async (tenant_user_id, data) => {
   }
 };
 
-
-export const permanentDeleteTenantUserService = async (tenant_user_id, transaction = null) => {
+export const permanentDeleteTenantUserService = async (
+  tenant_user_id,
+  transaction = null,
+) => {
   try {
     const query = `
     DELETE FROM ${tableNames.TENANT_USERS}
@@ -271,7 +277,10 @@ export const getDeletedTenantUserListService = async (tenant_id) => {
   }
 };
 
-export const restoreTenantUserService = async (tenant_user_id, transaction = null) => {
+export const restoreTenantUserService = async (
+  tenant_user_id,
+  transaction = null,
+) => {
   const query = `
     UPDATE ${tableNames.TENANT_USERS}
     SET is_deleted = ?, deleted_at = NULL, status = 'active'
@@ -313,11 +322,16 @@ export const softDeleteUsersByTenantIdService = async (tenant_id) => {
   }
 };
 
-export const updateUsersStatusByTenantIdService = async (tenant_id, status) => {
+export const updateUsersStatusByTenantIdService = async (
+  tenant_id,
+  status,
+  transaction = null,
+) => {
   const query = `UPDATE ${tableNames.TENANT_USERS} SET status = ? WHERE tenant_id = ? AND is_deleted = 0`;
   try {
     const [result] = await db.sequelize.query(query, {
       replacements: [status, tenant_id],
+      ...(transaction && { transaction }),
     });
     return result;
   } catch (err) {

@@ -42,6 +42,7 @@ import {
   verifyOTPService,
   checkOTPVerificationService,
 } from "../OtpVerificationModel/otpverification.service.js";
+import { DEFAULT_USD_TO_INR } from "../../config/billing.config.js";
 
 export const registerManagementController = async (req, res) => {
   try {
@@ -657,7 +658,9 @@ export const createAiPricingRuleController = async (req, res) => {
       });
     }
 
-    const parsedExchangeRate = parseFloat(usd_to_inr_rate || 85);
+    const parsedExchangeRate = parseFloat(
+      usd_to_inr_rate || DEFAULT_USD_TO_INR,
+    );
     if (isNaN(parsedExchangeRate) || parsedExchangeRate <= 0) {
       return res.status(400).json({
         success: false,

@@ -88,6 +88,32 @@ export const updateInvitationStatusService = async (invitation_id, status) => {
   }
 };
 
+/**
+ * Atomically transition invitation status — prevents race conditions.
+ * Returns affected row count. If 0, another request already transitioned it.
+ */
+export const atomicUpdateInvitationStatusService = async (
+  invitation_id,
+  fromStatus,
+  toStatus,
+) => {
+  try {
+    const query = `
+    UPDATE ${tableNames.TENANT_INVITATIONS}
+    SET status = ?, updated_at = NOW()
+    WHERE invitation_id = ? AND status = ?
+  `;
+
+    const [, affectedRows] = await db.sequelize.query(query, {
+      replacements: [toStatus, invitation_id, fromStatus],
+    });
+
+    return affectedRows;
+  } catch (err) {
+    throw err;
+  }
+};
+
 export const revokePreviousInvitationsService = async (tenant_user_id) => {
   const query = `
     UPDATE ${tableNames.TENANT_INVITATIONS}
@@ -118,7 +144,6 @@ export const getLastTenantInvitationService = async (tenant_user_id) => {
   }
 };
 
-
 export const sendTenantInvitationService = async (
   tenant_id,
   tenant_user_id,
@@ -143,7 +168,10 @@ export const sendTenantInvitationService = async (
       email,
     });
 
-    const tokenHash = crypto.createHash("sha256").update(inviteToken).digest("hex");
+    const tokenHash = crypto
+      .createHash("sha256")
+      .update(inviteToken)
+      .digest("hex");
 
     await createTenantInvitationService(
       invitation_id,
@@ -187,7 +215,7 @@ export const sendTenantPasswordSetSuccessEmailService = async (
     const loginUrl = `${process.env.FRONTEND_URL}/login`;
     const webhookUrl = `${process.env.BACKEND_URL}/api/whatsapp/webhook/${tenant_id}`;
     const metaVerifyToken = verify_token || process.env.META_VERIFY_TOKEN;
-    console.log("webhookUrl", webhookUrl)
+    console.log("webhookUrl", webhookUrl);
     const template = getTemplate("passwordSetSuccess");
 
     const emailHtml = template({

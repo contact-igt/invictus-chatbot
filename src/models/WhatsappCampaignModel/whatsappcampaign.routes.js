@@ -1,18 +1,19 @@
 import express from "express";
 import {
-    authenticate,
-    authorize,
+  authenticate,
+  authorize,
 } from "../../middlewares/auth/authMiddlewares.js";
+import { requireCampaignAccess } from "../../middlewares/billing/billingAccessGuard.js";
 import {
-    createCampaignController,
-    getCampaignListController,
-    getCampaignByIdController,
-    triggerCampaignExecutionController,
-    softDeleteCampaignController,
-    permanentDeleteCampaignController,
-    getDeletedCampaignListController,
-    restoreCampaignController,
-    uploadCampaignMediaController,
+  createCampaignController,
+  getCampaignListController,
+  getCampaignByIdController,
+  triggerCampaignExecutionController,
+  softDeleteCampaignController,
+  permanentDeleteCampaignController,
+  getDeletedCampaignListController,
+  restoreCampaignController,
+  uploadCampaignMediaController,
 } from "./whatsappcampaign.controller.js";
 
 const router = express.Router();
@@ -20,66 +21,67 @@ const router = express.Router();
 const tenantRoles = ["tenant_admin", "doctor", "staff", "agent"];
 
 router.post(
-    "/whatsapp-campaign",
-    authenticate,
-    authorize({ user_type: "tenant", roles: tenantRoles }),
-    createCampaignController,
+  "/whatsapp-campaign",
+  authenticate,
+  authorize({ user_type: "tenant", roles: tenantRoles }),
+  createCampaignController,
 );
 
 router.post(
-    "/whatsapp-campaign/upload-media",
-    authenticate,
-    authorize({ user_type: "tenant", roles: tenantRoles }),
-    uploadCampaignMediaController,
+  "/whatsapp-campaign/upload-media",
+  authenticate,
+  authorize({ user_type: "tenant", roles: tenantRoles }),
+  uploadCampaignMediaController,
 );
 
 router.get(
-    "/whatsapp-campaign/list",
-    authenticate,
-    authorize({ user_type: "tenant", roles: tenantRoles }),
-    getCampaignListController,
+  "/whatsapp-campaign/list",
+  authenticate,
+  authorize({ user_type: "tenant", roles: tenantRoles }),
+  getCampaignListController,
 );
 
 router.get(
-    "/whatsapp-campaign/deleted/list",
-    authenticate,
-    authorize({ user_type: "tenant", roles: tenantRoles }),
-    getDeletedCampaignListController,
+  "/whatsapp-campaign/deleted/list",
+  authenticate,
+  authorize({ user_type: "tenant", roles: tenantRoles }),
+  getDeletedCampaignListController,
 );
 
 router.get(
-    "/whatsapp-campaign/:campaign_id",
-    authenticate,
-    authorize({ user_type: "tenant", roles: tenantRoles }),
-    getCampaignByIdController,
+  "/whatsapp-campaign/:campaign_id",
+  authenticate,
+  authorize({ user_type: "tenant", roles: tenantRoles }),
+  getCampaignByIdController,
 );
 
 router.post(
-    "/whatsapp-campaign/:campaign_id/execute",
-    authenticate,
-    authorize({ user_type: "tenant", roles: tenantRoles }),
-    triggerCampaignExecutionController,
+  "/whatsapp-campaign/:campaign_id/execute",
+  authenticate,
+  authorize({ user_type: "tenant", roles: tenantRoles }),
+  requireCampaignAccess,
+  triggerCampaignExecutionController,
 );
 
 router.post(
-    "/whatsapp-campaign/:campaign_id/restore",
-    authenticate,
-    authorize({ user_type: "tenant", roles: ["tenant_admin"] }),
-    restoreCampaignController,
+  "/whatsapp-campaign/:campaign_id/restore",
+  authenticate,
+  authorize({ user_type: "tenant", roles: ["tenant_admin"] }),
+  restoreCampaignController,
 );
 
 router.delete(
-    "/whatsapp-campaign/:campaign_id/soft",
-    authenticate,
-    authorize({ user_type: "tenant", roles: tenantRoles }),
-    softDeleteCampaignController
+  "/whatsapp-campaign/:campaign_id/soft",
+  authenticate,
+  authorize({ user_type: "tenant", roles: tenantRoles }),
+  softDeleteCampaignController,
 );
 
 router.delete(
-    "/whatsapp-campaign/:campaign_id/permanent",
-    authenticate,
-    authorize({ user_type: "tenant", roles: ["tenant_admin"] }),
-    permanentDeleteCampaignController
+  "/whatsapp-campaign/:campaign_id/permanent",
+  authenticate,
+  authorize({ user_type: "tenant", roles: ["tenant_admin"] }),
+  permanentDeleteCampaignController,
 );
 
 export default router;

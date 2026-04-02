@@ -15,6 +15,7 @@ import {
   authenticate,
   authorize,
 } from "../../middlewares/auth/authMiddlewares.js";
+import { requireAiAccess } from "../../middlewares/billing/billingAccessGuard.js";
 
 const router = express.Router();
 
@@ -32,6 +33,7 @@ router.post(
   "/knowledge",
   authenticate,
   authorize({ user_type: "tenant", roles: managerRoles }),
+  requireAiAccess,
   uploadKnowledge,
 );
 router.get(

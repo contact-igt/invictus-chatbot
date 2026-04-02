@@ -143,6 +143,61 @@ export const TenantsTable = (sequelize, Sequelize) => {
         allowNull: true,
       },
 
+      billing_mode: {
+        type: Sequelize.ENUM("prepaid", "postpaid"),
+        allowNull: false,
+        defaultValue: "prepaid",
+      },
+
+      billing_cycle_start: {
+        type: Sequelize.DATE,
+        allowNull: true,
+      },
+
+      billing_cycle_end: {
+        type: Sequelize.DATE,
+        allowNull: true,
+      },
+
+      postpaid_credit_limit: {
+        type: Sequelize.DECIMAL(15, 4),
+        allowNull: false,
+        defaultValue: 5000.0,
+        comment: "Max usage per billing cycle for postpaid tenants (INR)",
+      },
+
+      max_daily_messages: {
+        type: Sequelize.INTEGER,
+        allowNull: false,
+        defaultValue: 10000,
+      },
+
+      max_monthly_messages: {
+        type: Sequelize.INTEGER,
+        allowNull: false,
+        defaultValue: 200000,
+      },
+
+      max_daily_ai_calls: {
+        type: Sequelize.INTEGER,
+        allowNull: false,
+        defaultValue: 5000,
+      },
+
+      max_monthly_ai_calls: {
+        type: Sequelize.INTEGER,
+        allowNull: false,
+        defaultValue: 100000,
+      },
+
+      timezone: {
+        type: Sequelize.STRING,
+        allowNull: false,
+        defaultValue: "Asia/Kolkata",
+        comment:
+          "Tenant timezone for display purposes only — all storage is UTC",
+      },
+
       ai_settings: {
         type: Sequelize.JSON,
         allowNull: true,

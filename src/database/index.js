@@ -39,6 +39,14 @@ import { AiTokenUsageTable } from "./tables/AiTokenUsageTable/index.js";
 import { AiPricingTable } from "./tables/AiPricingTable/index.js";
 import { PaymentHistoryTable } from "./tables/PaymentHistoryTable/index.js";
 import { BookingSessionTable } from "./tables/BookingSessionTable/index.js";
+import { BillingCycleTable } from "./tables/BillingCycleTable/index.js";
+import { MonthlyInvoiceTable } from "./tables/MonthlyInvoiceTable/index.js";
+import { AdminAuditLogTable } from "./tables/AdminAuditLogTable/index.js";
+import { CurrencyRateTable } from "./tables/CurrencyRateTable/index.js";
+import { BillingSystemHealthTable } from "./tables/BillingSystemHealthTable/index.js";
+import { DailyUsageSummaryTable } from "./tables/DailyUsageSummaryTable/index.js";
+import { MonthlyUsageSummaryTable } from "./tables/MonthlyUsageSummaryTable/index.js";
+import { CronExecutionLogTable } from "./tables/CronExecutionLogTable/index.js";
 import { defineAssociations } from "./associations.js";
 
 const dbconfig =
@@ -126,6 +134,14 @@ db.WalletTransactions = WalletTransactionTable(sequelize, Sequelize);
 db.AiTokenUsage = AiTokenUsageTable(sequelize, Sequelize);
 db.AiPricing = AiPricingTable(sequelize, Sequelize);
 db.PaymentHistory = PaymentHistoryTable(sequelize, Sequelize);
+db.BillingCycles = BillingCycleTable(sequelize, Sequelize);
+db.MonthlyInvoices = MonthlyInvoiceTable(sequelize, Sequelize);
+db.AdminAuditLog = AdminAuditLogTable(sequelize, Sequelize);
+db.CurrencyRates = CurrencyRateTable(sequelize, Sequelize);
+db.BillingSystemHealth = BillingSystemHealthTable(sequelize, Sequelize);
+db.DailyUsageSummary = DailyUsageSummaryTable(sequelize, Sequelize);
+db.MonthlyUsageSummary = MonthlyUsageSummaryTable(sequelize, Sequelize);
+db.CronExecutionLog = CronExecutionLogTable(sequelize, Sequelize);
 // db.BookingSession = BookingSessionTable(sequelize, Sequelize);
 
 // ========================================

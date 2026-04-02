@@ -581,11 +581,11 @@ export const receiveMessage = async (req, res) => {
         // AI will respond — send typing indicator now
         sendTypingIndicator(tenant_id, phone_number_id, phone, messageId);
 
-        // Check wallet status before AI processing
-        const walletCheck = await canUseAI(tenant_id);
+        // Check wallet status before AI processing (pass small estimated cost for prepaid check)
+        const walletCheck = await canUseAI(tenant_id, 0.5);
         if (!walletCheck.allowed) {
           console.log(
-            `[WEBHOOK] Wallet suspended for tenant ${tenant_id}. Status: ${walletCheck.status}, Balance: ₹${walletCheck.balance?.toFixed(2)}`,
+            `[WEBHOOK] Wallet blocked for tenant ${tenant_id}. Mode: ${walletCheck.billing_mode}, Balance: ₹${walletCheck.balance?.toFixed(2)}`,
           );
           // Send suspension fallback message to customer
           const suspensionMsg = await getSuspensionMessage(tenant_id);
@@ -607,7 +607,7 @@ export const receiveMessage = async (req, res) => {
           ioInst.to(`tenant-${tenant_id}`).emit("wallet-suspended", {
             tenant_id,
             balance: walletCheck.balance,
-            status: walletCheck.status,
+            billing_mode: walletCheck.billing_mode,
             message: walletCheck.reason,
           });
           return;
@@ -672,7 +672,10 @@ export const receiveMessage = async (req, res) => {
             return; // Skip message save, socket emit, tag handler
           }
           // Non-token send error — log and fall through to still save the message
-          console.error("[WHATSAPP-SEND] Failed to send reply:", sendErr.message);
+          console.error(
+            "[WHATSAPP-SEND] Failed to send reply:",
+            sendErr.message,
+          );
           import("fs").then((fs) => {
             fs.appendFileSync(
               "whatsapp_send_error.log",
@@ -784,6 +787,16 @@ export const receiveMessage = async (req, res) => {
           if (reLock) {
             setImmediate(async () => {
               try {
+                // Check wallet before processing queued message
+                const queuedWalletCheck = await canUseAI(tenant_id, 0.5);
+                if (!queuedWalletCheck.allowed) {
+                  console.log(
+                    `[WEBHOOK] Wallet blocked for queued msg, tenant ${tenant_id}`,
+                  );
+                  await unlockChat(tenant_id, phone_number_id, phone);
+                  return;
+                }
+
                 sendTypingIndicator(
                   tenant_id,
                   phone_number_id,
@@ -826,14 +839,20 @@ export const receiveMessage = async (req, res) => {
                         phone,
                         status: false,
                       });
-                      io.to(`tenant-${tenant_id}`).emit("whatsapp-token-error", {
-                        tenant_id,
-                        message: sendErr.message,
-                        timestamp: new Date().toISOString(),
-                      });
+                      io.to(`tenant-${tenant_id}`).emit(
+                        "whatsapp-token-error",
+                        {
+                          tenant_id,
+                          message: sendErr.message,
+                          timestamp: new Date().toISOString(),
+                        },
+                      );
                       return;
                     }
-                    console.error("[WEBHOOK] Queued send failed:", sendErr.message);
+                    console.error(
+                      "[WEBHOOK] Queued send failed:",
+                      sendErr.message,
+                    );
                   }
 
                   const savedBotMsg = await createUserMessageService(

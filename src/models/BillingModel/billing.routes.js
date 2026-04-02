@@ -15,21 +15,43 @@ import {
   getAvailableAiModelsController,
   getOwnWalletStatusController,
 } from "./billing.controller.js";
-import { authenticate } from "../../middlewares/auth/authMiddlewares.js";
+import {
+  getInvoicesController,
+  getInvoiceDetailController,
+  payInvoiceController,
+  getBillingModeController,
+  adminForceUnlockController,
+  adminManualCreditController,
+  adminInvoiceCloseController,
+  adminChangeBillingModeController,
+  adminGetAuditLogController,
+  adminGetHealthSummaryController,
+  adminGetTenantsController,
+  adminResolveHealthEventController,
+  adminGetTenantOverviewController,
+  adminGetUnresolvedEventsController,
+} from "./invoice.controller.js";
+import {
+  authenticate,
+  authorize,
+} from "../../middlewares/auth/authMiddlewares.js";
 
 const router = express.Router();
 
-router.get("/billing/kpi", authenticate, getBillingKpiController);
-router.get("/billing/ledger", authenticate, getBillingLedgerController);
+// Tenant-only billing endpoints (require tenant user_type)
+const tenantAuth = [authenticate, authorize({ user_type: "tenant" })];
+
+router.get("/billing/kpi", ...tenantAuth, getBillingKpiController);
+router.get("/billing/ledger", ...tenantAuth, getBillingLedgerController);
 router.get(
   "/billing/spend-chart",
-  authenticate,
+  ...tenantAuth,
   getBillingSpendChartController,
 );
-router.get("/billing/wallet", authenticate, getWalletBalanceController);
+router.get("/billing/wallet", ...tenantAuth, getWalletBalanceController);
 router.get(
   "/billing/wallet/transactions",
-  authenticate,
+  ...tenantAuth,
   getWalletTransactionsController,
 );
 
@@ -41,17 +63,17 @@ router.get("/billing/pricing", authenticate, getPricingTableController);
 // STATS
 router.get(
   "/billing/template-stats",
-  authenticate,
+  ...tenantAuth,
   getBillingTemplateStatsController,
 );
 router.get(
   "/billing/campaign-stats",
-  authenticate,
+  ...tenantAuth,
   getBillingCampaignStatsController,
 );
 
 // AI TOKEN USAGE
-router.get("/billing/ai-usage", authenticate, getAiTokenUsageController);
+router.get("/billing/ai-usage", ...tenantAuth, getAiTokenUsageController);
 
 // AVAILABLE AI MODELS (for tenant settings)
 router.get("/billing/ai-models", authenticate, getAvailableAiModelsController);
@@ -59,20 +81,80 @@ router.get("/billing/ai-models", authenticate, getAvailableAiModelsController);
 // AUTO-RECHARGE SETTINGS
 router.get(
   "/billing/auto-recharge",
-  authenticate,
+  ...tenantAuth,
   getAutoRechargeSettingsController,
 );
 router.put(
   "/billing/auto-recharge",
-  authenticate,
+  ...tenantAuth,
   updateAutoRechargeSettingsController,
 );
 
 // WALLET STATUS (for tenant to check their own suspension status)
 router.get(
   "/billing/wallet/status",
-  authenticate,
+  ...tenantAuth,
   getOwnWalletStatusController,
+);
+
+// BILLING MODE
+router.get("/billing/mode", authenticate, getBillingModeController);
+
+// INVOICES
+router.get("/billing/invoices", authenticate, getInvoicesController);
+router.get("/billing/invoices/:id", authenticate, getInvoiceDetailController);
+router.post("/billing/invoices/:id/pay", authenticate, payInvoiceController);
+
+// ADMIN BILLING OVERRIDES (require management + super_admin role)
+const adminAuth = [
+  authenticate,
+  authorize({ user_type: "management", roles: ["super_admin"] }),
+];
+router.post(
+  "/billing/admin/force-unlock",
+  ...adminAuth,
+  adminForceUnlockController,
+);
+router.post(
+  "/billing/admin/manual-credit",
+  ...adminAuth,
+  adminManualCreditController,
+);
+router.post(
+  "/billing/admin/invoice-close",
+  ...adminAuth,
+  adminInvoiceCloseController,
+);
+router.post(
+  "/billing/admin/change-mode",
+  ...adminAuth,
+  adminChangeBillingModeController,
+);
+router.get(
+  "/billing/admin/audit-log",
+  ...adminAuth,
+  adminGetAuditLogController,
+);
+router.get(
+  "/billing/admin/health",
+  ...adminAuth,
+  adminGetHealthSummaryController,
+);
+router.get("/billing/admin/tenants", ...adminAuth, adminGetTenantsController);
+router.get(
+  "/billing/admin/tenant-overview",
+  ...adminAuth,
+  adminGetTenantOverviewController,
+);
+router.post(
+  "/billing/admin/health/:id/resolve",
+  ...adminAuth,
+  adminResolveHealthEventController,
+);
+router.get(
+  "/billing/admin/health/unresolved",
+  ...adminAuth,
+  adminGetUnresolvedEventsController,
 );
 
 export default router;
