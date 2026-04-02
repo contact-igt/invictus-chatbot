@@ -4,8 +4,8 @@ import { getIO } from "../../middlewares/socket/socket.js";
 import crypto from "crypto";
 
 const razorpay = new Razorpay({
-  key_id: process.env.RAZORPAY_KEY_ID || "rzp_test_placeholder",
-  key_secret: process.env.RAZORPAY_KEY_SECRET || "placeholder_secret",
+  key_id: process.env.RAZORPAY_KEY_ID,
+  key_secret: process.env.RAZORPAY_KEY_SECRET,
 });
 
 console.log(
@@ -63,11 +63,14 @@ export const verifyRazorpayPaymentService = async (tenant_id, paymentData) => {
     paymentData;
 
   const body = razorpay_order_id + "|" + razorpay_payment_id;
+  const razorpaySecret = process.env.RAZORPAY_KEY_SECRET;
+  if (!razorpaySecret) {
+    throw new Error(
+      "Payment system configuration error. Please contact support.",
+    );
+  }
   const expectedSignature = crypto
-    .createHmac(
-      "sha256",
-      process.env.RAZORPAY_KEY_SECRET || "placeholder_secret",
-    )
+    .createHmac("sha256", razorpaySecret)
     .update(body.toString())
     .digest("hex");
 
@@ -221,12 +224,15 @@ export const payInvoiceService = async (tenant_id, invoice_id, paymentData) => {
     paymentData;
 
   // 1. Verify Razorpay signature
+  const razorpaySecret = process.env.RAZORPAY_KEY_SECRET;
+  if (!razorpaySecret) {
+    throw new Error(
+      "Payment system configuration error. Please contact support.",
+    );
+  }
   const body = razorpay_order_id + "|" + razorpay_payment_id;
   const expectedSignature = crypto
-    .createHmac(
-      "sha256",
-      process.env.RAZORPAY_KEY_SECRET || "placeholder_secret",
-    )
+    .createHmac("sha256", razorpaySecret)
     .update(body.toString())
     .digest("hex");
 
@@ -263,7 +269,22 @@ export const payInvoiceService = async (tenant_id, invoice_id, paymentData) => {
     return { success: true, message: "Payment already verified" };
   }
 
-  // 4. Mark invoice as paid (atomic)
+  // 4. Verify Razorpay order amount matches invoice amount
+  try {
+    const order = await razorpay.orders.fetch(razorpay_order_id);
+    const invoiceAmountPaise = Math.round(parseFloat(invoice.amount) * 100);
+    if (order.amount !== invoiceAmountPaise) {
+      throw new Error(
+        `Payment amount mismatch: order ₹${(order.amount / 100).toFixed(2)} vs invoice ₹${parseFloat(invoice.amount).toFixed(2)}`,
+      );
+    }
+  } catch (fetchErr) {
+    if (fetchErr.message.includes("Payment amount mismatch")) throw fetchErr;
+    console.error("[PAYMENT] Razorpay order fetch failed:", fetchErr.message);
+    // If Razorpay API is unreachable, proceed with signature verification only
+  }
+
+  // 5. Mark invoice as paid (atomic)
   await db.sequelize.transaction(async (t) => {
     await invoice.update(
       {
@@ -285,8 +306,8 @@ export const payInvoiceService = async (tenant_id, invoice_id, paymentData) => {
         status: "success",
         payment_method: "Online",
         description: `Invoice Payment: ${invoice.invoice_number}`,
-        balance_before: 0,
-        balance_after: 0,
+        balance_before: null,
+        balance_after: null,
         invoice_number: invoice.invoice_number,
         metadata: {
           invoice_id: invoice.id,
@@ -298,7 +319,7 @@ export const payInvoiceService = async (tenant_id, invoice_id, paymentData) => {
     );
   });
 
-  // 5. Emit socket event
+  // 6. Emit socket events
   try {
     const { getIO } = await import("../../middlewares/socket/socket.js");
     const io = getIO();
@@ -306,6 +327,16 @@ export const payInvoiceService = async (tenant_id, invoice_id, paymentData) => {
       invoice_number: invoice.invoice_number,
       amount: parseFloat(invoice.amount),
     });
+
+    // If the paid invoice was overdue, check if tenant is now unblocked
+    if (invoice.status === "overdue" || true) {
+      const remainingOverdue = await db.MonthlyInvoices.count({
+        where: { tenant_id, status: "overdue" },
+      });
+      if (remainingOverdue === 0) {
+        io.to(`tenant-${tenant_id}`).emit("access-restored", { tenant_id });
+      }
+    }
   } catch (_) {}
 
   console.log(

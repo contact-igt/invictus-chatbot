@@ -122,6 +122,10 @@ export const BillingLedgerTable = (sequelize, Sequelize) => {
         type: Sequelize.INTEGER,
         allowNull: true,
         comment: "FK to billing_cycles — set for postpaid entries",
+        references: {
+          model: "billing_cycles",
+          key: "id",
+        },
       },
 
       createdAt: {
@@ -168,6 +172,14 @@ export const BillingLedgerTable = (sequelize, Sequelize) => {
         {
           name: "idx_billing_ledger_entry_type",
           fields: ["entry_type"],
+        },
+        {
+          name: "idx_billing_ledger_billing_cycle",
+          fields: ["billing_cycle_id"],
+        },
+        {
+          name: "idx_billing_ledger_tenant_created",
+          fields: ["tenant_id", "created_at"],
         },
       ],
     },

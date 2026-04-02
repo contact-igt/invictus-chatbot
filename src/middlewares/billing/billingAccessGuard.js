@@ -47,9 +47,18 @@ export const checkBillingAccess = async (tenant_id, estimated_cost) => {
   }
 
   // Postpaid
-  // Check overdue invoices
+  // Check overdue invoices AND unpaid invoices past due date (real-time check)
   const overdueInvoice = await db.MonthlyInvoices.findOne({
-    where: { tenant_id, status: "overdue" },
+    where: {
+      tenant_id,
+      [db.Sequelize.Op.or]: [
+        { status: "overdue" },
+        {
+          status: "unpaid",
+          due_date: { [db.Sequelize.Op.lt]: new Date() },
+        },
+      ],
+    },
     attributes: ["invoice_number"],
     raw: true,
   });
@@ -85,20 +94,49 @@ export const checkBillingAccess = async (tenant_id, estimated_cost) => {
     };
   }
 
+  // Emit 80% credit warning (but still allow)
+  if (currentUsage >= creditLimit * 0.8) {
+    try {
+      const { getIO } = await import("../../middlewares/socket/socket.js");
+      const io = getIO();
+      io.to(`tenant-${tenant_id}`).emit("credit-limit-warning", {
+        usage: currentUsage,
+        limit: creditLimit,
+        percent: Math.round((currentUsage / creditLimit) * 100),
+      });
+    } catch (_) {}
+  }
+
   return { allowed: true, billing_mode };
 };
 
 /**
  * Middleware: Require sufficient balance for Meta message sending.
- * Estimates cost from req.body.category and req.body.country.
+ * Estimates cost from template category (if template_id provided) or req.body.category.
  */
 export const requireSufficientBalance = async (req, res, next) => {
   try {
     const tenant_id = req.user?.tenant_id;
     if (!tenant_id) return next();
 
-    const category = (req.body.category || "utility").toLowerCase();
+    let category = (req.body.category || "utility").toLowerCase();
     const country = req.body.country || "Global";
+
+    // If template_id is provided, look up the actual template category from DB
+    if (req.body.template_id) {
+      try {
+        const template = await db.WhatsappTemplates.findOne({
+          where: { template_id: req.body.template_id, tenant_id },
+          attributes: ["category"],
+          raw: true,
+        });
+        if (template?.category) {
+          category = template.category.toLowerCase();
+        }
+      } catch (_) {
+        // Fallback to default category on error
+      }
+    }
 
     const cost = await estimateMetaCost(category, country);
     const estimated_cost = cost.totalCostInr;

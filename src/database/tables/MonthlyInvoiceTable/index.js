@@ -19,6 +19,10 @@ export const MonthlyInvoiceTable = (sequelize, Sequelize) => {
       billing_cycle_id: {
         type: Sequelize.INTEGER,
         allowNull: false,
+        references: {
+          model: "billing_cycles",
+          key: "id",
+        },
       },
 
       invoice_number: {

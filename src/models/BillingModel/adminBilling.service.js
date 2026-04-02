@@ -195,22 +195,47 @@ export const changeBillingMode = async (
     return { success: true, message: `Already in ${new_mode} mode` };
   }
 
-  // Switch to postpaid → initialize billing cycle if none exists
-  if (new_mode === "postpaid") {
-    await initBillingCycle(tenant_id);
-  }
-
-  // Switch to prepaid → close active cycle + generate final invoice
-  if (new_mode === "prepaid") {
-    const activeCycle = await db.BillingCycles.findOne({
-      where: { tenant_id, status: "active" },
-    });
-    if (activeCycle) {
-      await closeBillingCycle(tenant_id, activeCycle.id);
+  await db.sequelize.transaction(async (t) => {
+    // Switch to postpaid → initialize billing cycle + set credit limit
+    if (new_mode === "postpaid") {
+      await initBillingCycle(tenant_id);
+      await tenant.update(
+        {
+          billing_mode: new_mode,
+          postpaid_credit_limit:
+            parseFloat(tenant.postpaid_credit_limit) || 5000,
+        },
+        { transaction: t },
+      );
     }
-  }
 
-  await tenant.update({ billing_mode: new_mode });
+    // Switch to prepaid → close active cycle + generate final invoice + cleanup
+    if (new_mode === "prepaid") {
+      const activeCycle = await db.BillingCycles.findOne({
+        where: { tenant_id, status: "active" },
+        transaction: t,
+      });
+      if (activeCycle) {
+        await closeBillingCycle(tenant_id, activeCycle.id);
+
+        // Delete the auto-created next cycle since we're leaving postpaid
+        await db.BillingCycles.destroy({
+          where: { tenant_id, status: "active" },
+          transaction: t,
+        });
+      }
+
+      // Clear stale cycle dates and switch mode
+      await tenant.update(
+        {
+          billing_mode: new_mode,
+          billing_cycle_start: null,
+          billing_cycle_end: null,
+        },
+        { transaction: t },
+      );
+    }
+  });
 
   // Audit log
   await db.AdminAuditLog.create({

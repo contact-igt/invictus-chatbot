@@ -114,6 +114,10 @@ export const AiTokenUsageTable = (sequelize, Sequelize) => {
         type: Sequelize.INTEGER,
         allowNull: true,
         comment: "FK to billing_cycles — set for postpaid entries",
+        references: {
+          model: "billing_cycles",
+          key: "id",
+        },
       },
 
       createdAt: {
@@ -146,6 +150,10 @@ export const AiTokenUsageTable = (sequelize, Sequelize) => {
         {
           name: "idx_ai_token_usage_source",
           fields: ["source"],
+        },
+        {
+          name: "idx_ai_token_usage_billing_cycle",
+          fields: ["billing_cycle_id"],
         },
       ],
     },

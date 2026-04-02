@@ -125,12 +125,22 @@ export const canAfford = async (tenant_id, required_cost) => {
  * Check postpaid access — overdue invoices OR credit limit exceeded blocks usage.
  *
  * @param {string} tenant_id
+ * @param {number} estimated_cost - Estimated cost of the current operation
  * @returns {Promise<{ allowed: boolean, reason?: string, usage?: number, limit?: number }>}
  */
-export const checkPostpaidAccess = async (tenant_id) => {
-  // 1. Check overdue invoices
+export const checkPostpaidAccess = async (tenant_id, estimated_cost = 0) => {
+  // 1. Check overdue invoices AND unpaid invoices past due date (real-time check)
   const overdueInvoice = await db.MonthlyInvoices.findOne({
-    where: { tenant_id, status: "overdue" },
+    where: {
+      tenant_id,
+      [db.Sequelize.Op.or]: [
+        { status: "overdue" },
+        {
+          status: "unpaid",
+          due_date: { [db.Sequelize.Op.lt]: new Date() },
+        },
+      ],
+    },
   });
 
   if (overdueInvoice) {
@@ -158,10 +168,10 @@ export const checkPostpaidAccess = async (tenant_id) => {
     ? parseFloat(activeCycle.total_cost_inr) || 0
     : 0;
 
-  if (currentUsage >= creditLimit) {
+  if (currentUsage + estimated_cost > creditLimit) {
     return {
       allowed: false,
-      reason: `Monthly credit limit of ₹${creditLimit.toFixed(2)} reached.`,
+      reason: `Monthly credit limit of ₹${creditLimit.toFixed(2)} would be exceeded.`,
       usage: currentUsage,
       limit: creditLimit,
     };
@@ -198,7 +208,7 @@ export const canSendMessage = async (tenant_id, estimated_cost) => {
   const billing_mode = tenant?.billing_mode || "prepaid";
 
   if (billing_mode === "postpaid") {
-    const result = await checkPostpaidAccess(tenant_id);
+    const result = await checkPostpaidAccess(tenant_id, estimated_cost);
     return { ...result, billing_mode };
   }
 

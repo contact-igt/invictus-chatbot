@@ -174,7 +174,6 @@ export const trackAiTokenUsage = async (tenant_id, source, response) => {
             lock: t.LOCK.UPDATE,
             transaction: t,
           });
-          
 
           // Auto-create cycle if none exists (new postpaid tenant)
           if (!activeCycle) {
@@ -212,6 +211,23 @@ export const trackAiTokenUsage = async (tenant_id, source, response) => {
             // Link usage to billing cycle
             await usageRecord.update(
               { billing_cycle_id: activeCycle.id },
+              { transaction: t },
+            );
+
+            // Create BillingLedger record for postpaid AI usage
+            await db.BillingLedger.create(
+              {
+                tenant_id,
+                entry_type: "ai",
+                ai_token_usage_id: usageRecord.id,
+                billing_cycle_id: activeCycle.id,
+                category: "ai_usage",
+                total_cost_inr: estimatedCostInr,
+                markup_percent: appliedMarkup,
+                usd_to_inr_rate: usdToInr,
+                conversion_rate_used: usdToInr,
+                pricing_version: pricingVersion,
+              },
               { transaction: t },
             );
 

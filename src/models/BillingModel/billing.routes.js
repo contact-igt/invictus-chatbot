@@ -103,7 +103,7 @@ router.get("/billing/mode", authenticate, getBillingModeController);
 // INVOICES
 router.get("/billing/invoices", authenticate, getInvoicesController);
 router.get("/billing/invoices/:id", authenticate, getInvoiceDetailController);
-router.post("/billing/invoices/:id/pay", authenticate, payInvoiceController);
+router.post("/billing/invoices/:id/pay", ...tenantAuth, payInvoiceController);
 
 // ADMIN BILLING OVERRIDES (require management + super_admin role)
 const adminAuth = [

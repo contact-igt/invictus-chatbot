@@ -19,6 +19,16 @@ export const initBillingCycle = async (tenant_id) => {
       return existing;
     }
 
+    // Get the highest cycle_number for this tenant to continue sequence
+    const lastCycle = await db.BillingCycles.findOne({
+      where: { tenant_id },
+      order: [["cycle_number", "DESC"]],
+      attributes: ["cycle_number"],
+      transaction: t,
+      raw: true,
+    });
+    const nextCycleNumber = (lastCycle?.cycle_number || 0) + 1;
+
     const now = new Date();
     const endDate = new Date(now);
     endDate.setDate(endDate.getDate() + 30);
@@ -26,7 +36,7 @@ export const initBillingCycle = async (tenant_id) => {
     const cycle = await db.BillingCycles.create(
       {
         tenant_id,
-        cycle_number: 1,
+        cycle_number: nextCycleNumber,
         start_date: now,
         end_date: endDate,
         status: "active",
@@ -69,10 +79,18 @@ export const getActiveBillingCycle = async (tenant_id) => {
   // Check if cycle has expired
   if (new Date(cycle.end_date) <= new Date()) {
     // Close the expired cycle and create a new one
-    await closeBillingCycle(tenant_id, cycle.id);
-    cycle = await db.BillingCycles.findOne({
-      where: { tenant_id, status: "active" },
-    });
+    try {
+      await closeBillingCycle(tenant_id, cycle.id);
+      cycle = await db.BillingCycles.findOne({
+        where: { tenant_id, status: "active" },
+      });
+    } catch (err) {
+      console.error(
+        `[BILLING-CYCLE] On-the-fly cycle close failed for tenant ${tenant_id}:`,
+        err.message,
+      );
+      // Return the expired cycle rather than null — callers can still use it
+    }
   }
 
   return cycle;
@@ -106,7 +124,7 @@ export const closeBillingCycle = async (tenant_id, cycle_id) => {
     await cycle.update({ is_locked: true }, { transaction: t });
 
     try {
-      // Sum BillingLedger costs in cycle date range
+      // Sum BillingLedger costs in cycle date range (exclusive end to prevent double-counting)
       const ledgerSum = await db.BillingLedger.findOne({
         attributes: [
           [
@@ -116,13 +134,16 @@ export const closeBillingCycle = async (tenant_id, cycle_id) => {
         ],
         where: {
           tenant_id,
-          createdAt: { [Op.between]: [cycle.start_date, cycle.end_date] },
+          createdAt: {
+            [Op.gte]: cycle.start_date,
+            [Op.lt]: cycle.end_date,
+          },
         },
         raw: true,
         transaction: t,
       });
 
-      // Sum AiTokenUsage costs in cycle date range
+      // Sum AiTokenUsage costs in cycle date range (exclusive end)
       const aiSum = await db.AiTokenUsage.findOne({
         attributes: [
           [
@@ -132,7 +153,10 @@ export const closeBillingCycle = async (tenant_id, cycle_id) => {
         ],
         where: {
           tenant_id,
-          createdAt: { [Op.between]: [cycle.start_date, cycle.end_date] },
+          createdAt: {
+            [Op.gte]: cycle.start_date,
+            [Op.lt]: cycle.end_date,
+          },
         },
         raw: true,
         transaction: t,
@@ -154,18 +178,25 @@ export const closeBillingCycle = async (tenant_id, cycle_id) => {
         { transaction: t },
       );
 
-      // Generate invoice (idempotent)
-      const invoice = await generateMonthlyInvoice(
-        tenant_id,
-        cycle.id,
-        {
-          totalMessageCost,
-          totalAiCost,
-          totalCost,
-          cycleEndDate: cycle.end_date,
-        },
-        t,
-      );
+      // Generate invoice (idempotent) — skip if zero usage
+      let invoice = null;
+      if (totalCost > 0) {
+        invoice = await generateMonthlyInvoice(
+          tenant_id,
+          cycle.id,
+          {
+            totalMessageCost,
+            totalAiCost,
+            totalCost,
+            cycleEndDate: cycle.end_date,
+          },
+          t,
+        );
+      } else {
+        console.log(
+          `[BILLING-CYCLE] Skipping invoice for zero-usage cycle #${cycle.cycle_number}, tenant ${tenant_id}`,
+        );
+      }
 
       // Create next cycle
       const nextStart = new Date(cycle.end_date);
@@ -199,8 +230,7 @@ export const closeBillingCycle = async (tenant_id, cycle_id) => {
 
       return { cycle, invoice };
     } catch (err) {
-      // Unlock on error
-      await cycle.update({ is_locked: false }, { transaction: t });
+      // Transaction rollback will undo the is_locked=true, no need to manually unlock
       throw err;
     }
   });
@@ -437,12 +467,26 @@ const acquireCronLock = async (job_name) => {
     return null;
   }
 
-  // Acquire lock
-  const lock = await db.CronExecutionLog.create({
-    job_name,
-    status: "running",
-    started_at: new Date(),
+  // Acquire lock atomically using findOrCreate to prevent TOCTOU race
+  const [lock, created] = await db.CronExecutionLog.findOrCreate({
+    where: {
+      job_name,
+      status: "running",
+      started_at: { [Op.gte]: oneHourAgo },
+    },
+    defaults: {
+      job_name,
+      status: "running",
+      started_at: new Date(),
+    },
   });
+
+  if (!created) {
+    console.log(
+      `[BILLING-CRON] Lock race lost for ${job_name} (id: ${lock.id}). Skipping.`,
+    );
+    return null;
+  }
 
   return lock.id;
 };
@@ -514,28 +558,32 @@ export const runBillingCycleCron = async () => {
     }
 
     // 2. Mark overdue invoices
+    const now = new Date();
     const [overdueCount] = await db.MonthlyInvoices.update(
       { status: "overdue" },
       {
         where: {
           status: "unpaid",
-          due_date: { [Op.lt]: new Date() },
+          due_date: { [Op.lt]: now },
         },
       },
     );
     stats.overdue_marked = overdueCount;
 
-    // Emit overdue alerts
+    // Emit overdue alerts only for newly marked invoices
     if (overdueCount > 0) {
-      const overdueInvoices = await db.MonthlyInvoices.findAll({
-        where: { status: "overdue" },
+      const newlyOverdueInvoices = await db.MonthlyInvoices.findAll({
+        where: {
+          status: "overdue",
+          updatedAt: { [Op.gte]: new Date(now.getTime() - 60000) }, // Updated within the last minute
+        },
         attributes: ["tenant_id", "invoice_number", "amount", "due_date"],
         raw: true,
       });
 
       try {
         const io = getIO();
-        for (const inv of overdueInvoices) {
+        for (const inv of newlyOverdueInvoices) {
           const daysOverdue = Math.ceil(
             (Date.now() - new Date(inv.due_date).getTime()) /
               (1000 * 60 * 60 * 24),

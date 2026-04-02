@@ -42,7 +42,7 @@ export const getInvoicesController = async (req, res) => {
       parseInt(page),
       parseInt(limit),
     );
-    res.json({ success: true, ...result });
+    res.json({ success: true, data: result });
   } catch (error) {
     console.error("[INVOICE] getInvoices error:", error.message);
     res.status(500).json({ success: false, message: error.message });
@@ -62,7 +62,7 @@ export const getInvoiceDetailController = async (req, res) => {
 
     const { id } = req.params;
     const result = await getInvoiceDetailService(tenant_id, parseInt(id));
-    res.json({ success: true, ...result });
+    res.json({ success: true, data: result });
   } catch (error) {
     console.error("[INVOICE] getInvoiceDetail error:", error.message);
     res.status(error.message === "Invoice not found" ? 404 : 500).json({
@@ -76,12 +76,10 @@ export const payInvoiceController = async (req, res) => {
   try {
     const tenant_id = req.user.tenant_id;
     if (!tenant_id) {
-      return res
-        .status(403)
-        .json({
-          success: false,
-          message: "Only tenant users can pay invoices",
-        });
+      return res.status(403).json({
+        success: false,
+        message: "Only tenant users can pay invoices",
+      });
     }
     const { id } = req.params;
     const result = await payInvoiceService(tenant_id, parseInt(id), req.body);
@@ -118,7 +116,7 @@ export const getBillingModeController = async (req, res) => {
     }
 
     const result = await getBillingModeService(tenant_id);
-    res.json({ success: true, ...result });
+    res.json({ success: true, data: result });
   } catch (error) {
     console.error("[BILLING] getBillingMode error:", error.message);
     res.status(500).json({ success: false, message: error.message });
