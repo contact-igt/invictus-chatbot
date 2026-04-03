@@ -110,6 +110,7 @@ export const createTenantController = async (req, res) => {
     }
 
     // Wrap all DB writes in a transaction for atomicity
+    let tenantUserId;
     await db.sequelize.transaction(async (t) => {
       await createTenantService(
         tenant_id,
@@ -142,14 +143,14 @@ export const createTenantController = async (req, res) => {
         t, // transaction
       );
 
-      const tenant_user_id = await generateReadableIdFromLast(
+      tenantUserId = await generateReadableIdFromLast(
         tableNames.TENANT_USERS,
         "tenant_user_id",
         "TTU",
       );
 
       await createTenantUserService(
-        tenant_user_id,
+        tenantUserId,
         tenant_id,
         "Mr", // Default title as Mr
         owner_name,
@@ -162,19 +163,33 @@ export const createTenantController = async (req, res) => {
         "inactive", // user_status — inactive until invitation is accepted
         t, // transaction
       );
+    });
 
+    // Send invitation email OUTSIDE the transaction — tenant is already saved,
+    // so a transient SMTP failure won't roll back the entire registration.
+    let emailWarning = null;
+    try {
       await sendTenantInvitationService(
         tenant_id,
-        tenant_user_id,
+        tenantUserId,
         trimmedEmail,
         owner_name,
         company_name,
         loginUSer?.unique_id,
       );
-    });
+    } catch (emailErr) {
+      console.error(
+        "[TENANT] Invitation email failed (tenant still created):",
+        emailErr.message,
+      );
+      emailWarning =
+        "Tenant created but invitation email failed. You can resend it from the tenant list.";
+    }
 
     return res.status(200).json({
-      message: "Tenant created successfully. Invitation email sent to owner.",
+      message:
+        emailWarning ||
+        "Tenant created successfully. Invitation email sent to owner.",
     });
   } catch (err) {
     if (err.original?.code === "ER_DUP_ENTRY") {

@@ -13,6 +13,7 @@ import {
   manualInvoiceClose,
   changeBillingMode,
   getAuditLogService,
+  updateUsageLimits,
 } from "./adminBilling.service.js";
 import {
   getHealthSummary,
@@ -210,6 +211,23 @@ export const adminChangeBillingModeController = async (req, res) => {
     res.json({ success: true, ...result });
   } catch (error) {
     console.error("[ADMIN-BILLING] changeBillingMode error:", error.message);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+export const adminUpdateUsageLimitsController = async (req, res) => {
+  try {
+    const admin_id = req.user.unique_id;
+    const { tenant_id, ...limits } = req.body;
+    if (!tenant_id) {
+      return res
+        .status(400)
+        .json({ success: false, message: "tenant_id is required" });
+    }
+    const result = await updateUsageLimits(admin_id, tenant_id, limits);
+    res.json({ success: true, ...result });
+  } catch (error) {
+    console.error("[ADMIN-BILLING] updateUsageLimits error:", error.message);
     res.status(500).json({ success: false, message: error.message });
   }
 };

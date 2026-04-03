@@ -41,6 +41,33 @@ export const trackAiTokenUsage = async (tenant_id, source, response) => {
           monthly: usageCheck.monthly,
         });
       } catch (_) {}
+
+      // Still record usage (for tracking) but skip cost billing
+      const costResult = await estimateAiCost(
+        rawModel,
+        prompt_tokens,
+        completion_tokens,
+      );
+      await db.AiTokenUsage.create({
+        tenant_id,
+        model: costResult.model,
+        source,
+        prompt_tokens,
+        completion_tokens,
+        total_tokens,
+        estimated_cost: Number(costResult.finalCostUsd.toFixed(8)),
+        input_rate: costResult.pricingSnapshot.input_rate,
+        output_rate: costResult.pricingSnapshot.output_rate,
+        markup_percent: costResult.pricingSnapshot.markup_percent,
+        usd_to_inr_rate: costResult.conversionRate,
+        base_cost_usd: Number(costResult.baseCostUsd.toFixed(8)),
+        final_cost_usd: Number(costResult.finalCostUsd.toFixed(8)),
+        final_cost_inr: Number(costResult.finalCostInr.toFixed(6)),
+        pricing_version: costResult.pricingVersion,
+        billed: false,
+      });
+      invalidateUsageCache(tenant_id);
+      return;
     }
 
     // 2. Calculate cost using centralized cost estimator

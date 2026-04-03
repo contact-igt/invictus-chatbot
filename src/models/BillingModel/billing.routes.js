@@ -30,6 +30,7 @@ import {
   adminResolveHealthEventController,
   adminGetTenantOverviewController,
   adminGetUnresolvedEventsController,
+  adminUpdateUsageLimitsController,
 } from "./invoice.controller.js";
 import {
   authenticate,
@@ -137,7 +138,11 @@ router.get(
   authenticateAdmin,
   adminGetHealthSummaryController,
 );
-router.get("/billing/admin/tenants", authenticateAdmin, adminGetTenantsController);
+router.get(
+  "/billing/admin/tenants",
+  authenticateAdmin,
+  adminGetTenantsController,
+);
 router.get(
   "/billing/admin/tenant-overview",
   authenticateAdmin,
@@ -152,6 +157,11 @@ router.get(
   "/billing/admin/health/unresolved",
   authenticateAdmin,
   adminGetUnresolvedEventsController,
+);
+router.put(
+  "/billing/admin/usage-limits",
+  authenticateAdmin,
+  adminUpdateUsageLimitsController,
 );
 
 export default router;

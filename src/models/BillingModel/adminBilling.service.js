@@ -274,6 +274,69 @@ export const changeBillingMode = async (
   return { success: true, old_mode, new_mode };
 };
 
+/**
+ * Update usage limits for a tenant (admin only).
+ */
+export const updateUsageLimits = async (admin_id, tenant_id, limits) => {
+  const tenant = await db.Tenants.findOne({ where: { tenant_id } });
+  if (!tenant) throw new Error("Tenant not found");
+
+  const allowedFields = [
+    "max_daily_messages",
+    "max_monthly_messages",
+    "max_daily_ai_calls",
+    "max_monthly_ai_calls",
+  ];
+
+  const updateData = {};
+  const beforeState = {};
+
+  for (const field of allowedFields) {
+    if (limits[field] !== undefined) {
+      const val = parseInt(limits[field]);
+      if (isNaN(val) || val < 0) {
+        throw new Error(`${field} must be a non-negative integer`);
+      }
+      beforeState[field] = tenant[field];
+      updateData[field] = val;
+    }
+  }
+
+  if (Object.keys(updateData).length === 0) {
+    throw new Error("No valid limit fields provided");
+  }
+
+  await tenant.update(updateData);
+
+  // Audit log
+  await db.AdminAuditLog.create({
+    admin_id,
+    tenant_id,
+    action_type: "update_usage_limits",
+    details: updateData,
+    before_state: beforeState,
+    after_state: updateData,
+    reason: limits.reason || "Admin updated usage limits",
+  });
+
+  // Emit to tenant so their UI refreshes
+  try {
+    const io = getIO();
+    io.to(`tenant-${tenant_id}`).emit("billing-update", {
+      type: "LIMITS_UPDATED",
+      tenant_id,
+      limits: updateData,
+    });
+  } catch (_) {}
+
+  console.log(
+    `[ADMIN-BILLING] update_usage_limits by ${admin_id} for tenant ${tenant_id}:`,
+    updateData,
+  );
+
+  return { success: true, updated: updateData };
+};
+
 export const getAuditLogService = async (
   tenant_id = null,
   page = 1,

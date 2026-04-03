@@ -186,7 +186,9 @@ export const processBillingFromWebhook = async (tenant_id, statusUpdate) => {
           monthly: usageCheck.monthly,
         });
       } catch (_) {}
-      // Still track usage but skip billing
+      // MessageUsage already created above — skip cost billing
+      invalidateUsageCache(tenant_id);
+      return;
     }
 
     // 6. Create BillingLedger Record (both modes — for reporting)
@@ -539,6 +541,24 @@ export const getBillingKpiService = async (tenant_id, startDate, endDate) => {
       defaults: { tenant_id, balance: 0, currency: "INR" },
     });
 
+    // 4. Today's usage counts (for usage limit display)
+    const todayStart = new Date();
+    todayStart.setUTCHours(0, 0, 0, 0);
+
+    const [todayMessagesSent, totalAiCalls, todayAiCalls] = await Promise.all([
+      db.MessageUsage.count({
+        where: { tenant_id, createdAt: { [Op.gte]: todayStart } },
+      }),
+      db.AiTokenUsage.count({
+        where: usageWhere.timestamp
+          ? { tenant_id, createdAt: usageWhere.timestamp }
+          : { tenant_id },
+      }),
+      db.AiTokenUsage.count({
+        where: { tenant_id, createdAt: { [Op.gte]: todayStart } },
+      }),
+    ]);
+
     return {
       totalSpentEstimated: totalSpentInr,
       totalSpentUsd,
@@ -547,8 +567,11 @@ export const getBillingKpiService = async (tenant_id, startDate, endDate) => {
       authSpent,
       serviceSpent,
       totalMessagesSent,
+      todayMessagesSent,
       billableConversations,
       freeConversations,
+      totalAiCalls,
+      todayAiCalls,
       walletBalance: parseFloat(wallet.balance) || 0,
       currency: wallet.currency || "INR",
     };
