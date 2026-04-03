@@ -255,9 +255,6 @@ export const changeBillingMode = async (
   return { success: true, old_mode, new_mode };
 };
 
-/**
- * Get admin audit log entries.
- */
 export const getAuditLogService = async (
   tenant_id = null,
   page = 1,
@@ -272,10 +269,42 @@ export const getAuditLogService = async (
     order: [["createdAt", "DESC"]],
     limit: parseInt(limit),
     offset,
+    raw: true,
   });
 
+  const adminIds = [...new Set(rows.map(r => r.admin_id).filter(Boolean))];
+  const tenantIds = [...new Set(rows.map(r => r.tenant_id).filter(Boolean))];
+
+  const admins = await db.Management.findAll({
+    where: { management_id: adminIds },
+    attributes: ["management_id", "username"],
+    raw: true,
+  });
+
+  const tenants = await db.Tenants.findAll({
+    where: { tenant_id: tenantIds },
+    attributes: ["tenant_id", "company_name"],
+    raw: true,
+  });
+
+  const adminMap = admins.reduce((acc, admin) => {
+    if (admin.management_id) acc[admin.management_id] = admin.username;
+    return acc;
+  }, {});
+
+  const tenantMap = tenants.reduce((acc, t) => {
+    if (t.tenant_id) acc[t.tenant_id] = t.company_name;
+    return acc;
+  }, {});
+
+  const logs = rows.map(r => ({
+    ...r,
+    admin_name: adminMap[r.admin_id] || r.admin_id,
+    tenant_name: tenantMap[r.tenant_id] || r.tenant_id,
+  }));
+
   return {
-    logs: rows,
+    logs,
     pagination: {
       total: count,
       page: parseInt(page),

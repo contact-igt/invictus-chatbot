@@ -34,6 +34,7 @@ import {
 import {
   authenticate,
   authorize,
+  authenticateAdmin,
 } from "../../middlewares/auth/authMiddlewares.js";
 
 const router = express.Router();
@@ -106,54 +107,50 @@ router.get("/billing/invoices/:id", authenticate, getInvoiceDetailController);
 router.post("/billing/invoices/:id/pay", ...tenantAuth, payInvoiceController);
 
 // ADMIN BILLING OVERRIDES (require management + super_admin role)
-const adminAuth = [
-  authenticate,
-  authorize({ user_type: "management", roles: ["super_admin"] }),
-];
 router.post(
   "/billing/admin/force-unlock",
-  ...adminAuth,
+  authenticateAdmin,
   adminForceUnlockController,
 );
 router.post(
   "/billing/admin/manual-credit",
-  ...adminAuth,
+  authenticateAdmin,
   adminManualCreditController,
 );
 router.post(
   "/billing/admin/invoice-close",
-  ...adminAuth,
+  authenticateAdmin,
   adminInvoiceCloseController,
 );
 router.post(
   "/billing/admin/change-mode",
-  ...adminAuth,
+  authenticateAdmin,
   adminChangeBillingModeController,
 );
 router.get(
   "/billing/admin/audit-log",
-  ...adminAuth,
+  authenticateAdmin,
   adminGetAuditLogController,
 );
 router.get(
   "/billing/admin/health",
-  ...adminAuth,
+  authenticateAdmin,
   adminGetHealthSummaryController,
 );
-router.get("/billing/admin/tenants", ...adminAuth, adminGetTenantsController);
+router.get("/billing/admin/tenants", authenticateAdmin, adminGetTenantsController);
 router.get(
   "/billing/admin/tenant-overview",
-  ...adminAuth,
+  authenticateAdmin,
   adminGetTenantOverviewController,
 );
 router.post(
   "/billing/admin/health/:id/resolve",
-  ...adminAuth,
+  authenticateAdmin,
   adminResolveHealthEventController,
 );
 router.get(
   "/billing/admin/health/unresolved",
-  ...adminAuth,
+  authenticateAdmin,
   adminGetUnresolvedEventsController,
 );
 

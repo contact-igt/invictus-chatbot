@@ -355,9 +355,9 @@ export const adminGetTenantOverviewController = async (req, res) => {
       attributes: [
         "id",
         "cycle_number",
-        "cycle_start",
-        "cycle_end",
-        "total_amount",
+        "start_date",
+        "end_date",
+        "total_cost_inr",
         "is_locked",
       ],
       raw: true,
@@ -379,9 +379,9 @@ export const adminGetTenantOverviewController = async (req, res) => {
         active_cycle: activeCycle
           ? {
               cycle_number: activeCycle.cycle_number,
-              cycle_start: activeCycle.cycle_start,
-              cycle_end: activeCycle.cycle_end,
-              current_usage: parseFloat(activeCycle.total_amount) || 0,
+              cycle_start: activeCycle.start_date,
+              cycle_end: activeCycle.end_date,
+              current_usage: parseFloat(activeCycle.total_cost_inr) || 0,
               is_locked: activeCycle.is_locked,
             }
           : null,

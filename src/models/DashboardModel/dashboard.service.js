@@ -466,8 +466,8 @@ export const getDashboardStatsService = async (tenantId, period = "30days") => {
         ? parseFloat(((agentHandledChats / totalHandledChats) * 100).toFixed(1))
         : 0;
 
-    // Nurture efficiency = AI auto-resolved % (reuse aiAutoResolvedPct)
-    const nurtureEfficiency = aiAutoResolvedPct;
+    // Nurture efficiency = AI auto-resolved % (reuse aiHandledPct)
+    const nurtureEfficiency = aiHandledPct;
 
     // ═══════════════════════════════════════════════════════════════════
     // === 16. MESSAGING ANALYTICS (PERIOD-FILTERED) ===
@@ -751,6 +751,7 @@ export const getDashboardStatsService = async (tenantId, period = "30days") => {
         totalLeads: { current: totalLeadsNow, previous: totalLeadsYesterday },
         activeChats,
         appointmentsToday,
+        aiAutoResolvedPct: aiHandledPct,
       },
       liveOps: {
         unassignedCount,
@@ -760,6 +761,7 @@ export const getDashboardStatsService = async (tenantId, period = "30days") => {
       campaigns,
       recent: {
         leads: recentLeads,
+        logs: [],
       },
       // NEW SECTIONS
       agentPerf: {

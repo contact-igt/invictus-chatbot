@@ -101,6 +101,7 @@ export const authenticate = async (req, res, next) => {
 
       // 🔴 GLOBAL TENANT STATUS CHECK
       const tenant = await findTenantByIdService(decoded.tenant_id);
+      console.log("tenant", tenant);
       if (!tenant || tenant.status !== "active") {
         return res.status(403).json({
           message: "Tenant account is inactive. Access denied.",
@@ -132,6 +133,37 @@ export const authorize = ({ user_type, roles = [] }) => {
 
     next();
   };
+};
+
+/* =========================
+   AUTHENTICATE ADMIN (combined single middleware for management routes)
+========================= */
+
+export const authenticateAdmin = async (req, res, next) => {
+  const token = req.headers.authorization?.split(" ")[1];
+  if (!token) return res.status(401).json({ message: "Unauthorized" });
+
+  try {
+    const decoded = jwt.verify(token, ServerEnvironmentConfig.jwt_key);
+
+    if (decoded.user_type !== "management") {
+      return res.status(403).json({ message: "Access denied" });
+    }
+
+    if (decoded.role !== "super_admin") {
+      return res.status(403).json({ message: "Permission denied" });
+    }
+
+    const user = await getManagementByIdService(decoded.unique_id);
+    if (!user) {
+      return res.status(401).json({ message: "Account no longer exists. Please login again." });
+    }
+
+    req.user = decoded;
+    next();
+  } catch {
+    return res.status(401).json({ message: "Invalid or expired token" });
+  }
 };
 
 /* =========================
