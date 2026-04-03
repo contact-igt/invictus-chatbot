@@ -348,14 +348,14 @@ export const deductWallet = async (
           const io = getIO();
           if (
             result.newBalance < THRESHOLDS.LOW_BALANCE &&
-            result.newBalance > 0
+            result.newBalance > 0.01
           ) {
             io.to(`tenant-${tenant_id}`).emit("low-balance-warning", {
               balance: result.newBalance,
               message: `Low balance (₹${result.newBalance.toFixed(2)}). Please recharge soon.`,
             });
           }
-          if (result.newBalance === 0) {
+          if (result.newBalance <= 0.01) {
             io.to(`tenant-${tenant_id}`).emit("zero-balance", {
               balance: 0,
               message: "Wallet balance is zero. Please recharge to continue.",
