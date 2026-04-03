@@ -83,6 +83,11 @@ export const authenticate = async (req, res, next) => {
           message: "Account no longer exists. Please login again.",
         });
       }
+      if (user.status && user.status !== "active") {
+        return res.status(403).json({
+          message: "Your account has been deactivated. Contact administrator.",
+        });
+      }
     }
 
     // 🟢 TENANT USER CHECK
@@ -92,6 +97,13 @@ export const authenticate = async (req, res, next) => {
       if (!user) {
         return res.status(401).json({
           message: "Account no longer exists. Please login again.",
+        });
+      }
+
+      // Check individual tenant user status
+      if (user.status && user.status !== "active") {
+        return res.status(403).json({
+          message: "Your account has been deactivated. Contact your admin.",
         });
       }
 
@@ -156,7 +168,16 @@ export const authenticateAdmin = async (req, res, next) => {
 
     const user = await getManagementByIdService(decoded.unique_id);
     if (!user) {
-      return res.status(401).json({ message: "Account no longer exists. Please login again." });
+      return res
+        .status(401)
+        .json({ message: "Account no longer exists. Please login again." });
+    }
+    if (user.status && user.status !== "active") {
+      return res
+        .status(403)
+        .json({
+          message: "Your account has been deactivated. Contact administrator.",
+        });
     }
 
     req.user = decoded;

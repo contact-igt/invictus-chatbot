@@ -6,9 +6,14 @@ import { recordHealthEvent } from "../../utils/billing/billingHealthMonitor.js";
 /**
  * Initialize the first billing cycle for a tenant.
  * Uses transaction + row lock to prevent duplicate cycles from concurrent requests.
+ * @param {string} tenant_id
+ * @param {object} [existingTransaction] - Optional parent transaction to join
  */
-export const initBillingCycle = async (tenant_id) => {
-  return db.sequelize.transaction(async (t) => {
+export const initBillingCycle = async (
+  tenant_id,
+  existingTransaction = null,
+) => {
+  const perform = async (t) => {
     const existing = await db.BillingCycles.findOne({
       where: { tenant_id, status: "active" },
       lock: t.LOCK.UPDATE,
@@ -58,7 +63,12 @@ export const initBillingCycle = async (tenant_id) => {
       `[BILLING-CYCLE] Initialized cycle #1 for tenant ${tenant_id}: ${now.toISOString()} → ${endDate.toISOString()}`,
     );
     return cycle;
-  });
+  };
+
+  if (existingTransaction) {
+    return perform(existingTransaction);
+  }
+  return db.sequelize.transaction(perform);
 };
 
 /**
@@ -99,9 +109,16 @@ export const getActiveBillingCycle = async (tenant_id) => {
 /**
  * Close a billing cycle, generate invoice, and create the next cycle.
  * Uses is_locked to prevent duplicate processing.
+ * @param {string} tenant_id
+ * @param {number} cycle_id
+ * @param {object} [existingTransaction] - Optional parent transaction to join
  */
-export const closeBillingCycle = async (tenant_id, cycle_id) => {
-  return db.sequelize.transaction(async (t) => {
+export const closeBillingCycle = async (
+  tenant_id,
+  cycle_id,
+  existingTransaction = null,
+) => {
+  const perform = async (t) => {
     const cycle = await db.BillingCycles.findOne({
       where: { id: cycle_id, tenant_id },
       lock: t.LOCK.UPDATE,
@@ -124,7 +141,7 @@ export const closeBillingCycle = async (tenant_id, cycle_id) => {
     await cycle.update({ is_locked: true }, { transaction: t });
 
     try {
-      // Sum BillingLedger costs in cycle date range (exclusive end to prevent double-counting)
+      // Sum BillingLedger costs linked to this billing cycle
       const ledgerSum = await db.BillingLedger.findOne({
         attributes: [
           [
@@ -134,16 +151,13 @@ export const closeBillingCycle = async (tenant_id, cycle_id) => {
         ],
         where: {
           tenant_id,
-          createdAt: {
-            [Op.gte]: cycle.start_date,
-            [Op.lt]: cycle.end_date,
-          },
+          billing_cycle_id: cycle.id,
         },
         raw: true,
         transaction: t,
       });
 
-      // Sum AiTokenUsage costs in cycle date range (exclusive end)
+      // Sum AiTokenUsage costs linked to this billing cycle
       const aiSum = await db.AiTokenUsage.findOne({
         attributes: [
           [
@@ -153,10 +167,7 @@ export const closeBillingCycle = async (tenant_id, cycle_id) => {
         ],
         where: {
           tenant_id,
-          createdAt: {
-            [Op.gte]: cycle.start_date,
-            [Op.lt]: cycle.end_date,
-          },
+          billing_cycle_id: cycle.id,
         },
         raw: true,
         transaction: t,
@@ -233,7 +244,12 @@ export const closeBillingCycle = async (tenant_id, cycle_id) => {
       // Transaction rollback will undo the is_locked=true, no need to manually unlock
       throw err;
     }
-  });
+  };
+
+  if (existingTransaction) {
+    return perform(existingTransaction);
+  }
+  return db.sequelize.transaction(perform);
 };
 
 /**
@@ -337,9 +353,9 @@ export const getInvoicesService = async (
  * Get single invoice with full breakdown.
  */
 export const getInvoiceDetailService = async (tenant_id, invoice_id) => {
-  const invoice = await db.MonthlyInvoices.findOne({
-    where: { id: invoice_id, tenant_id },
-  });
+  const where = { id: invoice_id };
+  if (tenant_id) where.tenant_id = tenant_id;
+  const invoice = await db.MonthlyInvoices.findOne({ where });
 
   if (!invoice) throw new Error("Invoice not found");
 

@@ -191,9 +191,50 @@ export const processBillingFromWebhook = async (tenant_id, statusUpdate) => {
 
     // 6. Create BillingLedger Record (both modes — for reporting)
     await db.sequelize.transaction(async (t) => {
-      const [ledger, ledgerCreated] = await db.BillingLedger.findOrCreate({
+      // Check for duplicate billing first
+      const existingLedger = await db.BillingLedger.findOne({
         where: { message_usage_id: usageRecord.id },
-        defaults: {
+        transaction: t,
+      });
+      if (existingLedger) {
+        console.log(
+          `[BILLING] Skipping duplicate billing for message_usage_id ${usageRecord.id}`,
+        );
+        return;
+      }
+
+      if (totalCostInr > 0 && billing_mode === "prepaid") {
+        // PREPAID: Deduct from wallet FIRST, then create ledger
+        const deductResult = await deductWallet(
+          tenant_id,
+          totalCostInr,
+          `msg_${usageRecord.id}`,
+          `Message Billing: ${category} (${country}) [$${totalCostUsd.toFixed(4)} × ₹${usdToInrRate}]`,
+          t,
+        );
+
+        if (!deductResult.success) {
+          console.warn(
+            `[BILLING] Prepaid deduction failed for tenant ${tenant_id}: ${deductResult.error}`,
+          );
+          try {
+            const io = getIO();
+            io.to(`tenant-${tenant_id}`).emit("insufficient-balance", {
+              balance: deductResult.oldBalance,
+              required: totalCostInr,
+              shortfall:
+                deductResult.shortfall ||
+                totalCostInr - deductResult.oldBalance,
+            });
+          } catch (_) {}
+          // Deduction failed — do NOT create ledger entry
+          return;
+        }
+      }
+
+      // Create ledger AFTER successful deduction (prepaid) or directly (postpaid)
+      const ledger = await db.BillingLedger.create(
+        {
           tenant_id,
           entry_type: "message",
           message_usage_id: usageRecord.id,
@@ -211,115 +252,78 @@ export const processBillingFromWebhook = async (tenant_id, statusUpdate) => {
           conversion_rate_used: usdToInrRate,
           pricing_version: pricingVersion,
         },
-        transaction: t,
-      });
+        { transaction: t },
+      );
 
-      if (!ledgerCreated) {
-        console.log(
-          `[BILLING] Skipping duplicate billing for message_usage_id ${usageRecord.id}`,
-        );
-        return;
-      }
+      if (totalCostInr > 0 && billing_mode !== "prepaid") {
+        // POSTPAID: No wallet deduction — update billing cycle totals
+        let activeCycle = await db.BillingCycles.findOne({
+          where: { tenant_id, status: "active" },
+          lock: t.LOCK.UPDATE,
+          transaction: t,
+        });
 
-      if (totalCostInr > 0) {
-        if (billing_mode === "prepaid") {
-          // PREPAID: Deduct from wallet atomically with FOR UPDATE lock
-          const deductResult = await deductWallet(
-            tenant_id,
-            totalCostInr,
-            `ledger_${ledger.id}`,
-            `Message Billing: ${category} (${country}) [$${totalCostUsd.toFixed(4)} × ₹${usdToInrRate}]`,
-            t,
+        // Auto-create cycle if none exists (new postpaid tenant)
+        if (!activeCycle) {
+          const now = new Date();
+          const endDate = new Date(now);
+          endDate.setDate(endDate.getDate() + 30);
+          activeCycle = await db.BillingCycles.create(
+            {
+              tenant_id,
+              cycle_number: 1,
+              start_date: now,
+              end_date: endDate,
+              status: "active",
+              total_message_cost_inr: 0,
+              total_ai_cost_inr: 0,
+              total_cost_inr: 0,
+              is_locked: false,
+            },
+            { transaction: t },
+          );
+          console.log(
+            `[BILLING] Auto-created billing cycle for postpaid tenant ${tenant_id}`,
+          );
+        }
+
+        if (activeCycle) {
+          await activeCycle.increment(
+            {
+              total_message_cost_inr: totalCostInr,
+              total_cost_inr: totalCostInr,
+            },
+            { transaction: t },
           );
 
-          if (!deductResult.success) {
-            console.warn(
-              `[BILLING] Prepaid deduction failed for tenant ${tenant_id}: ${deductResult.error}`,
-            );
+          // Link ledger to billing cycle
+          await ledger.update(
+            { billing_cycle_id: activeCycle.id },
+            { transaction: t },
+          );
+
+          // Check credit limit thresholds
+          const updatedTotal =
+            parseFloat(activeCycle.total_cost_inr) + totalCostInr;
+          const creditLimit = parseFloat(tenant?.postpaid_credit_limit) || 5000;
+
+          if (updatedTotal >= creditLimit) {
             try {
               const io = getIO();
-              io.to(`tenant-${tenant_id}`).emit("insufficient-balance", {
-                balance: deductResult.oldBalance,
-                required: totalCostInr,
-                shortfall:
-                  deductResult.shortfall ||
-                  totalCostInr - deductResult.oldBalance,
+              io.to(`tenant-${tenant_id}`).emit("credit-limit-reached", {
+                usage: updatedTotal,
+                limit: creditLimit,
               });
             } catch (_) {}
-            // Usage is tracked (ledger created) but not billed from wallet
-            return;
-          }
-        } else {
-          // POSTPAID: No wallet deduction — update billing cycle totals
-          let activeCycle = await db.BillingCycles.findOne({
-            where: { tenant_id, status: "active" },
-            lock: t.LOCK.UPDATE,
-            transaction: t,
-          });
-
-          // Auto-create cycle if none exists (new postpaid tenant)
-          if (!activeCycle) {
-            const now = new Date();
-            const endDate = new Date(now);
-            endDate.setDate(endDate.getDate() + 30);
-            activeCycle = await db.BillingCycles.create(
-              {
-                tenant_id,
-                cycle_number: 1,
-                start_date: now,
-                end_date: endDate,
-                status: "active",
-                total_message_cost_inr: 0,
-                total_ai_cost_inr: 0,
-                total_cost_inr: 0,
-                is_locked: false,
-              },
-              { transaction: t },
-            );
-            console.log(
-              `[BILLING] Auto-created billing cycle for postpaid tenant ${tenant_id}`,
-            );
-          }
-
-          if (activeCycle) {
-            await activeCycle.increment(
-              {
-                total_message_cost_inr: totalCostInr,
-                total_cost_inr: totalCostInr,
-              },
-              { transaction: t },
-            );
-
-            // Link ledger to billing cycle
-            await ledger.update(
-              { billing_cycle_id: activeCycle.id },
-              { transaction: t },
-            );
-
-            // Check credit limit thresholds
-            const updatedTotal =
-              parseFloat(activeCycle.total_cost_inr) + totalCostInr;
-            const creditLimit =
-              parseFloat(tenant?.postpaid_credit_limit) || 5000;
-
-            if (updatedTotal >= creditLimit) {
-              try {
-                const io = getIO();
-                io.to(`tenant-${tenant_id}`).emit("credit-limit-reached", {
-                  usage: updatedTotal,
-                  limit: creditLimit,
-                });
-              } catch (_) {}
-            } else if (updatedTotal >= creditLimit * 0.8) {
-              try {
-                const io = getIO();
-                io.to(`tenant-${tenant_id}`).emit("credit-limit-warning", {
-                  usage: updatedTotal,
-                  limit: creditLimit,
-                  percent: Math.round((updatedTotal / creditLimit) * 100),
-                });
-              } catch (_) {}
-            }
+          } else if (updatedTotal >= creditLimit * 0.8) {
+            try {
+              const io = getIO();
+              io.to(`tenant-${tenant_id}`).emit("credit-limit-warning", {
+                usage: updatedTotal,
+                limit: creditLimit,
+                percent: Math.round((updatedTotal / creditLimit) * 100),
+              });
+            } catch (_) {}
           }
         }
       }

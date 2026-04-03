@@ -78,6 +78,8 @@ export const manualWalletCredit = async (
   if (!reason) throw new Error("Reason is required for manual credit");
 
   const amountInRupees = parseFloat(amount);
+  if (amountInRupees > 100000)
+    throw new Error("Maximum credit per transaction is ₹1,00,000");
   let oldBalance, newBalance;
 
   await db.sequelize.transaction(async (t) => {
@@ -198,7 +200,7 @@ export const changeBillingMode = async (
   await db.sequelize.transaction(async (t) => {
     // Switch to postpaid → initialize billing cycle + set credit limit
     if (new_mode === "postpaid") {
-      await initBillingCycle(tenant_id);
+      await initBillingCycle(tenant_id, t);
       await tenant.update(
         {
           billing_mode: new_mode,
@@ -216,7 +218,7 @@ export const changeBillingMode = async (
         transaction: t,
       });
       if (activeCycle) {
-        await closeBillingCycle(tenant_id, activeCycle.id);
+        await closeBillingCycle(tenant_id, activeCycle.id, t);
 
         // Delete the auto-created next cycle since we're leaving postpaid
         await db.BillingCycles.destroy({
@@ -248,6 +250,23 @@ export const changeBillingMode = async (
     reason,
   });
 
+  // Emit socket event so tenant UI refreshes immediately
+  try {
+    const io = getIO();
+    io.to(`tenant-${tenant_id}`).emit("billing-mode-changed", {
+      old_mode,
+      new_mode,
+      tenant_id,
+    });
+    // Also trigger a generic billing-update to refresh all billing caches
+    io.to(`tenant-${tenant_id}`).emit("billing-update", {
+      type: "MODE_CHANGE",
+      old_mode,
+      new_mode,
+      tenant_id,
+    });
+  } catch (_) {}
+
   console.log(
     `[ADMIN-BILLING] billing_mode_change by ${admin_id}: ${old_mode} → ${new_mode} for tenant ${tenant_id}. Reason: ${reason}`,
   );
@@ -272,8 +291,8 @@ export const getAuditLogService = async (
     raw: true,
   });
 
-  const adminIds = [...new Set(rows.map(r => r.admin_id).filter(Boolean))];
-  const tenantIds = [...new Set(rows.map(r => r.tenant_id).filter(Boolean))];
+  const adminIds = [...new Set(rows.map((r) => r.admin_id).filter(Boolean))];
+  const tenantIds = [...new Set(rows.map((r) => r.tenant_id).filter(Boolean))];
 
   const admins = await db.Management.findAll({
     where: { management_id: adminIds },
@@ -297,7 +316,7 @@ export const getAuditLogService = async (
     return acc;
   }, {});
 
-  const logs = rows.map(r => ({
+  const logs = rows.map((r) => ({
     ...r,
     admin_name: adminMap[r.admin_id] || r.admin_id,
     tenant_name: tenantMap[r.tenant_id] || r.tenant_id,

@@ -75,18 +75,7 @@ export const verifyRazorpayPaymentService = async (tenant_id, paymentData) => {
     .digest("hex");
 
   if (expectedSignature === razorpay_signature) {
-    // 1. Check for duplicate payment verification (idempotency)
-    const existingPayment = await db.PaymentHistory.findOne({
-      where: { razorpay_payment_id },
-    });
-    if (existingPayment) {
-      console.log(
-        `[PAYMENT] Payment ${razorpay_payment_id} already verified, skipping duplicate`,
-      );
-      return { success: true, message: "Payment already verified" };
-    }
-
-    // 2. Transaction to credit wallet and log record
+    // Transaction to verify idempotency + credit wallet atomically
     const amountInPaise = paymentData.amount || 0;
     const amountInRupees = amountInPaise / 100;
 
@@ -99,6 +88,20 @@ export const verifyRazorpayPaymentService = async (tenant_id, paymentData) => {
     const invoiceNumber = `INV-${dateStr}-${randomSuffix}`;
 
     await db.sequelize.transaction(async (t) => {
+      // 1. Check for duplicate payment INSIDE transaction (race-safe)
+      const existingPayment = await db.PaymentHistory.findOne({
+        where: { razorpay_payment_id },
+        transaction: t,
+        lock: t.LOCK.UPDATE,
+      });
+      if (existingPayment) {
+        console.log(
+          `[PAYMENT] Payment ${razorpay_payment_id} already verified, skipping duplicate`,
+        );
+        return;
+      }
+
+      // 2. Credit wallet
       let [wallet] = await db.Wallets.findOrCreate({
         where: { tenant_id },
         defaults: { tenant_id, balance: 0, currency: "INR" },
@@ -261,15 +264,7 @@ export const payInvoiceService = async (tenant_id, invoice_id, paymentData) => {
     throw new Error(`Invoice cannot be paid in status: ${invoice.status}`);
   }
 
-  // 3. Check for duplicate payment
-  const existingPayment = await db.PaymentHistory.findOne({
-    where: { razorpay_payment_id },
-  });
-  if (existingPayment) {
-    return { success: true, message: "Payment already verified" };
-  }
-
-  // 4. Verify Razorpay order amount matches invoice amount
+  // 3. Verify Razorpay order amount matches invoice amount (before transaction)
   try {
     const order = await razorpay.orders.fetch(razorpay_order_id);
     const invoiceAmountPaise = Math.round(parseFloat(invoice.amount) * 100);
@@ -284,8 +279,21 @@ export const payInvoiceService = async (tenant_id, invoice_id, paymentData) => {
     // If Razorpay API is unreachable, proceed with signature verification only
   }
 
-  // 5. Mark invoice as paid (atomic)
+  // 4. Mark invoice as paid (atomic with duplicate check)
   await db.sequelize.transaction(async (t) => {
+    // Check for duplicate payment INSIDE transaction (race-safe)
+    const existingPayment = await db.PaymentHistory.findOne({
+      where: { razorpay_payment_id },
+      transaction: t,
+      lock: t.LOCK.UPDATE,
+    });
+    if (existingPayment) {
+      console.log(
+        `[PAYMENT] Invoice payment ${razorpay_payment_id} already verified, skipping duplicate`,
+      );
+      return;
+    }
+
     await invoice.update(
       {
         status: "paid",
@@ -328,14 +336,12 @@ export const payInvoiceService = async (tenant_id, invoice_id, paymentData) => {
       amount: parseFloat(invoice.amount),
     });
 
-    // If the paid invoice was overdue, check if tenant is now unblocked
-    if (invoice.status === "overdue" || true) {
-      const remainingOverdue = await db.MonthlyInvoices.count({
-        where: { tenant_id, status: "overdue" },
-      });
-      if (remainingOverdue === 0) {
-        io.to(`tenant-${tenant_id}`).emit("access-restored", { tenant_id });
-      }
+    // Check if tenant is now unblocked (always check — invoice may have been overdue or freshly paid)
+    const remainingOverdue = await db.MonthlyInvoices.count({
+      where: { tenant_id, status: "overdue" },
+    });
+    if (remainingOverdue === 0) {
+      io.to(`tenant-${tenant_id}`).emit("access-restored", { tenant_id });
     }
   } catch (_) {}
 

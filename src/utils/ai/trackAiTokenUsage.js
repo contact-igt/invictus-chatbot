@@ -199,72 +199,75 @@ export const trackAiTokenUsage = async (tenant_id, source, response) => {
             );
           }
 
-          if (activeCycle) {
-            await activeCycle.increment(
-              {
-                total_ai_cost_inr: estimatedCostInr,
-                total_cost_inr: estimatedCostInr,
-              },
-              { transaction: t },
+          if (!activeCycle) {
+            console.error(
+              `[AI-TOKEN-TRACKER] Failed to create billing cycle for tenant ${tenant_id}. Postpaid cost not tracked.`,
             );
-
-            // Link usage to billing cycle
-            await usageRecord.update(
-              { billing_cycle_id: activeCycle.id },
-              { transaction: t },
-            );
-
-            // Create BillingLedger record for postpaid AI usage
-            await db.BillingLedger.create(
-              {
-                tenant_id,
-                entry_type: "ai",
-                ai_token_usage_id: usageRecord.id,
-                billing_cycle_id: activeCycle.id,
-                category: "ai_usage",
-                total_cost_inr: estimatedCostInr,
-                markup_percent: appliedMarkup,
-                usd_to_inr_rate: usdToInr,
-                conversion_rate_used: usdToInr,
-                pricing_version: pricingVersion,
-              },
-              { transaction: t },
-            );
-
-            // Credit limit alerts
-            const updatedTotal =
-              parseFloat(activeCycle.total_cost_inr) + estimatedCostInr;
-            const creditLimit =
-              parseFloat(tenant?.postpaid_credit_limit) || 5000;
-
-            try {
-              const io = getIO();
-              if (updatedTotal >= creditLimit) {
-                io.to(`tenant-${tenant_id}`).emit("credit-limit-reached", {
-                  usage: updatedTotal,
-                  limit: creditLimit,
-                });
-              } else if (updatedTotal >= creditLimit * 0.8) {
-                io.to(`tenant-${tenant_id}`).emit("credit-limit-warning", {
-                  usage: updatedTotal,
-                  limit: creditLimit,
-                  percent: Math.round((updatedTotal / creditLimit) * 100),
-                });
-              }
-
-              io.to(`tenant-${tenant_id}`).emit("billing-update", {
-                type: "AI_TOKEN_USAGE",
-                tenant_id,
-                model,
-                source,
-                totalTokens: total_tokens,
-                costInr: estimatedCostInr,
-                billing_mode: "postpaid",
-                cycleUsage: updatedTotal,
-                timestamp: new Date(),
-              });
-            } catch (_) {}
+            return usageRecord;
           }
+          await activeCycle.increment(
+            {
+              total_ai_cost_inr: estimatedCostInr,
+              total_cost_inr: estimatedCostInr,
+            },
+            { transaction: t },
+          );
+
+          // Link usage to billing cycle
+          await usageRecord.update(
+            { billing_cycle_id: activeCycle.id },
+            { transaction: t },
+          );
+
+          // Create BillingLedger record for postpaid AI usage
+          await db.BillingLedger.create(
+            {
+              tenant_id,
+              entry_type: "ai",
+              ai_token_usage_id: usageRecord.id,
+              billing_cycle_id: activeCycle.id,
+              category: "ai_usage",
+              total_cost_inr: estimatedCostInr,
+              markup_percent: appliedMarkup,
+              usd_to_inr_rate: usdToInr,
+              conversion_rate_used: usdToInr,
+              pricing_version: pricingVersion,
+            },
+            { transaction: t },
+          );
+
+          // Credit limit alerts
+          const updatedTotal =
+            parseFloat(activeCycle.total_cost_inr) + estimatedCostInr;
+          const creditLimit = parseFloat(tenant?.postpaid_credit_limit) || 5000;
+
+          try {
+            const io = getIO();
+            if (updatedTotal >= creditLimit) {
+              io.to(`tenant-${tenant_id}`).emit("credit-limit-reached", {
+                usage: updatedTotal,
+                limit: creditLimit,
+              });
+            } else if (updatedTotal >= creditLimit * 0.8) {
+              io.to(`tenant-${tenant_id}`).emit("credit-limit-warning", {
+                usage: updatedTotal,
+                limit: creditLimit,
+                percent: Math.round((updatedTotal / creditLimit) * 100),
+              });
+            }
+
+            io.to(`tenant-${tenant_id}`).emit("billing-update", {
+              type: "AI_TOKEN_USAGE",
+              tenant_id,
+              model,
+              source,
+              totalTokens: total_tokens,
+              costInr: estimatedCostInr,
+              billing_mode: "postpaid",
+              cycleUsage: updatedTotal,
+              timestamp: new Date(),
+            });
+          } catch (_) {}
 
           console.log(
             `[AI-TOKEN-TRACKER] POSTPAID tracked ${model} for tenant ${tenant_id}: ₹${estimatedCostInr.toFixed(6)} (${total_tokens} tokens).`,

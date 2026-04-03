@@ -61,7 +61,11 @@ export const getInvoiceDetailController = async (req, res) => {
     }
 
     const { id } = req.params;
-    const result = await getInvoiceDetailService(tenant_id, parseInt(id));
+    // Management without tenant_id: look up invoice without tenant scoping
+    const result =
+      isManagement && !tenant_id
+        ? await getInvoiceDetailService(null, parseInt(id))
+        : await getInvoiceDetailService(tenant_id, parseInt(id));
     res.json({ success: true, data: result });
   } catch (error) {
     console.error("[INVOICE] getInvoiceDetail error:", error.message);
