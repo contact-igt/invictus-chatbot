@@ -199,6 +199,15 @@ export const sendWhatsAppTemplate = async (
 
   const { phone_number_id, access_token } = rows[0];
   console.log("components", JSON.stringify(components, null, 2));
+
+  // Guard against null/empty language code — default to "en" as safe fallback
+  const resolvedLanguageCode = languageCode || "en";
+  if (!languageCode) {
+    console.warn(
+      `[SEND-TEMPLATE] languageCode is null/empty for template "${templateName}", defaulting to "en"`,
+    );
+  }
+
   const payload = {
     messaging_product: "whatsapp",
     to,
@@ -206,7 +215,7 @@ export const sendWhatsAppTemplate = async (
     template: {
       name: templateName,
       language: {
-        code: languageCode,
+        code: resolvedLanguageCode,
       },
       components: components || [],
     },

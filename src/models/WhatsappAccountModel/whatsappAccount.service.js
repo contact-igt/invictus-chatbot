@@ -75,47 +75,51 @@ import { tableNames } from "../../database/tableName.js";
 import axios from "axios";
 
 /**
- * Tier label map: Meta messaging_limit_tier → human-readable UI label
+ * Tier label map: Meta whatsapp_business_manager_messaging_limit → UI label + daily unique-user limit
+ * Source of truth: WABA-level (portfolio), shared across all phone numbers.
+ * Updated for Meta's 2025+ tier model.
  */
 export const META_TIER_CONFIG = {
   TIER_NOT_SET: {
     name: "Trial",
     limit: 250,
+    upgradeHint: "Send 2,000 unique users in 30 days OR verify your business",
   },
-  TIER_50: {
-    name: "Tier 1",
-    limit: 1000,
-  },
-  TIER_250: {
-    name: "Tier 2",
-    limit: 10000,
-  },
-  TIER_1K: {
-    name: "Tier 3",
-    limit: 100000,
+  TIER_2K: {
+    name: "Standard",
+    limit: 2000,
+    upgradeHint: "Reach 1,000 unique users in last 7 days & maintain GREEN quality",
   },
   TIER_10K: {
-    name: "Tier 4",
-    limit: "Unlimited",
+    name: "Growth",
+    limit: 10000,
+    upgradeHint: "Reach 5,000 unique users in last 7 days & maintain GREEN quality",
   },
   TIER_100K: {
-    name: "Tier 4",
-    limit: "Unlimited",
+    name: "Scale",
+    limit: 100000,
+    upgradeHint: "Reach 50,000 unique users in last 7 days & maintain GREEN quality",
+  },
+  TIER_UNLIMITED: {
+    name: "Unlimited",
+    limit: Infinity,
+    upgradeHint: null,
   },
 };
 
 /**
- * Calls Meta Graph API to fetch quality_rating and messaging_limit_tier
- * for the tenant's WhatsApp phone number, then saves them to the DB.
+ * Syncs quality_rating and messaging limit tier from Meta for the tenant's phone number.
  *
- * Meta API:
- *   GET https://graph.facebook.com/v19.0/{phone_number_id}
- *       ?fields=display_phone_number,quality_rating,messaging_limit_tier
- *       &access_token={access_token}
+ * Meta API (v25.0+):
+ *   GET https://graph.facebook.com/v25.0/{phone_number_id}
+ *       ?fields=display_phone_number,quality_rating,whatsapp_business_manager_messaging_limit
+ *
+ * The tier is now PORTFOLIO-LEVEL (WABA), shared across ALL phone numbers.
+ * Field: whatsapp_business_manager_messaging_limit (replaces deprecated messaging_limit_tier)
  *
  * Call this:
- *   - When a tenant activates their WABA (already done in activate controller)
- *   - On GET /whatsapp-account (to refresh on page load)
+ *   - When a tenant activates their WABA
+ *   - On GET /whatsapp-account (background refresh on page load)
  *   - Via a scheduled cron (e.g., every 6 hours)
  */
 export const syncWabaMetaInfoService = async (tenant_id) => {
@@ -131,30 +135,30 @@ export const syncWabaMetaInfoService = async (tenant_id) => {
       throw new Error("No active WhatsApp account found for this tenant.");
     }
 
-    // 2. Call Meta Graph API
+    // 2. Call Meta Graph API — use new field whatsapp_business_manager_messaging_limit
     const metaResponse = await axios.get(
-      `https://graph.facebook.com/v19.0/${account.phone_number_id}`,
+      `https://graph.facebook.com/v25.0/${account.phone_number_id}`,
       {
         params: {
           fields:
-            "display_phone_number,quality_rating,messaging_limit_tier,code_verification_status",
+            "display_phone_number,quality_rating,whatsapp_business_manager_messaging_limit,code_verification_status",
           access_token: account.access_token,
         },
         timeout: 8000,
       },
     );
 
-    const { quality_rating, messaging_limit_tier } = metaResponse.data;
+    const { quality_rating, whatsapp_business_manager_messaging_limit } = metaResponse.data;
 
     // 3. Map Meta values to DB-friendly values
     const qualityForDb = ["GREEN", "YELLOW", "RED"].includes(quality_rating)
       ? quality_rating
       : "GREEN";
 
-    const tierRaw = messaging_limit_tier || "TIER_NOT_SET";
-    console.log("tierRaw", tierRaw);
+    // whatsapp_business_manager_messaging_limit returns values like TIER_NOT_SET, TIER_2K, TIER_10K, etc.
+    const tierRaw = whatsapp_business_manager_messaging_limit || "TIER_NOT_SET";
     const tierLabel = META_TIER_CONFIG[tierRaw] ? tierRaw : "TIER_NOT_SET";
-    console.log("tierLabel", tierLabel);
+    console.log(`[WABA Sync] tier=${tierLabel} (raw: ${tierRaw}), quality=${qualityForDb}`);
 
     // 4. Update the WhatsappAccount row
     await db.Whatsappaccount.update(
@@ -165,7 +169,7 @@ export const syncWabaMetaInfoService = async (tenant_id) => {
     return {
       quality: qualityForDb,
       tier: tierLabel,
-      raw_tier: messaging_limit_tier,
+      raw_tier: tierRaw,
     };
   } catch (err) {
     // Non-blocking: log but don't crash — dashboard still works with DB fallback values

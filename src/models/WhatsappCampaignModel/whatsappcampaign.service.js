@@ -152,10 +152,16 @@ export const createCampaignService = async (tenant_id, data, created_by) => {
     });
     if (!account) throw new Error("WhatsApp account not found or deactivated.");
 
-    let limit = 1000;
-    if (account.tier === "TIER_10K") limit = 10000;
-    else if (account.tier === "TIER_100K") limit = 100000;
-    else if (account.tier === "TIER_UNLIMITED") limit = Infinity;
+    // Tier limits are WABA-level (portfolio), shared across all phone numbers.
+    // Counted as unique users (by contact_id) per 24h, not total messages.
+    const tierLimits = {
+      TIER_NOT_SET: 250,
+      TIER_2K: 2000,
+      TIER_10K: 10000,
+      TIER_100K: 100000,
+      TIER_UNLIMITED: Infinity,
+    };
+    const limit = tierLimits[account.tier] ?? 250;
 
     if (limit !== Infinity) {
       const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);

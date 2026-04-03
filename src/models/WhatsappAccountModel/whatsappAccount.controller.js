@@ -9,6 +9,7 @@ import {
   syncWabaMetaInfoService,
   subscribeToWebhookFieldsService,
   validateMetaSubscriptionService,
+  META_TIER_CONFIG,
 } from "./whatsappAccount.service.js";
 import { missingFieldsChecker } from "../../utils/helpers/missingFields.js";
 
@@ -342,6 +343,43 @@ export const getWhatsappAccountController = async (req, res) => {
 
     return res.status(200).send({
       data: account,
+    });
+  } catch (err) {
+    return res.status(500).send({
+      error: err.message,
+    });
+  }
+};
+
+export const getTierLimitController = async (req, res) => {
+  try {
+    const tenant_id = req.user.tenant_id;
+
+    const account = await getWhatsappAccountByTenantService(tenant_id);
+
+    if (!account) {
+      return res.status(404).send({ message: "WhatsApp account not found" });
+    }
+
+    // Trigger background sync so data stays fresh without blocking the response
+    syncWabaMetaInfoService(tenant_id).catch((e) =>
+      console.error("[Tier Sync] Background sync failed:", e.message),
+    );
+
+    const tierKey = account.tier || "TIER_NOT_SET";
+    const tierConfig = META_TIER_CONFIG[tierKey] || META_TIER_CONFIG["TIER_NOT_SET"];
+
+    return res.status(200).send({
+      data: {
+        tier_key: tierKey,
+        tier_name: tierConfig.name,
+        // Limit is unique users per 24h across the entire WABA (portfolio-level)
+        daily_limit: tierConfig.limit === Infinity ? "Unlimited" : tierConfig.limit,
+        upgrade_hint: tierConfig.upgradeHint,
+        quality: account.quality || "GREEN",
+        phone_number: account.whatsapp_number,
+        waba_id: account.waba_id,
+      },
     });
   } catch (err) {
     return res.status(500).send({
