@@ -227,6 +227,13 @@ export const sendTemplateMessageController = async (req, res) => {
       return res.status(404).send({ message: "Template not found" });
     }
 
+    // Check template approval status
+    if (template.status !== "APPROVED" && template.status !== "approved") {
+      return res.status(400).send({
+        message: `Template is not approved (current status: ${template.status}). Only approved templates can be sent.`,
+      });
+    }
+
     // 2. Render content for DB
     const messageContent = await renderTemplateContent(template_id, components);
 
@@ -375,6 +382,30 @@ export const sendTemplateMessageController = async (req, res) => {
       message: "Template sent successfully",
     });
   } catch (err) {
+    // Error 132001: template name/language not found on Meta
+    // This happens when the template was deleted, paused, or its language changed on Meta
+    // but the local DB still shows it as approved.
+    if (err?.message?.includes("132001")) {
+      try {
+        await db.sequelize.query(
+          `UPDATE ${tableNames.WHATSAPP_TEMPLATE} SET status = 'pending' WHERE template_id = ? AND tenant_id = ?`,
+          { replacements: [template_id, tenant_id] },
+        );
+        console.warn(
+          `[SEND-TEMPLATE] 132001 — template "${template_id}" marked as pending. Template may have been deleted or modified on Meta.`,
+        );
+      } catch (dbErr) {
+        console.error(
+          "[DB] Failed to update template status after 132001:",
+          dbErr.message,
+        );
+      }
+      return res.status(400).send({
+        message:
+          "This template no longer exists on Meta or its language/name has changed. Please go to Templates and sync your templates to refresh their status, then try again.",
+      });
+    }
+
     const isMetaError = err?.message?.startsWith("Meta API Error:");
     return res.status(isMetaError ? 400 : 500).send({
       message: err?.message || "Failed to send template message",

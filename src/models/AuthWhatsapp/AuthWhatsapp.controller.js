@@ -30,8 +30,7 @@ import {
   getTenantSettingsService,
   updateTenantWebhookStatusService,
 } from "../TenantModel/tenant.service.js";
-import { classifyResponse } from "../../utils/ai/responseClassifier.js";
-import { handleClassification } from "../../utils/ai/classificationHandler.js";
+
 import db from "../../database/index.js";
 import {
   createContactService,
@@ -582,11 +581,11 @@ export const receiveMessage = async (req, res) => {
         // AI will respond — send typing indicator now
         sendTypingIndicator(tenant_id, phone_number_id, phone, messageId);
 
-        // Check wallet status before AI processing
-        const walletCheck = await canUseAI(tenant_id);
+        // Check wallet status before AI processing (pass small estimated cost for prepaid check)
+        const walletCheck = await canUseAI(tenant_id, 0.5);
         if (!walletCheck.allowed) {
           console.log(
-            `[WEBHOOK] Wallet suspended for tenant ${tenant_id}. Status: ${walletCheck.status}, Balance: ₹${walletCheck.balance?.toFixed(2)}`,
+            `[WEBHOOK] Wallet blocked for tenant ${tenant_id}. Mode: ${walletCheck.billing_mode}, Balance: ₹${walletCheck.balance?.toFixed(2)}`,
           );
           // Send suspension fallback message to customer
           const suspensionMsg = await getSuspensionMessage(tenant_id);
@@ -608,7 +607,7 @@ export const receiveMessage = async (req, res) => {
           ioInst.to(`tenant-${tenant_id}`).emit("wallet-suspended", {
             tenant_id,
             balance: walletCheck.balance,
-            status: walletCheck.status,
+            billing_mode: walletCheck.billing_mode,
             message: walletCheck.reason,
           });
           return;
@@ -644,6 +643,47 @@ export const receiveMessage = async (req, res) => {
         const messageToSend =
           finalReply && finalReply.trim() ? finalReply.trim() : fallback;
 
+        // Send to WhatsApp FIRST — before saving the bot message.
+        // This ensures that if the access token is invalid we do NOT create a
+        // ghost message in the live-chat or trigger any downstream billing.
+        let botMsgResponse = null;
+        try {
+          botMsgResponse = await sendWhatsAppMessage(
+            tenant_id,
+            phone,
+            messageToSend,
+          );
+        } catch (sendErr) {
+          if (sendErr.isTokenError) {
+            console.error(
+              `[WEBHOOK] Access token error for tenant ${tenant_id} — aborting bot reply, live-chat display skipped`,
+            );
+            // Clear typing indicator on dashboard
+            const ioInst = getIO();
+            ioInst
+              .to(`tenant-${tenant_id}`)
+              .emit("ai-typing", { tenant_id, phone, status: false });
+            // Notify dashboard so the admin knows to refresh the token
+            ioInst.to(`tenant-${tenant_id}`).emit("whatsapp-token-error", {
+              tenant_id,
+              message: sendErr.message,
+              timestamp: new Date().toISOString(),
+            });
+            return; // Skip message save, socket emit, tag handler
+          }
+          // Non-token send error — log and fall through to still save the message
+          console.error(
+            "[WHATSAPP-SEND] Failed to send reply:",
+            sendErr.message,
+          );
+          import("fs").then((fs) => {
+            fs.appendFileSync(
+              "whatsapp_send_error.log",
+              `[${new Date().toISOString()}] To: ${phone} | Msg: ${messageToSend} | Error: ${sendErr.message}\n`,
+            );
+          });
+        }
+
         const savedBotMsg = await createUserMessageService(
           tenant_id,
           contactsaved?.contact_id,
@@ -677,22 +717,6 @@ export const receiveMessage = async (req, res) => {
           status: "sent",
           sender: "bot",
           created_at: new Date(),
-        });
-
-        // Send to WhatsApp and capture WAMID
-        const botMsgResponse = await sendWhatsAppMessage(
-          tenant_id,
-          phone,
-          messageToSend,
-        ).catch((err) => {
-          console.error("[WHATSAPP-SEND] Failed to send reply:", err.message);
-          import("fs").then((fs) => {
-            fs.appendFileSync(
-              "whatsapp_send_error.log",
-              `[${new Date().toISOString()}] To: ${phone} | Msg: ${messageToSend} | Error: ${err.message}\n`,
-            );
-          });
-          return null;
         });
 
         // Update bot message with WAMID for status tracking
@@ -733,45 +757,6 @@ export const receiveMessage = async (req, res) => {
             messageToSend,
           );
         }
-
-        // Non-blocking classification — runs AFTER reply is already sent to user
-        setImmediate(async () => {
-          try {
-            const classification = await classifyResponse(
-              text,
-              messageToSend,
-              tenant_id,
-            );
-
-            // Honor primary AI tag hints
-            if (
-              aiResult?.tagDetected === "MISSING_KNOWLEDGE" &&
-              classification.category !== "MISSING_KNOWLEDGE"
-            ) {
-              classification.category = "MISSING_KNOWLEDGE";
-              classification.reason =
-                aiResult.tagPayload || classification.reason;
-            } else if (
-              aiResult?.tagDetected === "OUT_OF_SCOPE" &&
-              classification.category !== "OUT_OF_SCOPE"
-            ) {
-              classification.category = "OUT_OF_SCOPE";
-              classification.reason =
-                aiResult.tagPayload || classification.reason;
-            }
-
-            await handleClassification(classification, {
-              tenant_id,
-              userMessage: text,
-              aiResponse: messageToSend,
-            });
-          } catch (classifierError) {
-            console.error(
-              "[CLASSIFIER] Background classification error:",
-              classifierError.message,
-            );
-          }
-        });
       } catch (err) {
         console.error("Background AI error:", err);
       } finally {
@@ -802,6 +787,16 @@ export const receiveMessage = async (req, res) => {
           if (reLock) {
             setImmediate(async () => {
               try {
+                // Check wallet before processing queued message
+                const queuedWalletCheck = await canUseAI(tenant_id, 0.5);
+                if (!queuedWalletCheck.allowed) {
+                  console.log(
+                    `[WEBHOOK] Wallet blocked for queued msg, tenant ${tenant_id}`,
+                  );
+                  await unlockChat(tenant_id, phone_number_id, phone);
+                  return;
+                }
+
                 sendTypingIndicator(
                   tenant_id,
                   phone_number_id,
@@ -825,6 +820,41 @@ export const receiveMessage = async (req, res) => {
                     : fallback;
 
                 if (messageToSend) {
+                  // Send to WhatsApp FIRST — abort if token error
+                  let botMsgResponse = null;
+                  try {
+                    botMsgResponse = await sendWhatsAppMessage(
+                      tenant_id,
+                      phone,
+                      messageToSend,
+                    );
+                  } catch (sendErr) {
+                    if (sendErr.isTokenError) {
+                      console.error(
+                        `[WEBHOOK] Access token error (queued msg) for tenant ${tenant_id} — aborting bot reply`,
+                      );
+                      const io = getIO();
+                      io.to(`tenant-${tenant_id}`).emit("ai-typing", {
+                        tenant_id,
+                        phone,
+                        status: false,
+                      });
+                      io.to(`tenant-${tenant_id}`).emit(
+                        "whatsapp-token-error",
+                        {
+                          tenant_id,
+                          message: sendErr.message,
+                          timestamp: new Date().toISOString(),
+                        },
+                      );
+                      return;
+                    }
+                    console.error(
+                      "[WEBHOOK] Queued send failed:",
+                      sendErr.message,
+                    );
+                  }
+
                   const savedBotMsg = await createUserMessageService(
                     tenant_id,
                     pending.contact_id,
@@ -856,15 +886,6 @@ export const receiveMessage = async (req, res) => {
                     status: "sent",
                     sender: "bot",
                     created_at: new Date(),
-                  });
-
-                  const botMsgResponse = await sendWhatsAppMessage(
-                    tenant_id,
-                    phone,
-                    messageToSend,
-                  ).catch((err) => {
-                    console.error("[WEBHOOK] Queued send failed:", err.message);
-                    return null;
                   });
 
                   if (botMsgResponse?.wamid && savedBotMsg?.id) {

@@ -1,6 +1,7 @@
 import bcrypt from "bcrypt";
 import db from "../../database/index.js";
 import { tableNames } from "../../database/tableName.js";
+import { DEFAULT_USD_TO_INR } from "../../config/billing.config.js";
 
 export const registerManagementService = async (
   management_id,
@@ -392,7 +393,7 @@ export const createAiPricingRuleService = async (
   input_rate,
   output_rate,
   markup_percent = 0,
-  usd_to_inr_rate = 85,
+  usd_to_inr_rate = DEFAULT_USD_TO_INR,
   description = null,
   recommended_for = "both",
   category = "mid-tier",

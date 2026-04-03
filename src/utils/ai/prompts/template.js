@@ -29,7 +29,8 @@ CATEGORY: MARKETING (Promotional Messages)
 CATEGORY: AUTHENTICATION (Verification Messages)
 - Purpose: Send one-time passwords or verification codes.
 - Format: Keep it very short. e.g. "Your verification code is {{1}}. Do not share this code."
-- MUST NOT: Include any marketing or promotional content.`
+- MUST NOT: Include any marketing or promotional content.
+- MUST NOT: Start or end with a variable. Always wrap the variable with text.`
   };
 
   const categoryGuide = categoryGuidelines[focus] || categoryGuidelines['Utility'];
@@ -57,6 +58,7 @@ RULES:
 6. Meta requirements: Min 15 words total, OR 5 words per variable.
 7. Keep the message concise — WhatsApp templates work best under 160 words.
 8. Use line breaks for readability where appropriate.
+9. CRITICAL: Body text MUST NOT start or end with a variable placeholder like {{1}}. Always add text before the first variable and after the last variable. For example, write "Hello {{1}}, your order is confirmed." NOT "{{1}}, your order is confirmed." and NOT "Your order number is {{1}}"
 ${fixMode}
 `;
 };

@@ -3,6 +3,7 @@ import {
   authenticate,
   authorize,
 } from "../../middlewares/auth/authMiddlewares.js";
+import { requireAiAccess } from "../../middlewares/billing/billingAccessGuard.js";
 import {
   createWhatsappTemplateController,
   getTemplateByIdController,
@@ -79,7 +80,6 @@ router.get(
   getTemplateByIdController,
 );
 
-
 router.put(
   "/whatsapp-template/:template_id",
   authenticate,
@@ -101,6 +101,7 @@ router.post(
   "/whatsapp-template/generate-ai",
   authenticate,
   authorize({ user_type: "tenant", roles: tenantRoles }),
+  requireAiAccess,
   generateAiTemplateController,
 );
 

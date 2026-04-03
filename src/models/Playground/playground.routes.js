@@ -7,6 +7,7 @@ import {
   authenticate,
   authorize,
 } from "../../middlewares/auth/authMiddlewares.js";
+import { requireAiAccess } from "../../middlewares/billing/billingAccessGuard.js";
 
 const Router = express.Router();
 
@@ -16,6 +17,7 @@ Router.post(
   "/playground/chat",
   authenticate,
   authorize({ user_type: "tenant", roles: tenantRoles }),
+  requireAiAccess,
   playgroundChat,
 );
 

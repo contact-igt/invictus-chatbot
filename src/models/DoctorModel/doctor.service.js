@@ -5,6 +5,7 @@ import { generatePassword } from "../../utils/helpers/generatePassword.js";
 
 import bcrypt from "bcrypt";
 import { getTemplate } from "../../utils/email/templateLoader.js";
+import { sendEmail } from "../../utils/email/emailService.js";
 import {
   createTenantUserService,
   findTenantUserByEmailGloballyService,
@@ -163,7 +164,7 @@ export const createDoctorService = async (tenant_id, data) => {
         company_name: tenantData?.company_name || "Your Organization",
         email: data.email,
         password: password,
-        login_url: process.env.FRONTEND_URL,
+        login_url: `${process.env.FRONTEND_URL}/login`,
       });
 
       await sendEmail({

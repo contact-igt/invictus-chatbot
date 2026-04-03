@@ -22,6 +22,7 @@ export const createTenantService = async (
   profile,
   verify_token = null,
   ai_settings = null,
+  transaction = null,
 ) => {
   try {
     // Merge default AI settings with provided ones
@@ -39,28 +40,31 @@ export const createTenantService = async (
       ? { ...defaultAiSettings, ...ai_settings }
       : defaultAiSettings;
 
-    const result = await db.Tenants.create({
-      tenant_id,
-      company_name,
-      owner_name,
-      owner_email,
-      owner_country_code,
-      owner_mobile,
-      type,
-      status,
-      subscription_start_date,
-      subscription_end_date,
-      address,
-      city,
-      country,
-      state,
-      pincode,
-      max_users,
-      subscription_plan,
-      profile,
-      verify_token,
-      ai_settings: mergedAiSettings,
-    });
+    const result = await db.Tenants.create(
+      {
+        tenant_id,
+        company_name,
+        owner_name,
+        owner_email,
+        owner_country_code,
+        owner_mobile,
+        type,
+        status,
+        subscription_start_date,
+        subscription_end_date,
+        address,
+        city,
+        country,
+        state,
+        pincode,
+        max_users,
+        subscription_plan,
+        profile,
+        verify_token,
+        ai_settings: mergedAiSettings,
+      },
+      transaction ? { transaction } : undefined,
+    );
 
     return result;
   } catch (err) {
@@ -271,12 +275,17 @@ export const updateTenantService = async (
   }
 };
 
-export const updateTenantStatusService = async (status, tenant_id) => {
+export const updateTenantStatusService = async (
+  status,
+  tenant_id,
+  transaction = null,
+) => {
   const Query = `UPDATE ${tableNames?.TENANTS} SET status = ? WHERE tenant_id = ? AND is_deleted = ? `;
 
   try {
     const [result] = await db.sequelize.query(Query, {
       replacements: [status, tenant_id, 0],
+      ...(transaction && { transaction }),
     });
 
     return result;
@@ -301,7 +310,6 @@ export const softDeleteTenantService = async (tenant_id) => {
       tableNames.KNOWLEDGESOURCE,
       tableNames.KNOWLEDGECHUNKS,
       tableNames.AIPROMPT,
-      tableNames.AI_ANALYSIS_LOGS,
       tableNames.APPOINTMENTS,
       tableNames.LEADS,
       tableNames.LIVECHAT,
@@ -315,66 +323,21 @@ export const softDeleteTenantService = async (tenant_id) => {
     }
 
     // ── Hard-delete child records that have no is_deleted (orphan prevention) ──
+    // NOTE: These child records are left intact during soft-delete.
+    // Their parent records (templates, campaigns, doctors, contacts) are soft-deleted,
+    // making these children unreachable. They are only hard-deleted on permanent delete.
+    // This ensures full data recovery on restore.
 
-    // First, delete child records that reference parent IDs (not tenant_id directly)
-    // Template components, variables, sync logs → via template_id
+    // Now soft-delete tenant-scoped tables without is_deleted (mark via parent)
+    // Campaigns and WhatsApp accounts are soft-deleted via tenant scope
     await db.sequelize.query(
-      `DELETE FROM ${tableNames.WHATSAPP_TEMPLATE_COMPONENTS} WHERE template_id IN (SELECT template_id FROM ${tableNames.WHATSAPP_TEMPLATE} WHERE tenant_id = ?)`,
+      `UPDATE ${tableNames.WHATSAPP_CAMPAIGN} SET is_deleted = 1, deleted_at = NOW() WHERE tenant_id = ? AND is_deleted = 0`,
       { replacements: [tenant_id], transaction },
     );
     await db.sequelize.query(
-      `DELETE FROM ${tableNames.WHATSAPP_TEMPLATE_VARIABLES} WHERE template_id IN (SELECT template_id FROM ${tableNames.WHATSAPP_TEMPLATE} WHERE tenant_id = ?)`,
+      `UPDATE ${tableNames.WHATSAPP_ACCOUNT} SET is_deleted = 1, deleted_at = NOW() WHERE tenant_id = ? AND is_deleted = 0`,
       { replacements: [tenant_id], transaction },
     );
-    await db.sequelize.query(
-      `DELETE FROM ${tableNames.WHATSAPP_TEMPLATE_SYNC_LOGS} WHERE template_id IN (SELECT template_id FROM ${tableNames.WHATSAPP_TEMPLATE} WHERE tenant_id = ?)`,
-      { replacements: [tenant_id], transaction },
-    );
-
-    // Campaign recipients → via campaign_id
-    await db.sequelize.query(
-      `DELETE FROM ${tableNames.WHATSAPP_CAMPAIGN_RECIPIENT} WHERE campaign_id IN (SELECT campaign_id FROM ${tableNames.WHATSAPP_CAMPAIGN} WHERE tenant_id = ?)`,
-      { replacements: [tenant_id], transaction },
-    );
-
-    // Contact group members → via group_id
-    await db.sequelize.query(
-      `DELETE FROM ${tableNames.CONTACT_GROUP_MEMBERS} WHERE group_id IN (SELECT group_id FROM ${tableNames.CONTACT_GROUPS} WHERE tenant_id = ?)`,
-      { replacements: [tenant_id], transaction },
-    );
-
-    // Doctor availability & specializations → via doctor_id
-    await db.sequelize.query(
-      `DELETE FROM ${tableNames.DOCTOR_AVAILABILITY} WHERE doctor_id IN (SELECT doctor_id FROM ${tableNames.DOCTORS} WHERE tenant_id = ?)`,
-      { replacements: [tenant_id], transaction },
-    );
-    await db.sequelize.query(
-      `DELETE FROM ${tableNames.DOCTOR_SPECIALIZATIONS} WHERE doctor_id IN (SELECT doctor_id FROM ${tableNames.DOCTORS} WHERE tenant_id = ?)`,
-      { replacements: [tenant_id], transaction },
-    );
-
-    // Now delete tenant-scoped tables without is_deleted
-    const hardDeleteTables = [
-      tableNames.WHATSAPP_CAMPAIGN,
-      tableNames.WHATSAPP_ACCOUNT,
-      tableNames.MESSAGES,
-      tableNames.PROCESSEDMESSAGE,
-      tableNames.CHATLOCKS,
-      tableNames.AI_TOKEN_USAGE,
-      tableNames.MESSAGE_USAGE,
-      tableNames.BILLING_LEDGER,
-      tableNames.WALLET_TRANSACTIONS,
-      tableNames.WALLETS,
-      tableNames.OTP_VERIFICATIONS,
-      tableNames.TENANT_INVITATIONS,
-    ];
-
-    for (const table of hardDeleteTables) {
-      await db.sequelize.query(
-        `DELETE FROM ${table} WHERE tenant_id = ?`,
-        { replacements: [tenant_id], transaction },
-      );
-    }
 
     await transaction.commit();
     return true;
@@ -444,7 +407,6 @@ export const deleteTenantService = async (tenant_id) => {
       tableNames.KNOWLEDGESOURCE,
       tableNames.KNOWLEDGECHUNKS,
       tableNames.AIPROMPT,
-      tableNames.AI_ANALYSIS_LOGS,
       tableNames.AI_TOKEN_USAGE,
       tableNames.MESSAGE_USAGE,
       tableNames.BILLING_LEDGER,
@@ -457,10 +419,10 @@ export const deleteTenantService = async (tenant_id) => {
     ];
 
     for (const table of allTenantTables) {
-      await db.sequelize.query(
-        `DELETE FROM ${table} WHERE tenant_id = ?`,
-        { replacements: [tenant_id], transaction },
-      );
+      await db.sequelize.query(`DELETE FROM ${table} WHERE tenant_id = ?`, {
+        replacements: [tenant_id],
+        transaction,
+      });
     }
 
     await transaction.commit();
@@ -528,10 +490,11 @@ export const restoreTenantService = async (tenant_id) => {
       tableNames.KNOWLEDGESOURCE,
       tableNames.KNOWLEDGECHUNKS,
       tableNames.AIPROMPT,
-      tableNames.AI_ANALYSIS_LOGS,
       tableNames.APPOINTMENTS,
       tableNames.LEADS,
       tableNames.LIVECHAT,
+      tableNames.WHATSAPP_CAMPAIGN,
+      tableNames.WHATSAPP_ACCOUNT,
     ];
 
     for (const table of softDeleteTables) {
@@ -550,7 +513,7 @@ export const restoreTenantService = async (tenant_id) => {
 };
 
 export const activateTenantService = async (tenant_id) => {
-  const Query = `UPDATE ${tableNames?.TENANTS} SET status = ? WHERE tenant_id = ? AND is_deleted = ?`;
+  const Query = `UPDATE ${tableNames?.TENANTS} SET status = ? WHERE tenant_id = ? AND is_deleted = ? AND status IN ('inactive', 'invited')`;
 
   try {
     const values = ["active", tenant_id, 0];
@@ -616,25 +579,57 @@ export const getTenantInvitationListService = async () => {
 
 export const getOnboardedTenantListService = async () => {
   // Only return tenants that have completed full onboarding:
-  // 1. Tenant exists (email set)
+  // 1. Tenant exists and is not in 'invited' status
   // 2. Password set (tenant_users.password_hash is not null AND status = 'active')
   // 3. WhatsApp connected (whatsapp_accounts entry exists with status 'active' or 'verified')
   const query = `
     SELECT 
-      t.*,
-      wa.status as whatsapp_status,
-      wa.whatsapp_number,
-      tu.status as admin_status
+      t.tenant_id,
+      t.company_name,
+      t.owner_name,
+      t.owner_email,
+      t.owner_mobile,
+      t.owner_country_code,
+      t.type,
+      t.status,
+      t.subscription_plan,
+      t.subscription_end_date,
+      t.billing_mode,
+      t.created_at,
+      t.deleted_at,
+      (
+        SELECT wa_inner.whatsapp_number 
+        FROM ${tableNames.WHATSAPP_ACCOUNT} wa_inner 
+        WHERE wa_inner.tenant_id = t.tenant_id 
+          AND wa_inner.status IN ('active', 'verified') 
+          AND wa_inner.is_deleted = false 
+        ORDER BY wa_inner.created_at DESC 
+        LIMIT 1
+      ) as whatsapp_number,
+      (
+        SELECT wa_inner.status 
+        FROM ${tableNames.WHATSAPP_ACCOUNT} wa_inner 
+        WHERE wa_inner.tenant_id = t.tenant_id 
+          AND wa_inner.status IN ('active', 'verified') 
+          AND wa_inner.is_deleted = false 
+        ORDER BY wa_inner.created_at DESC 
+        LIMIT 1
+      ) as whatsapp_status
     FROM ${tableNames.TENANTS} t
     INNER JOIN ${tableNames.TENANT_USERS} tu ON t.tenant_id = tu.tenant_id 
       AND tu.role = 'tenant_admin' 
       AND tu.password_hash IS NOT NULL 
       AND tu.status = 'active'
       AND tu.is_deleted = false
-    INNER JOIN ${tableNames.WHATSAPP_ACCOUNT} wa ON t.tenant_id = wa.tenant_id 
-      AND wa.status IN ('active', 'verified')
-      AND wa.is_deleted = false
     WHERE t.is_deleted = false
+      AND t.status != 'invited'
+      AND EXISTS (
+        SELECT 1 FROM ${tableNames.WHATSAPP_ACCOUNT} wa 
+        WHERE wa.tenant_id = t.tenant_id 
+          AND wa.status IN ('active', 'verified') 
+          AND wa.is_deleted = false
+      )
+    GROUP BY t.tenant_id
     ORDER BY t.created_at DESC`;
 
   try {

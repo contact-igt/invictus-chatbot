@@ -37,6 +37,13 @@ export const PricingTable = (sequelize, Sequelize) => {
         defaultValue: 0,
       },
 
+      pricing_version: {
+        type: Sequelize.INTEGER,
+        allowNull: false,
+        defaultValue: 1,
+        comment: "Incremented on every rate/markup update",
+      },
+
       createdAt: {
         type: Sequelize.DATE,
         allowNull: false,

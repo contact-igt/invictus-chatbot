@@ -8,6 +8,7 @@ import {
   authenticate,
   authorize,
 } from "../../middlewares/auth/authMiddlewares.js";
+import { requireAiAccess } from "../../middlewares/billing/billingAccessGuard.js";
 
 const Router = express.Router();
 
@@ -38,6 +39,7 @@ Router.get(
     user_type: "tenant",
     roles: ["tenant_admin", "doctor", "staff", "agent"],
   }),
+  requireAiAccess,
   getWeeklySummaryController,
 );
 
@@ -54,6 +56,7 @@ Router.get(
     user_type: "tenant",
     roles: ["tenant_admin", "doctor", "staff", "agent"],
   }),
+  requireAiAccess,
   getContactWeeklySummaryController,
 );
 

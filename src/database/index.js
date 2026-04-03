@@ -24,7 +24,6 @@ import { WhatsappCampaignRecipientTable } from "./tables/WhatsappCampaignRecipie
 import { ContactGroupTable } from "./tables/ContactGroupTable/index.js";
 import { ContactGroupMemberTable } from "./tables/ContactGroupMemberTable/index.js";
 import { SequencesTable } from "./tables/SequencesTable/index.js";
-import { AiAnalysisLogTable } from "./tables/AiAnalysisLogTable/index.js";
 import { OtpVerificationTable } from "./tables/OtpVerificationTable/index.js";
 import { DoctorsTable } from "./tables/DoctorsTable/index.js";
 import { DoctorAvailabilityTable } from "./tables/DoctorAvailabilityTable/index.js";
@@ -39,6 +38,16 @@ import { WalletTransactionTable } from "./tables/WalletTransactionTable/index.js
 import { AiTokenUsageTable } from "./tables/AiTokenUsageTable/index.js";
 import { AiPricingTable } from "./tables/AiPricingTable/index.js";
 import { PaymentHistoryTable } from "./tables/PaymentHistoryTable/index.js";
+import { BookingSessionTable } from "./tables/BookingSessionTable/index.js";
+import { BillingCycleTable } from "./tables/BillingCycleTable/index.js";
+import { MonthlyInvoiceTable } from "./tables/MonthlyInvoiceTable/index.js";
+import { AdminAuditLogTable } from "./tables/AdminAuditLogTable/index.js";
+import { CurrencyRateTable } from "./tables/CurrencyRateTable/index.js";
+import { BillingSystemHealthTable } from "./tables/BillingSystemHealthTable/index.js";
+import { DailyUsageSummaryTable } from "./tables/DailyUsageSummaryTable/index.js";
+import { MonthlyUsageSummaryTable } from "./tables/MonthlyUsageSummaryTable/index.js";
+import { CronExecutionLogTable } from "./tables/CronExecutionLogTable/index.js";
+import { defineAssociations } from "./associations.js";
 
 const dbconfig =
   ServerEnvironmentConfig?.server?.line === "production"
@@ -111,7 +120,6 @@ db.ChatLocks = ChatLocksTable(sequelize, Sequelize);
 db.Leads = LeadsTable(sequelize, Sequelize);
 db.LiveChat = LiveChatTable(sequelize, Sequelize);
 db.Sequences = SequencesTable(sequelize, Sequelize);
-db.AiAnalysisLog = AiAnalysisLogTable(sequelize, Sequelize);
 db.OtpVerification = OtpVerificationTable(sequelize, Sequelize);
 db.Doctors = DoctorsTable(sequelize, Sequelize);
 db.DoctorAvailability = DoctorAvailabilityTable(sequelize, Sequelize);
@@ -126,11 +134,19 @@ db.WalletTransactions = WalletTransactionTable(sequelize, Sequelize);
 db.AiTokenUsage = AiTokenUsageTable(sequelize, Sequelize);
 db.AiPricing = AiPricingTable(sequelize, Sequelize);
 db.PaymentHistory = PaymentHistoryTable(sequelize, Sequelize);
+db.BillingCycles = BillingCycleTable(sequelize, Sequelize);
+db.MonthlyInvoices = MonthlyInvoiceTable(sequelize, Sequelize);
+db.AdminAuditLog = AdminAuditLogTable(sequelize, Sequelize);
+db.CurrencyRates = CurrencyRateTable(sequelize, Sequelize);
+db.BillingSystemHealth = BillingSystemHealthTable(sequelize, Sequelize);
+db.DailyUsageSummary = DailyUsageSummaryTable(sequelize, Sequelize);
+db.MonthlyUsageSummary = MonthlyUsageSummaryTable(sequelize, Sequelize);
+db.CronExecutionLog = CronExecutionLogTable(sequelize, Sequelize);
+// db.BookingSession = BookingSessionTable(sequelize, Sequelize);
 
 // ========================================
 // IMPORT AND DEFINE ASSOCIATIONS
 // ========================================
-import { defineAssociations } from "./associations.js";
 defineAssociations(db);
 
 export default db;

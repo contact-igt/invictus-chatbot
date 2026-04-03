@@ -14,16 +14,15 @@ import TenantRouter from "./models/TenantModel/tenant.routes.js";
 import WhatsappAccountRouter from "./models/WhatsappAccountModel/whatsappAccount.routes.js";
 import ContactRouter from "./models/ContactsModel/contacts.routes.js";
 import LeadRouter from "./models/LeadsModel/leads.routes.js";
-import LiveChatRouter from "./models/LiveChatModel/livechat.routes.js"
+import LiveChatRouter from "./models/LiveChatModel/livechat.routes.js";
 import TenantInvitationRouter from "./models/TenantInvitationModel/tenantinvitation.routes.js";
 import TenantUserRouter from "./models/TenantUserModel/tenantuser.routes.js";
-import WhatsappTemplateRouter from "./models/WhatsappTemplateModel/whatsapptemplate.routes.js"
-import WhatsappCampaignRouter from "./models/WhatsappCampaignModel/whatsappcampaign.routes.js"
-import ContactGroupRouter from "./models/ContactGroupModel/contactGroup.routes.js"
+import WhatsappTemplateRouter from "./models/WhatsappTemplateModel/whatsapptemplate.routes.js";
+import WhatsappCampaignRouter from "./models/WhatsappCampaignModel/whatsappcampaign.routes.js";
+import ContactGroupRouter from "./models/ContactGroupModel/contactGroup.routes.js";
 import { startCampaignSchedulerService } from "./models/WhatsappCampaignModel/whatsappcampaign.service.js";
 import { startLeadHeatDecayCronService } from "./models/LeadsModel/leads.service.js";
 import { startLiveChatCleanupService } from "./models/LiveChatModel/livechat.service.js";
-import AiAnalysisLogRouter from "./models/AiAnalysisLog/aiAnalysisLog.routes.js";
 import DoctorRouter from "./models/DoctorModel/doctor.routes.js";
 import SpecializationRouter from "./models/SpecializationModel/specialization.routes.js";
 import AppointmentRouter from "./models/AppointmentModel/appointment.routes.js";
@@ -34,18 +33,29 @@ import BillingRouter from "./models/BillingModel/billing.routes.js";
 import WhatsappOtpRouter from "./models/OtpVerificationModel/otpverification.routes.js";
 import PaymentRouter from "./models/PaymentModel/payment.routes.js";
 import SuperAdminDashboardRouter from "./models/SuperAdminDashboardModel/superAdminDashboard.routes.js";
-
+import { runBillingCycleCron } from "./models/BillingModel/billingCycle.service.js";
+import { checkHealthAlerts } from "./utils/billing/billingHealthMonitor.js";
+import { runDailyReconciliation } from "./utils/billing/paymentReconciler.js";
+import { initBillingQueue } from "./utils/billing/billingQueue.js";
+import cron from "node-cron";
 
 dns.setDefaultResultOrder("ipv4first");
 
 const app = express();
 
-app.use(cors({
-  origin: "*",
-  methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "x-meta-token", "ngrok-skip-browser-warning"],
-  credentials: false,
-}));
+app.use(
+  cors({
+    origin: "*",
+    methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "x-meta-token",
+      "ngrok-skip-browser-warning",
+    ],
+    credentials: false,
+  }),
+);
 
 // Handle preflight requests explicitly
 app.options("*", cors());
@@ -67,12 +77,7 @@ app.use((req, res, next) => {
 
 app.use("/api/management", SuperAdminDashboardRouter, ManagementRouter);
 
-app.use(
-  "/api/tenant",
-  TenantRouter,
-  TenantUserRouter,
-  TenantInvitationRouter
-);
+app.use("/api/tenant", TenantRouter, TenantUserRouter, TenantInvitationRouter);
 
 app.use(
   "/api/whatsapp",
@@ -87,7 +92,6 @@ app.use(
   WhatsappTemplateRouter,
   WhatsappCampaignRouter,
   ContactGroupRouter,
-  AiAnalysisLogRouter,
   DoctorRouter,
   SpecializationRouter,
   AppointmentRouter,
@@ -98,11 +102,9 @@ app.use(
   PaymentRouter,
 );
 
-
 app.get("/", (req, res) => {
   res.json({ status: "OK" });
 });
-
 
 await db.sequelize.sync({ alter: true });
 console.log("DB connected");
@@ -112,6 +114,23 @@ startLiveChatCleanupService();
 startCampaignSchedulerService();
 startAppointmentSchedulerService();
 
+// Billing system crons
+cron.schedule("5 0 * * *", () => {
+  console.log("[CRON] Running billing cycle cron...");
+  runBillingCycleCron();
+}); // Daily at 00:05 UTC
+
+cron.schedule("*/15 * * * *", () => {
+  checkHealthAlerts();
+}); // Every 15 minutes
+
+cron.schedule("0 2 * * *", () => {
+  console.log("[CRON] Running daily reconciliation...");
+  runDailyReconciliation();
+}); // Daily at 02:00 UTC
+
+// Initialize billing queue (optional — requires Redis)
+initBillingQueue();
 
 const PORT = process.env.PORT || 8000;
 const server = http.createServer(app);

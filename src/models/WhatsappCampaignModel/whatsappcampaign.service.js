@@ -19,6 +19,8 @@ import {
 } from "../LiveChatModel/livechat.service.js";
 import cron from "node-cron";
 import { generateWhatsAppOTPService } from "../OtpVerificationModel/otpverification.service.js";
+import { canSendCampaign } from "../../utils/billing/walletGuard.js";
+import { estimateMetaCost } from "../../utils/billing/costEstimator.js";
 
 /**
  * Creates a new campaign and populates its recipients.
@@ -150,10 +152,16 @@ export const createCampaignService = async (tenant_id, data, created_by) => {
     });
     if (!account) throw new Error("WhatsApp account not found or deactivated.");
 
-    let limit = 1000;
-    if (account.tier === "TIER_10K") limit = 10000;
-    else if (account.tier === "TIER_100K") limit = 100000;
-    else if (account.tier === "TIER_UNLIMITED") limit = Infinity;
+    // Tier limits are WABA-level (portfolio), shared across all phone numbers.
+    // Counted as unique users (by contact_id) per 24h, not total messages.
+    const tierLimits = {
+      TIER_NOT_SET: 250,
+      TIER_2K: 2000,
+      TIER_10K: 10000,
+      TIER_100K: 100000,
+      TIER_UNLIMITED: Infinity,
+    };
+    const limit = tierLimits[account.tier] ?? 250;
 
     if (limit !== Infinity) {
       const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
@@ -310,7 +318,11 @@ export const executeCampaignBatchService = async (
 ) => {
   try {
     const campaign = await db.WhatsappCampaigns.findOne({
-      where: { campaign_id, tenant_id, status: ["active", "scheduled"] },
+      where: {
+        campaign_id,
+        tenant_id,
+        status: ["active", "scheduled", "paused"],
+      },
       include: [
         {
           model: db.WhatsappTemplates,
@@ -384,8 +396,40 @@ export const executeCampaignBatchService = async (
       return { finished: true };
     }
 
-    // Update campaign status to active if it was scheduled or draft
-    if (campaign.status === "scheduled" || campaign.status === "draft") {
+    // --- Per-batch billing check: estimate cost for this batch ---
+    try {
+      const category = (
+        campaign.template?.category || "marketing"
+      ).toLowerCase();
+      const cost = await estimateMetaCost(category, "Global");
+      const batchCost = cost.totalCostInr * recipients.length;
+      const billingCheck = await canSendCampaign(tenant_id, batchCost);
+
+      if (!billingCheck.allowed) {
+        console.warn(
+          `[CAMPAIGN-BILLING] Campaign ${campaign_id} paused — ${billingCheck.reason}`,
+        );
+        await campaign.update({ status: "paused" });
+        return {
+          finished: true,
+          paused: true,
+          reason: billingCheck.reason,
+        };
+      }
+    } catch (billingErr) {
+      console.error(
+        `[CAMPAIGN-BILLING] Check failed for campaign ${campaign_id}:`,
+        billingErr.message,
+      );
+      // Fail open — don't block on billing check error
+    }
+
+    // Update campaign status to active if it was scheduled, draft, or paused
+    if (
+      campaign.status === "scheduled" ||
+      campaign.status === "draft" ||
+      campaign.status === "paused"
+    ) {
       await campaign.update({ status: "active" });
     }
 
@@ -712,9 +756,9 @@ export const executeCampaignBatchService = async (
               if (Array.isArray(buttons)) {
                 buttons.forEach((btn) => {
                   let btnLabel = btn.text;
-                  if (btn.type === 'URL' && btn.url) {
+                  if (btn.type === "URL" && btn.url) {
                     btnLabel += ` (${btn.url})`;
-                  } else if (btn.type === 'PHONE_NUMBER' && btn.phone_number) {
+                  } else if (btn.type === "PHONE_NUMBER" && btn.phone_number) {
                     btnLabel += ` (${btn.phone_number})`;
                   }
                   personalizedMessage += `\n[Button: ${btnLabel}]`;
@@ -728,9 +772,18 @@ export const executeCampaignBatchService = async (
           // Derive MIME type from filename for document campaigns
           let campaignMediaMimeType = null;
           if (finalMessageType === "document" && campaign.header_file_name) {
-            const ext = campaign.header_file_name.split('.').pop()?.toLowerCase();
-            const mimeMap = { pdf: 'application/pdf', doc: 'application/msword', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', xls: 'application/vnd.ms-excel', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' };
-            campaignMediaMimeType = mimeMap[ext] || 'application/octet-stream';
+            const ext = campaign.header_file_name
+              .split(".")
+              .pop()
+              ?.toLowerCase();
+            const mimeMap = {
+              pdf: "application/pdf",
+              doc: "application/msword",
+              docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+              xls: "application/vnd.ms-excel",
+              xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            };
+            campaignMediaMimeType = mimeMap[ext] || "application/octet-stream";
           }
 
           // 6. Log to Messages Table
@@ -749,7 +802,9 @@ export const executeCampaignBatchService = async (
             campaignMediaMimeType,
             "sent",
             campaign.template.template_name,
-            finalMessageType === "document" ? (campaign.header_file_name || null) : null,
+            finalMessageType === "document"
+              ? campaign.header_file_name || null
+              : null,
           );
 
           // 7. Activate Live Chat
@@ -879,6 +934,42 @@ export const startCampaignSchedulerService = () => {
       });
 
       for (const campaign of activeCampaigns) {
+        // Pre-execution billing check: verify tenant can afford at least 1 batch
+        try {
+          const template = await db.WhatsappTemplates.findOne({
+            where: { template_id: campaign.template_id },
+            attributes: ["category"],
+            raw: true,
+          });
+          const category = (template?.category || "marketing").toLowerCase();
+          const cost = await estimateMetaCost(category, "Global");
+          // Estimate cost for a single batch of 100 messages
+          const pendingCount = await db.WhatsappCampaignRecipients.count({
+            where: { campaign_id: campaign.campaign_id, status: "pending" },
+          });
+          const batchEstimate = Math.min(pendingCount, 100);
+          const batchCost = cost.totalCostInr * batchEstimate;
+
+          const billingCheck = await canSendCampaign(
+            campaign.tenant_id,
+            batchCost,
+          );
+
+          if (!billingCheck.allowed) {
+            console.warn(
+              `[CAMPAIGN-SCHEDULER] Skipping campaign ${campaign.campaign_id} — ${billingCheck.reason}`,
+            );
+            await campaign.update({ status: "paused" });
+            continue; // Skip this campaign, move to next
+          }
+        } catch (billingErr) {
+          console.error(
+            `[CAMPAIGN-SCHEDULER] Billing check error for ${campaign.campaign_id}:`,
+            billingErr.message,
+          );
+          // Fail open — proceed with execution
+        }
+
         // Execute a batch for each active campaign
         await executeCampaignBatchService(
           campaign.campaign_id,

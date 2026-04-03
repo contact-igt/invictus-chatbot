@@ -42,6 +42,7 @@ import {
   verifyOTPService,
   checkOTPVerificationService,
 } from "../OtpVerificationModel/otpverification.service.js";
+import { DEFAULT_USD_TO_INR } from "../../config/billing.config.js";
 
 export const registerManagementController = async (req, res) => {
   try {
@@ -288,6 +289,21 @@ export const updateManagementController = async (req, res) => {
       }
     }
 
+    // Prevent super_admin from changing another super_admin's role or status
+    if (
+      loggedInUser.role === "super_admin" &&
+      targetUserId !== loggedInUser.unique_id
+    ) {
+      if (req.body.role || req.body.status) {
+        const targetUser = await getManagementByIdService(targetUserId);
+        if (targetUser && targetUser.role === "super_admin") {
+          return res.status(403).send({
+            message: "Cannot change role or status of another super admin",
+          });
+        }
+      }
+    }
+
     const cleanedCC = country_code ? cleanCountryCode(country_code) : null;
 
     await updateManagementService(
@@ -325,6 +341,13 @@ export const softDeleteManagementController = async (req, res) => {
   if (!management_id) {
     return res.status(400).send({
       message: "Management id invalid",
+    });
+  }
+
+  // Prevent self-deletion
+  if (management_id === req.user.unique_id) {
+    return res.status(403).send({
+      message: "You cannot delete your own account",
     });
   }
 
@@ -522,6 +545,14 @@ export const createPricingRuleController = async (req, res) => {
       });
     }
 
+    // Service category can be 0 (free), others must be > 0
+    if (category !== "service" && parsedRate === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Rate must be greater than zero for non-service categories",
+      });
+    }
+
     const parsedMarkup = parseFloat(markup_percent || 0);
     if (isNaN(parsedMarkup) || parsedMarkup < 0) {
       return res.status(400).json({
@@ -636,16 +667,16 @@ export const createAiPricingRuleController = async (req, res) => {
 
     const parsedInputRate = parseFloat(input_rate);
     const parsedOutputRate = parseFloat(output_rate);
-    if (isNaN(parsedInputRate) || parsedInputRate < 0) {
+    if (isNaN(parsedInputRate) || parsedInputRate <= 0) {
       return res.status(400).json({
         success: false,
-        message: "Input rate must be a non-negative number",
+        message: "Input rate must be greater than zero",
       });
     }
-    if (isNaN(parsedOutputRate) || parsedOutputRate < 0) {
+    if (isNaN(parsedOutputRate) || parsedOutputRate <= 0) {
       return res.status(400).json({
         success: false,
-        message: "Output rate must be a non-negative number",
+        message: "Output rate must be greater than zero",
       });
     }
 
@@ -657,7 +688,9 @@ export const createAiPricingRuleController = async (req, res) => {
       });
     }
 
-    const parsedExchangeRate = parseFloat(usd_to_inr_rate || 85);
+    const parsedExchangeRate = parseFloat(
+      usd_to_inr_rate || DEFAULT_USD_TO_INR,
+    );
     if (isNaN(parsedExchangeRate) || parsedExchangeRate <= 0) {
       return res.status(400).json({
         success: false,

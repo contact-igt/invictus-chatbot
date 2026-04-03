@@ -4,8 +4,8 @@ import { getIO } from "../../middlewares/socket/socket.js";
 import crypto from "crypto";
 
 const razorpay = new Razorpay({
-  key_id: process.env.RAZORPAY_KEY_ID || "rzp_test_placeholder",
-  key_secret: process.env.RAZORPAY_KEY_SECRET || "placeholder_secret",
+  key_id: process.env.RAZORPAY_KEY_ID,
+  key_secret: process.env.RAZORPAY_KEY_SECRET,
 });
 
 console.log(
@@ -63,27 +63,19 @@ export const verifyRazorpayPaymentService = async (tenant_id, paymentData) => {
     paymentData;
 
   const body = razorpay_order_id + "|" + razorpay_payment_id;
+  const razorpaySecret = process.env.RAZORPAY_KEY_SECRET;
+  if (!razorpaySecret) {
+    throw new Error(
+      "Payment system configuration error. Please contact support.",
+    );
+  }
   const expectedSignature = crypto
-    .createHmac(
-      "sha256",
-      process.env.RAZORPAY_KEY_SECRET || "placeholder_secret",
-    )
+    .createHmac("sha256", razorpaySecret)
     .update(body.toString())
     .digest("hex");
 
   if (expectedSignature === razorpay_signature) {
-    // 1. Check for duplicate payment verification (idempotency)
-    const existingPayment = await db.PaymentHistory.findOne({
-      where: { razorpay_payment_id },
-    });
-    if (existingPayment) {
-      console.log(
-        `[PAYMENT] Payment ${razorpay_payment_id} already verified, skipping duplicate`,
-      );
-      return { success: true, message: "Payment already verified" };
-    }
-
-    // 2. Transaction to credit wallet and log record
+    // Transaction to verify idempotency + credit wallet atomically
     const amountInPaise = paymentData.amount || 0;
     const amountInRupees = amountInPaise / 100;
 
@@ -96,6 +88,20 @@ export const verifyRazorpayPaymentService = async (tenant_id, paymentData) => {
     const invoiceNumber = `INV-${dateStr}-${randomSuffix}`;
 
     await db.sequelize.transaction(async (t) => {
+      // 1. Check for duplicate payment INSIDE transaction (race-safe)
+      const existingPayment = await db.PaymentHistory.findOne({
+        where: { razorpay_payment_id },
+        transaction: t,
+        lock: t.LOCK.UPDATE,
+      });
+      if (existingPayment) {
+        console.log(
+          `[PAYMENT] Payment ${razorpay_payment_id} already verified, skipping duplicate`,
+        );
+        return;
+      }
+
+      // 2. Credit wallet
       let [wallet] = await db.Wallets.findOrCreate({
         where: { tenant_id },
         defaults: { tenant_id, balance: 0, currency: "INR" },
@@ -143,7 +149,7 @@ export const verifyRazorpayPaymentService = async (tenant_id, paymentData) => {
       );
     });
 
-    // 3. Check if wallet was restored from suspension and emit socket update
+    // 3. Emit socket update for payment success
     try {
       const wallet = await db.Wallets.findOne({ where: { tenant_id } });
       const newBalance = parseFloat(wallet.balance);
@@ -157,11 +163,14 @@ export const verifyRazorpayPaymentService = async (tenant_id, paymentData) => {
         balance: newBalance,
       });
 
-      // If balance was restored from negative/suspended state, emit restoration event
+      // Emit restoration event if balance is positive
       if (newBalance > 0) {
-        const { checkAndRestoreWallet } =
-          await import("../../utils/billing/walletGuard.js");
-        await checkAndRestoreWallet(tenant_id, newBalance);
+        io.to(`tenant-${tenant_id}`).emit("wallet-restored", {
+          tenant_id,
+          balance: newBalance,
+          status: newBalance > 100 ? "healthy" : "low",
+          message: "Services restored! Your account is now active.",
+        });
         console.log(
           `[PAYMENT] Wallet restored for tenant ${tenant_id}. New balance: ₹${newBalance.toFixed(2)}`,
         );
@@ -206,5 +215,175 @@ export const getPaymentHistoryService = async (
   } catch (error) {
     console.error("[PAYMENT] Error fetching payment history:", error);
     throw error;
+  }
+};
+
+/**
+ * Pay a specific monthly invoice via Razorpay.
+ * Matches by invoice_id + tenant_id (NEVER by amount alone).
+ */
+export const payInvoiceService = async (tenant_id, invoice_id, paymentData) => {
+  const { razorpay_order_id, razorpay_payment_id, razorpay_signature } =
+    paymentData;
+
+  // 1. Verify Razorpay signature
+  const razorpaySecret = process.env.RAZORPAY_KEY_SECRET;
+  if (!razorpaySecret) {
+    throw new Error(
+      "Payment system configuration error. Please contact support.",
+    );
+  }
+  const body = razorpay_order_id + "|" + razorpay_payment_id;
+  const expectedSignature = crypto
+    .createHmac("sha256", razorpaySecret)
+    .update(body.toString())
+    .digest("hex");
+
+  if (expectedSignature !== razorpay_signature) {
+    throw new Error("Invalid payment signature");
+  }
+
+  // 2. Look up invoice by id AND tenant_id (tenant scoping for security)
+  const invoice = await db.MonthlyInvoices.findOne({
+    where: { id: invoice_id, tenant_id },
+  });
+
+  if (!invoice) {
+    throw new Error("Invoice not found");
+  }
+
+  if (invoice.status === "paid") {
+    return { success: true, message: "Invoice already paid" };
+  }
+
+  if (invoice.status === "cancelled") {
+    throw new Error("Invoice has been cancelled");
+  }
+
+  if (invoice.status !== "unpaid" && invoice.status !== "overdue") {
+    throw new Error(`Invoice cannot be paid in status: ${invoice.status}`);
+  }
+
+  // 3. Verify Razorpay order amount matches invoice amount (before transaction)
+  try {
+    const order = await razorpay.orders.fetch(razorpay_order_id);
+    const invoiceAmountPaise = Math.round(parseFloat(invoice.amount) * 100);
+    if (order.amount !== invoiceAmountPaise) {
+      throw new Error(
+        `Payment amount mismatch: order ₹${(order.amount / 100).toFixed(2)} vs invoice ₹${parseFloat(invoice.amount).toFixed(2)}`,
+      );
+    }
+  } catch (fetchErr) {
+    if (fetchErr.message.includes("Payment amount mismatch")) throw fetchErr;
+    console.error("[PAYMENT] Razorpay order fetch failed:", fetchErr.message);
+    // If Razorpay API is unreachable, proceed with signature verification only
+  }
+
+  // 4. Mark invoice as paid (atomic with duplicate check)
+  await db.sequelize.transaction(async (t) => {
+    // Check for duplicate payment INSIDE transaction (race-safe)
+    const existingPayment = await db.PaymentHistory.findOne({
+      where: { razorpay_payment_id },
+      transaction: t,
+      lock: t.LOCK.UPDATE,
+    });
+    if (existingPayment) {
+      console.log(
+        `[PAYMENT] Invoice payment ${razorpay_payment_id} already verified, skipping duplicate`,
+      );
+      return;
+    }
+
+    await invoice.update(
+      {
+        status: "paid",
+        paid_at: new Date(),
+        payment_reference: razorpay_payment_id,
+      },
+      { transaction: t },
+    );
+
+    // Record in payment history
+    await db.PaymentHistory.create(
+      {
+        tenant_id,
+        razorpay_order_id,
+        razorpay_payment_id,
+        amount: parseFloat(invoice.amount),
+        currency: "INR",
+        status: "success",
+        payment_method: "Online",
+        description: `Invoice Payment: ${invoice.invoice_number}`,
+        balance_before: null,
+        balance_after: null,
+        invoice_number: invoice.invoice_number,
+        metadata: {
+          invoice_id: invoice.id,
+          billing_cycle_id: invoice.billing_cycle_id,
+          verified_at: new Date().toISOString(),
+        },
+      },
+      { transaction: t },
+    );
+  });
+
+  // 6. Emit socket events
+  try {
+    const { getIO } = await import("../../middlewares/socket/socket.js");
+    const io = getIO();
+    io.to(`tenant-${tenant_id}`).emit("invoice-paid", {
+      invoice_number: invoice.invoice_number,
+      amount: parseFloat(invoice.amount),
+    });
+
+    // Check if tenant is now unblocked (always check — invoice may have been overdue or freshly paid)
+    const remainingOverdue = await db.MonthlyInvoices.count({
+      where: { tenant_id, status: "overdue" },
+    });
+    if (remainingOverdue === 0) {
+      io.to(`tenant-${tenant_id}`).emit("access-restored", { tenant_id });
+    }
+  } catch (_) {}
+
+  console.log(
+    `[PAYMENT] Invoice ${invoice.invoice_number} paid for tenant ${tenant_id}. Payment: ${razorpay_payment_id}`,
+  );
+
+  return {
+    success: true,
+    message: "Invoice paid successfully",
+    invoice_number: invoice.invoice_number,
+  };
+};
+
+/**
+ * Record a failed invoice payment attempt.
+ */
+export const recordInvoicePaymentFailure = async (tenant_id, invoice_id) => {
+  const MAX_RETRIES = 3;
+
+  const invoice = await db.MonthlyInvoices.findOne({
+    where: { id: invoice_id, tenant_id },
+  });
+
+  if (!invoice) return;
+
+  await invoice.increment("retry_count");
+  await invoice.update({ last_retry_at: new Date() });
+
+  if (invoice.retry_count + 1 >= MAX_RETRIES) {
+    try {
+      const { getIO } = await import("../../middlewares/socket/socket.js");
+      const io = getIO();
+      io.emit("payment-failure-alert", {
+        tenant_id,
+        invoice_number: invoice.invoice_number,
+        retry_count: invoice.retry_count + 1,
+      });
+    } catch (_) {}
+
+    console.warn(
+      `[PAYMENT] Max retries reached for ${invoice.invoice_number}, tenant ${tenant_id}`,
+    );
   }
 };

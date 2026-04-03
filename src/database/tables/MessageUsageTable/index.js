@@ -68,6 +68,11 @@ export const MessageUsageTable = (sequelize, Sequelize) => {
       underscored: true,
       indexes: [
         {
+          name: "message_id",
+          unique: true,
+          fields: ["message_id"],
+        },
+        {
           name: "idx_message_usage_tenant",
           fields: ["tenant_id"],
         },

@@ -1,6 +1,5 @@
 import { buildAiSystemPrompt } from "../../utils/ai/aiFlowHelper.js";
 import { processResponse } from "../../utils/ai/aiTagHandlers/index.js";
-import { classifyResponse } from "../../utils/ai/responseClassifier.js";
 import { callAI } from "../../utils/ai/coreAi.js";
 
 /**
@@ -73,17 +72,6 @@ export const playgroundChatService = async (
       );
     }
 
-    // Classify response
-    let classification = null;
-    try {
-      classification = await classifyResponse(message, finalReply, tenant_id);
-      tagExecutionLog.push(
-        `Classification: ${classification.category} (${classification.reason})`,
-      );
-    } catch (err) {
-      console.error("[PLAYGROUND-CLASSIFIER] Error:", err.message);
-    }
-
     return {
       reply: finalReply,
       technicalLogs: {
@@ -99,7 +87,6 @@ export const playgroundChatService = async (
             }
           : null,
         tagExecutionHistory: tagExecutionLog,
-        classification,
       },
       knowledgeSources: sources,
       responseOrigin:

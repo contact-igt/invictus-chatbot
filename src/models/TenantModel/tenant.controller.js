@@ -109,67 +109,87 @@ export const createTenantController = async (req, res) => {
       });
     }
 
-    await createTenantService(
-      tenant_id,
-      company_name,
-      owner_name,
-      owner_email,
-      cleanedCC,
-      normalizedMobile,
-      type,
-      subscriptionStatus || "invited",
-      subscription_start_date || null,
-      subscription_end_date || null,
-      address || null,
-      city || null,
-      country || null,
-      state || null,
-      pincode || null,
-      maxUsers || 10,
-      subscriptionPlan || "basic",
-      profile || null,
-      null, // verify_token
-      (() => {
-        if (!ai_settings) return null;
-        const settings = { ...ai_settings };
-        if (settings.openai_api_key) {
-          settings.openai_api_key = encrypt(settings.openai_api_key);
-        }
-        return settings;
-      })(),
-    );
+    // Wrap all DB writes in a transaction for atomicity
+    let tenantUserId;
+    await db.sequelize.transaction(async (t) => {
+      await createTenantService(
+        tenant_id,
+        company_name,
+        owner_name,
+        trimmedEmail,
+        cleanedCC,
+        normalizedMobile,
+        type,
+        subscriptionStatus || "invited",
+        subscription_start_date || null,
+        subscription_end_date || null,
+        address || null,
+        city || null,
+        country || null,
+        state || null,
+        pincode || null,
+        maxUsers || 10,
+        subscriptionPlan || "basic",
+        profile || null,
+        null, // verify_token
+        (() => {
+          if (!ai_settings) return null;
+          const settings = { ...ai_settings };
+          if (settings.openai_api_key) {
+            settings.openai_api_key = encrypt(settings.openai_api_key);
+          }
+          return settings;
+        })(),
+        t, // transaction
+      );
 
-    const tenant_user_id = await generateReadableIdFromLast(
-      tableNames.TENANT_USERS,
-      "tenant_user_id",
-      "TTU",
-    );
+      tenantUserId = await generateReadableIdFromLast(
+        tableNames.TENANT_USERS,
+        "tenant_user_id",
+        "TTU",
+      );
 
-    await createTenantUserService(
-      tenant_user_id,
-      tenant_id,
-      "Mr", // Default title as Mr
-      owner_name,
-      owner_email,
-      cleanedCC,
-      normalizedMobile,
-      profile || null,
-      "tenant_admin",
-      null, // password_hash — null until invitation is accepted
-      "inactive", // user_status — inactive until invitation is accepted
-    );
+      await createTenantUserService(
+        tenantUserId,
+        tenant_id,
+        "Mr", // Default title as Mr
+        owner_name,
+        trimmedEmail,
+        cleanedCC,
+        normalizedMobile,
+        profile || null,
+        "tenant_admin",
+        null, // password_hash — null until invitation is accepted
+        "inactive", // user_status — inactive until invitation is accepted
+        t, // transaction
+      );
+    });
 
-    await sendTenantInvitationService(
-      tenant_id,
-      tenant_user_id,
-      owner_email,
-      owner_name,
-      company_name,
-      loginUSer?.unique_id,
-    );
+    // Send invitation email OUTSIDE the transaction — tenant is already saved,
+    // so a transient SMTP failure won't roll back the entire registration.
+    let emailWarning = null;
+    try {
+      await sendTenantInvitationService(
+        tenant_id,
+        tenantUserId,
+        trimmedEmail,
+        owner_name,
+        company_name,
+        loginUSer?.unique_id,
+      );
+    } catch (emailErr) {
+      console.error(
+        "[TENANT] Invitation email failed (tenant still created):",
+        emailErr.message,
+      );
+      emailWarning =
+        "Tenant created but invitation email failed. You can resend it from the tenant list.";
+    }
 
     return res.status(200).json({
-      message: "Tenant created successfully. Invitation email sent to owner.",
+      message:
+        emailWarning ||
+        "Tenant created successfully. Invitation email sent to owner.",
     });
   } catch (err) {
     if (err.original?.code === "ER_DUP_ENTRY") {
@@ -386,14 +406,14 @@ export const updateTenantStatusController = async (req, res) => {
 
     // Wrap in transaction to ensure atomic status sync
     await db.sequelize.transaction(async (t) => {
-      await updateTenantStatusService(status, id);
+      await updateTenantStatusService(status, id, t);
 
       // Sync status to the tenant's users
       let userStatus = "inactive";
       if (["active", "trial", "grace_period"].includes(status)) {
         userStatus = "active";
       }
-      await updateUsersStatusByTenantIdService(id, userStatus);
+      await updateUsersStatusByTenantIdService(id, userStatus, t);
     });
 
     return res.status(200).send({

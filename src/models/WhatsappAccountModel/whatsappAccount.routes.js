@@ -6,6 +6,7 @@ import {
   activateWhatsappAccountController,
   updateAccessTokenController,
   getWhatsappAccountController,
+  getTierLimitController,
   softDeleteWhatsappAccountController,
   permanentDeleteWhatsappAccountController,
   subscribeToWebhooksController,
@@ -35,6 +36,16 @@ router.get(
     roles: ["tenant_admin", "doctor", "staff", "agent"],
   }),
   getWhatsappAccountController,
+);
+
+router.get(
+  "/whatsapp-account/tier-limit",
+  authenticate,
+  authorize({
+    user_type: "tenant",
+    roles: ["tenant_admin", "doctor", "staff", "agent"],
+  }),
+  getTierLimitController,
 );
 
 router.post(

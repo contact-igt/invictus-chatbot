@@ -9,30 +9,34 @@ const router = express.Router();
 
 const tenantRoles = ["tenant_admin", "doctor", "staff", "agent"];
 
-router.use(authenticate);
-router.use(authorize({ user_type: "tenant", roles: tenantRoles }));
+const tenantAuth = [authenticate, authorize({ user_type: "tenant", roles: tenantRoles })];
 
-router.post("/appointment", AppointmentController.createAppointment);
-router.get("/appointment", AppointmentController.getAllAppointments);
+router.post("/appointment", ...tenantAuth, AppointmentController.createAppointment);
+router.get("/appointment", ...tenantAuth, AppointmentController.getAllAppointments);
 router.get(
   "/appointment/contact/:contact_id",
+  ...tenantAuth,
   AppointmentController.getContactAppointments,
 );
 router.patch(
   "/appointment/status/:appointment_id",
+  ...tenantAuth,
   AppointmentController.updateStatus,
 );
 router.get(
   "/appointment/availability",
+  ...tenantAuth,
   AppointmentController.checkAvailability,
 );
-router.get("/appointment/slots", AppointmentController.getAvailableSlots);
+router.get("/appointment/slots", ...tenantAuth, AppointmentController.getAvailableSlots);
 router.put(
   "/appointment/:appointment_id",
+  ...tenantAuth,
   AppointmentController.updateAppointment,
 );
 router.delete(
   "/appointment/:appointment_id",
+  ...tenantAuth,
   AppointmentController.deleteAppointment,
 );
 

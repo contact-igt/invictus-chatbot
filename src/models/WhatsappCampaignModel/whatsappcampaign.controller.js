@@ -10,6 +10,8 @@ import {
 } from "./whatsappcampaign.service.js";
 import { missingFieldsChecker } from "../../utils/helpers/missingFields.js";
 import { uploadToCloudinary } from "../../middlewares/cloudinary/cloudinaryUpload.js";
+import { checkBillingAccess } from "../../middlewares/billing/billingAccessGuard.js";
+import { estimateMetaCost } from "../../utils/billing/costEstimator.js";
 
 // ... existing code ...
 
@@ -72,6 +74,41 @@ export const createCampaignController = async (req, res) => {
       return res.status(400).send({
         message: "scheduled_at is required for scheduled campaigns",
       });
+    }
+
+    // Billing check: estimate total cost for all recipients before creating
+    const recipientCount = Array.isArray(audience_data)
+      ? audience_data.length
+      : 1;
+    if (recipientCount > 0) {
+      try {
+        // Get template category for cost estimation
+        const { default: db } = await import("../../database/index.js");
+        const template = await db.WhatsappTemplates.findOne({
+          where: { template_id },
+          attributes: ["category"],
+          raw: true,
+        });
+        const category = (template?.category || "marketing").toLowerCase();
+        const cost = await estimateMetaCost(category, "Global");
+        const estimated_cost = cost.totalCostInr * recipientCount;
+
+        const access = await checkBillingAccess(tenant_id, estimated_cost);
+        if (!access.allowed) {
+          return res.status(403).json({
+            success: false,
+            ...access,
+            recipient_count: recipientCount,
+            estimated_cost,
+          });
+        }
+      } catch (billingErr) {
+        console.error(
+          "[CAMPAIGN-CREATE] Billing check error:",
+          billingErr.message,
+        );
+        // Fail open on billing check error — don't block campaign creation
+      }
     }
 
     const campaign = await createCampaignService(

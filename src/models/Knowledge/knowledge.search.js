@@ -118,42 +118,6 @@ export const searchKnowledgeChunks = async (tenant_id, question) => {
     }
   }
 
-  /* 2️⃣ Search Resolved AI Logs (Real-time Feedback Loop) */
-  let logRows = [];
-  try {
-    const logConditions = keywords
-      .map(() => "(user_message LIKE ? OR resolution LIKE ? OR payload LIKE ?)")
-      .join(" OR ");
-    const logValues = [];
-    keywords.forEach((k) => {
-      logValues.push(`%${k}%`);
-      logValues.push(`%${k}%`);
-      logValues.push(`%${k}%`);
-    });
-
-    const logQuery = `
-      SELECT user_message, resolution
-      FROM ${tableNames.AI_ANALYSIS_LOGS}
-      WHERE tenant_id IN (?)
-        AND status = 'resolved'
-        AND (${logConditions})
-      ORDER BY created_at DESC
-      LIMIT 5
-    `;
-
-    const [rows] = await db.sequelize.query(logQuery, {
-      replacements: [tenant_id, ...logValues],
-    });
-    logRows = rows;
-  } catch (logErr) {
-    console.error("[KNOWLEDGE-SEARCH] AI logs query failed:", logErr.message);
-  }
-
-  const logsFormatted = logRows.map(
-    (r) =>
-      `[Previous Question]: ${r.user_message}\n[Admin Resolution]: ${r.resolution}`,
-  );
-
   // Group chunks by source for UI transparency
   const sourceMap = new Map();
   knowledgeRows.forEach((r) => {
@@ -170,7 +134,7 @@ export const searchKnowledgeChunks = async (tenant_id, question) => {
 
   return {
     chunks: knowledgeRows.map((r) => r.chunk_text),
-    resolvedLogs: logsFormatted,
+    resolvedLogs: [],
     sources: Array.from(sourceMap.values()),
   };
 };

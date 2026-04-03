@@ -3,8 +3,7 @@ import { tableNames } from "../../database/tableName.js";
 import { AiService } from "../../utils/ai/coreAi.js";
 import { processResponse } from "../../utils/ai/aiTagHandlers/index.js";
 import { searchKnowledgeChunks } from "../Knowledge/knowledge.search.js";
-import { classifyResponse } from "../../utils/ai/responseClassifier.js";
-import { handleClassification } from "../../utils/ai/classificationHandler.js";
+
 import { getContactByPhoneAndTenantIdService } from "../ContactsModel/contacts.service.js";
 import { getLeadByContactIdService } from "../LeadsModel/leads.service.js";
 import { getLastAppointmentService } from "../AppointmentModel/appointment.service.js";
@@ -329,38 +328,6 @@ export const suggestReplyService = async (tenant_id, phone) => {
     });
 
     const cleanReply = processed.message;
-
-    // Step 2: Dual-AI Classification (Standardized single logging)
-    try {
-      const classification = await classifyResponse(
-        lastUserMessage,
-        cleanReply,
-        tenant_id,
-      );
-
-      // If the primary AI explicitly tagged missing knowledge or out of scope, use that as a "hint"
-      if (
-        processed.tagDetected === "MISSING_KNOWLEDGE" &&
-        classification.category !== "MISSING_KNOWLEDGE"
-      ) {
-        classification.category = "MISSING_KNOWLEDGE";
-        classification.reason = processed.tagPayload || classification.reason;
-      } else if (
-        processed.tagDetected === "OUT_OF_SCOPE" &&
-        classification.category !== "OUT_OF_SCOPE"
-      ) {
-        classification.category = "OUT_OF_SCOPE";
-        classification.reason = processed.tagPayload || classification.reason;
-      }
-
-      await handleClassification(classification, {
-        tenant_id,
-        userMessage: lastUserMessage,
-        aiResponse: cleanReply,
-      });
-    } catch (classifierError) {
-      console.error("[CLASSIFIER-ADMIN] Error:", classifierError.message);
-    }
 
     console.log("[AI-CLEAN-RESPONSE]", cleanReply);
 

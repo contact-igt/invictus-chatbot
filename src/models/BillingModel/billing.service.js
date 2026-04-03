@@ -4,6 +4,15 @@ import cron from "node-cron";
 import axios from "axios";
 import libphonenumber from "google-libphonenumber";
 import { getIO } from "../../middlewares/socket/socket.js";
+import { tableNames } from "../../database/tableName.js";
+import { DEFAULT_USD_TO_INR } from "../../config/billing.config.js";
+import { estimateMetaCost } from "../../utils/billing/costEstimator.js";
+import { deductWallet } from "../../utils/billing/walletGuard.js";
+import {
+  checkUsageLimit,
+  invalidateUsageCache,
+} from "../../utils/billing/usageLimiter.js";
+import { recordHealthEvent } from "../../utils/billing/billingHealthMonitor.js";
 
 const phoneUtil = libphonenumber.PhoneNumberUtil.getInstance();
 
@@ -14,6 +23,23 @@ const phoneUtil = libphonenumber.PhoneNumberUtil.getInstance();
 export const processBillingFromWebhook = async (tenant_id, statusUpdate) => {
   try {
     const { id: message_id, status, pricing, conversation } = statusUpdate;
+
+    // Skip all billing if the tenant's WhatsApp account has a token error.
+    // A broken token means no new messages are being sent, so billing should stop.
+    try {
+      const [acctRows] = await db.sequelize.query(
+        `SELECT status FROM ${tableNames.WHATSAPP_ACCOUNT} WHERE tenant_id = ? AND is_deleted = false LIMIT 1`,
+        { replacements: [tenant_id] },
+      );
+      if (acctRows[0]?.status === "token_error") {
+        console.log(
+          `[BILLING] Skipping Meta billing for tenant ${tenant_id} — account has token_error status`,
+        );
+        return;
+      }
+    } catch (checkErr) {
+      console.error("[BILLING] Token status check failed:", checkErr.message);
+    }
 
     // We only create entries when Meta provides the pricing object on the "sent" status of a new conversation window.
     if (!pricing) {
@@ -61,22 +87,17 @@ export const processBillingFromWebhook = async (tenant_id, statusUpdate) => {
       return;
     }
 
-    // 2. Calculate Cost (Look up closest pricing rule)
-    // In Meta, the appropriate country is critical for pricing.
-    // We determine the country accurately from the recipient's phone number using libphonenumber.
+    // 2. Detect country from recipient phone number
     const recipient_id = statusUpdate.recipient_id;
-    let country = "Global"; // Default fallback
+    let country = "Global";
 
     if (recipient_id) {
       try {
-        // Meta recipient IDs are usually digits only. libphonenumber needs a '+' for international parsing
-        // without a default region, or we can try to parse it as is if it looks like it has a CC.
         const phoneStr = recipient_id.startsWith("+")
           ? recipient_id
           : `+${recipient_id}`;
         const number = phoneUtil.parseAndKeepRawInput(phoneStr);
         const regionCode = phoneUtil.getRegionCodeForNumber(number);
-
         if (regionCode) {
           country = regionCode;
         }
@@ -85,52 +106,28 @@ export const processBillingFromWebhook = async (tenant_id, statusUpdate) => {
           `[BILLING] Failed to parse recipient_id ${recipient_id} for country detection:`,
           phoneErr.message,
         );
-        // Fallback to the old prefix logic for common cases if parsing fails
         if (recipient_id.startsWith("91")) country = "IN";
         else if (recipient_id.startsWith("44")) country = "GB";
         else if (recipient_id.startsWith("1")) country = "US";
       }
     }
 
-    // Final fallback: Check the tenant's default country if detection failed
     if (country === "Global") {
-      const tenant = await db.Tenants.findOne({ where: { tenant_id } });
-      if (tenant && tenant.country) {
-        country = tenant.country;
+      const tenantRecord = await db.Tenants.findOne({ where: { tenant_id } });
+      if (tenantRecord && tenantRecord.country) {
+        country = tenantRecord.country;
       }
     }
 
-    let baseRate = 0;
-    let markupPercent = 0;
-
-    if (billable) {
-      let pricingRule = await db.PricingTable.findOne({
-        where: { category, country },
-      });
-
-      // If no specific country rule, try finding a global fallback rule for the category
-      if (!pricingRule) {
-        pricingRule = await db.PricingTable.findOne({
-          where: { category, country: "Global" },
-        });
-      }
-
-      // Default rates if no pricing rules are seeded in DB yet
-      const defaultRates = {
-        marketing: 0.075,
-        utility: 0.015,
-        authentication: 0.015,
-        service: 0.0,
-      };
-
-      baseRate = pricingRule
-        ? parseFloat(pricingRule.rate)
-        : defaultRates[category] || 0;
-      markupPercent = pricingRule ? parseFloat(pricingRule.markup_percent) : 0;
-    }
-
-    const platformFee = baseRate * (markupPercent / 100);
-    const totalCost = baseRate + platformFee;
+    // 3. Calculate Cost using centralized cost estimator
+    const costResult = await estimateMetaCost(category, country);
+    const baseRate = costResult.baseRate;
+    const markupPercent = costResult.markupPercent;
+    const platformFee = costResult.platformFee;
+    const totalCostUsd = costResult.totalCostUsd;
+    const totalCostInr = costResult.totalCostInr;
+    const usdToInrRate = costResult.conversionRate;
+    const pricingVersion = costResult.pricingVersion;
 
     let template_name = null;
     let campaign_name = null;
@@ -167,14 +164,81 @@ export const processBillingFromWebhook = async (tenant_id, statusUpdate) => {
       console.error("[BILLING] Error fetching message/campaign metadata:", err);
     }
 
-    // 3. Create BillingLedger Record and Deduct Wallet Balance (Atomic Transaction)
-    // Use findOrCreate to prevent duplicate billing for the same message
+    // 4. Fetch tenant billing mode
+    const tenant = await db.Tenants.findOne({
+      where: { tenant_id },
+      attributes: ["billing_mode", "postpaid_credit_limit"],
+      raw: true,
+    });
+    const billing_mode = tenant?.billing_mode || "prepaid";
+
+    // 5. Check usage limits before billing
+    const usageCheck = await checkUsageLimit(tenant_id, "message");
+    if (!usageCheck.allowed) {
+      console.warn(
+        `[BILLING] Usage limit hit for tenant ${tenant_id}: ${usageCheck.reason}`,
+      );
+      try {
+        const io = getIO();
+        io.to(`tenant-${tenant_id}`).emit("usage-limit-reached", {
+          reason: usageCheck.reason,
+          daily: usageCheck.daily,
+          monthly: usageCheck.monthly,
+        });
+      } catch (_) {}
+      // MessageUsage already created above — skip cost billing
+      invalidateUsageCache(tenant_id);
+      return;
+    }
+
+    // 6. Create BillingLedger Record (both modes — for reporting)
     await db.sequelize.transaction(async (t) => {
-      // Prevent duplicate billing - check if ledger already exists for this message
-      const [ledger, ledgerCreated] = await db.BillingLedger.findOrCreate({
+      // Check for duplicate billing first
+      const existingLedger = await db.BillingLedger.findOne({
         where: { message_usage_id: usageRecord.id },
-        defaults: {
+        transaction: t,
+      });
+      if (existingLedger) {
+        console.log(
+          `[BILLING] Skipping duplicate billing for message_usage_id ${usageRecord.id}`,
+        );
+        return;
+      }
+
+      if (totalCostInr > 0 && billing_mode === "prepaid") {
+        // PREPAID: Deduct from wallet FIRST, then create ledger
+        const deductResult = await deductWallet(
           tenant_id,
+          totalCostInr,
+          `msg_${usageRecord.id}`,
+          `Message Billing: ${category} (${country}) [$${totalCostUsd.toFixed(4)} × ₹${usdToInrRate}]`,
+          t,
+        );
+
+        if (!deductResult.success) {
+          console.warn(
+            `[BILLING] Prepaid deduction failed for tenant ${tenant_id}: ${deductResult.error}`,
+          );
+          try {
+            const io = getIO();
+            io.to(`tenant-${tenant_id}`).emit("insufficient-balance", {
+              balance: deductResult.oldBalance,
+              required: totalCostInr,
+              shortfall:
+                deductResult.shortfall ||
+                totalCostInr - deductResult.oldBalance,
+            });
+          } catch (_) {}
+          // Deduction failed — do NOT create ledger entry
+          return;
+        }
+      }
+
+      // Create ledger AFTER successful deduction (prepaid) or directly (postpaid)
+      const ledger = await db.BillingLedger.create(
+        {
+          tenant_id,
+          entry_type: "message",
           message_usage_id: usageRecord.id,
           template_name: template_name,
           campaign_name: campaign_name,
@@ -183,50 +247,152 @@ export const processBillingFromWebhook = async (tenant_id, statusUpdate) => {
           rate: baseRate,
           meta_cost: baseRate,
           platform_fee: platformFee,
-          total_cost: totalCost,
+          total_cost: totalCostUsd,
           markup_percent: markupPercent,
+          usd_to_inr_rate: usdToInrRate,
+          total_cost_inr: totalCostInr,
+          conversion_rate_used: usdToInrRate,
+          pricing_version: pricingVersion,
         },
-        transaction: t,
-      });
+        { transaction: t },
+      );
 
-      // If ledger already existed, skip wallet deduction (already billed)
-      if (!ledgerCreated) {
-        console.log(
-          `[BILLING] Skipping duplicate billing for message_usage_id ${usageRecord.id}`,
-        );
-        return;
-      }
-
-      if (totalCost > 0) {
-        // Find or create wallet
-        let [wallet] = await db.Wallets.findOrCreate({
-          where: { tenant_id },
-          defaults: { tenant_id, balance: 0, currency: "INR" },
+      if (totalCostInr > 0 && billing_mode !== "prepaid") {
+        // POSTPAID: No wallet deduction — update billing cycle totals
+        let activeCycle = await db.BillingCycles.findOne({
+          where: { tenant_id, status: "active" },
+          lock: t.LOCK.UPDATE,
           transaction: t,
         });
 
-        // NaN protection: ensure balance is a valid number
-        const oldBalance = parseFloat(wallet.balance) || 0;
-        const newBalance = oldBalance - totalCost;
+        // Auto-create cycle if none exists (new postpaid tenant)
+        if (!activeCycle) {
+          const now = new Date();
+          const endDate = new Date(now);
+          endDate.setDate(endDate.getDate() + 30);
+          activeCycle = await db.BillingCycles.create(
+            {
+              tenant_id,
+              cycle_number: 1,
+              start_date: now,
+              end_date: endDate,
+              status: "active",
+              total_message_cost_inr: 0,
+              total_ai_cost_inr: 0,
+              total_cost_inr: 0,
+              is_locked: false,
+            },
+            { transaction: t },
+          );
+          console.log(
+            `[BILLING] Auto-created billing cycle for postpaid tenant ${tenant_id}`,
+          );
+        }
 
-        await wallet.update({ balance: newBalance }, { transaction: t });
+        if (activeCycle) {
+          await activeCycle.increment(
+            {
+              total_message_cost_inr: totalCostInr,
+              total_cost_inr: totalCostInr,
+            },
+            { transaction: t },
+          );
 
-        // Record the transaction with balance_after for audit trail
-        await db.WalletTransactions.create(
-          {
+          // Link ledger to billing cycle
+          await ledger.update(
+            { billing_cycle_id: activeCycle.id },
+            { transaction: t },
+          );
+
+          // Check credit limit thresholds
+          const updatedTotal =
+            parseFloat(activeCycle.total_cost_inr) + totalCostInr;
+          const creditLimit = parseFloat(tenant?.postpaid_credit_limit) || 5000;
+
+          if (updatedTotal >= creditLimit) {
+            try {
+              const io = getIO();
+              io.to(`tenant-${tenant_id}`).emit("credit-limit-reached", {
+                usage: updatedTotal,
+                limit: creditLimit,
+              });
+            } catch (_) {}
+          } else if (updatedTotal >= creditLimit * 0.8) {
+            try {
+              const io = getIO();
+              io.to(`tenant-${tenant_id}`).emit("credit-limit-warning", {
+                usage: updatedTotal,
+                limit: creditLimit,
+                percent: Math.round((updatedTotal / creditLimit) * 100),
+              });
+            } catch (_) {}
+          }
+        }
+      }
+
+      // Update daily + monthly usage summaries (both modes)
+      try {
+        const today = new Date().toISOString().split("T")[0];
+        const month = today.substring(0, 7);
+
+        await db.DailyUsageSummary.findOrCreate({
+          where: { tenant_id, summary_date: today },
+          defaults: {
             tenant_id,
-            type: "debit",
-            amount: totalCost,
-            reference_id: `ledger_${ledger.id}`,
-            description: `Message Billing: ${category} (${country})`,
-            balance_after: newBalance,
+            summary_date: today,
+            total_messages: 0,
+            billable_messages: 0,
+            message_cost_inr: 0,
+            ai_calls: 0,
+            ai_tokens_used: 0,
+            ai_cost_inr: 0,
+            total_cost_inr: 0,
           },
-          { transaction: t },
+          transaction: t,
+        });
+        await db.DailyUsageSummary.increment(
+          {
+            total_messages: 1,
+            billable_messages: billable ? 1 : 0,
+            message_cost_inr: totalCostInr,
+            total_cost_inr: totalCostInr,
+          },
+          { where: { tenant_id, summary_date: today }, transaction: t },
         );
+
+        await db.MonthlyUsageSummary.findOrCreate({
+          where: { tenant_id, summary_month: month },
+          defaults: {
+            tenant_id,
+            summary_month: month,
+            total_messages: 0,
+            billable_messages: 0,
+            message_cost_inr: 0,
+            ai_calls: 0,
+            ai_tokens_used: 0,
+            ai_cost_inr: 0,
+            total_cost_inr: 0,
+          },
+          transaction: t,
+        });
+        await db.MonthlyUsageSummary.increment(
+          {
+            total_messages: 1,
+            billable_messages: billable ? 1 : 0,
+            message_cost_inr: totalCostInr,
+            total_cost_inr: totalCostInr,
+          },
+          { where: { tenant_id, summary_month: month }, transaction: t },
+        );
+      } catch (summaryErr) {
+        console.error("[BILLING] Summary update error:", summaryErr.message);
       }
     });
 
-    // Check wallet balance after deduction for low balance warning
+    // Invalidate usage cache
+    invalidateUsageCache(tenant_id);
+
+    // 7. Emit real-time update via Socket
     let currentBalance = 0;
     let wallet = null;
     try {
@@ -235,49 +401,50 @@ export const processBillingFromWebhook = async (tenant_id, statusUpdate) => {
     } catch (e) {}
 
     console.log(
-      `[BILLING] Billed ${category} for tenant ${tenant_id}: ₹${totalCost.toFixed(4)}. Ledger and Wallet updated. Balance: ₹${currentBalance.toFixed(4)}`,
+      `[BILLING] ${billing_mode.toUpperCase()} billed ${category} for tenant ${tenant_id}: ₹${totalCostInr.toFixed(4)} ($${totalCostUsd.toFixed(4)} × ${usdToInrRate}). Balance: ₹${currentBalance.toFixed(4)}`,
     );
 
-    // 4. Emit real-time update via Socket
     try {
       const io = getIO();
       const payload = {
         type: "NEW_LEDGER_ENTRY",
         tenant_id,
         category,
-        totalCost,
+        totalCost: totalCostInr,
         currentBalance,
-        lowBalance: currentBalance < 100,
+        billing_mode,
+        lowBalance: billing_mode === "prepaid" && currentBalance < 100,
         timestamp: new Date(),
       };
       io.to(`tenant-${tenant_id}`).emit("billing-update", payload);
 
-      // Emit dedicated low balance warning if balance drops below ₹100
-      if (currentBalance < 100) {
+      // Prepaid-specific alerts
+      if (billing_mode === "prepaid" && currentBalance < 100) {
         io.to(`tenant-${tenant_id}`).emit("low-balance-warning", {
           balance: currentBalance,
           message:
             currentBalance <= 0
-              ? "Wallet balance is zero or negative. Recharge immediately to continue messaging."
+              ? "Wallet balance is zero. Recharge immediately to continue messaging."
               : `Wallet balance is low (₹${currentBalance.toFixed(2)}). Please recharge soon.`,
         });
       }
 
-      // 5. Auto-recharge trigger: notify frontend to initiate Razorpay payment
+      // Auto-recharge trigger
       if (
+        billing_mode === "prepaid" &&
         wallet &&
         wallet.auto_recharge_enabled &&
         currentBalance < parseFloat(wallet.auto_recharge_threshold)
       ) {
         const rechargeAmount = parseFloat(wallet.auto_recharge_amount);
         console.log(
-          `[AUTO-RECHARGE] Balance ₹${currentBalance.toFixed(2)} below threshold ₹${parseFloat(wallet.auto_recharge_threshold).toFixed(2)}. Triggering auto-recharge of ₹${rechargeAmount.toFixed(2)} for tenant ${tenant_id}`,
+          `[AUTO-RECHARGE] Balance ₹${currentBalance.toFixed(2)} below threshold. Triggering auto-recharge of ₹${rechargeAmount.toFixed(2)} for tenant ${tenant_id}`,
         );
         io.to(`tenant-${tenant_id}`).emit("auto-recharge-trigger", {
           balance: currentBalance,
           threshold: parseFloat(wallet.auto_recharge_threshold),
           amount: rechargeAmount,
-          message: `Auto-recharge triggered: Balance ₹${currentBalance.toFixed(2)} is below threshold ₹${parseFloat(wallet.auto_recharge_threshold).toFixed(2)}. Initiating ₹${rechargeAmount.toFixed(2)} recharge.`,
+          message: `Auto-recharge triggered: Balance ₹${currentBalance.toFixed(2)} below threshold.`,
         });
       }
     } catch (socketErr) {
@@ -291,6 +458,10 @@ export const processBillingFromWebhook = async (tenant_id, statusUpdate) => {
       `[BILLING ERROR] processing message ${statusUpdate?.id}:`,
       error,
     );
+    await recordHealthEvent("billing_failure", tenant_id, error.message, {
+      message_id: statusUpdate?.id,
+      stack: error.stack,
+    });
   }
 };
 
@@ -307,17 +478,25 @@ export const getBillingKpiService = async (tenant_id, startDate, endDate) => {
       };
     }
 
-    // 1. Calculate category-wise spent using aggregation
+    // 1. Calculate category-wise spent using aggregation (INR — actual wallet deductions)
     const categoryTotals = await db.BillingLedger.findAll({
       attributes: [
         "category",
-        [db.sequelize.fn("SUM", db.sequelize.col("total_cost")), "totalSpent"],
+        [
+          db.sequelize.fn("SUM", db.sequelize.col("total_cost_inr")),
+          "totalSpentInr",
+        ],
+        [
+          db.sequelize.fn("SUM", db.sequelize.col("total_cost")),
+          "totalSpentUsd",
+        ],
       ],
       where: whereClause,
       group: ["category"],
     });
 
-    let totalSpentEstimated = 0;
+    let totalSpentInr = 0;
+    let totalSpentUsd = 0;
     let marketingSpent = 0;
     let utilitySpent = 0;
     let authSpent = 0;
@@ -325,12 +504,14 @@ export const getBillingKpiService = async (tenant_id, startDate, endDate) => {
 
     categoryTotals.forEach((result) => {
       const category = result.category;
-      const total = parseFloat(result.get("totalSpent")) || 0;
-      totalSpentEstimated += total;
-      if (category === "marketing") marketingSpent = total;
-      else if (category === "utility") utilitySpent = total;
-      else if (category === "authentication") authSpent = total;
-      else if (category === "service") serviceSpent = total;
+      const totalInr = parseFloat(result.get("totalSpentInr")) || 0;
+      const totalUsd = parseFloat(result.get("totalSpentUsd")) || 0;
+      totalSpentInr += totalInr;
+      totalSpentUsd += totalUsd;
+      if (category === "marketing") marketingSpent = totalInr;
+      else if (category === "utility") utilitySpent = totalInr;
+      else if (category === "authentication") authSpent = totalInr;
+      else if (category === "service") serviceSpent = totalInr;
     });
 
     // 2. Count messages and conversations using aggregation
@@ -360,15 +541,37 @@ export const getBillingKpiService = async (tenant_id, startDate, endDate) => {
       defaults: { tenant_id, balance: 0, currency: "INR" },
     });
 
+    // 4. Today's usage counts (for usage limit display)
+    const todayStart = new Date();
+    todayStart.setUTCHours(0, 0, 0, 0);
+
+    const [todayMessagesSent, totalAiCalls, todayAiCalls] = await Promise.all([
+      db.MessageUsage.count({
+        where: { tenant_id, createdAt: { [Op.gte]: todayStart } },
+      }),
+      db.AiTokenUsage.count({
+        where: usageWhere.timestamp
+          ? { tenant_id, createdAt: usageWhere.timestamp }
+          : { tenant_id },
+      }),
+      db.AiTokenUsage.count({
+        where: { tenant_id, createdAt: { [Op.gte]: todayStart } },
+      }),
+    ]);
+
     return {
-      totalSpentEstimated,
+      totalSpentEstimated: totalSpentInr,
+      totalSpentUsd,
       marketingSpent,
       utilitySpent,
       authSpent,
       serviceSpent,
       totalMessagesSent,
+      todayMessagesSent,
       billableConversations,
       freeConversations,
+      totalAiCalls,
+      todayAiCalls,
       walletBalance: parseFloat(wallet.balance) || 0,
       currency: wallet.currency || "INR",
     };
@@ -438,6 +641,11 @@ export const getBillingLedgerService = async (
       platformFee: ledger.platform_fee,
       markupPercent: ledger.markup_percent,
       total: ledger.total_cost,
+      usdToInrRate: ledger.usd_to_inr_rate || DEFAULT_USD_TO_INR,
+      totalInr:
+        ledger.total_cost_inr ||
+        parseFloat(ledger.total_cost) *
+          (parseFloat(ledger.usd_to_inr_rate) || DEFAULT_USD_TO_INR),
       status: ledger.messageUsage?.status || "Unknown",
     }));
 
@@ -487,7 +695,7 @@ export const getBillingSpendChartService = async (
           auth: 0,
         };
       }
-      const cost = parseFloat(l.total_cost) || 0;
+      const cost = parseFloat(l.total_cost_inr) || 0;
       if (l.category === "marketing") spendMap[dateKey].marketing += cost;
       else if (l.category === "utility") spendMap[dateKey].utility += cost;
       else if (l.category === "authentication") spendMap[dateKey].auth += cost;
@@ -511,18 +719,57 @@ export const getWalletBalanceService = async (tenant_id) => {
       defaults: { tenant_id, balance: 0, currency: "INR" },
     });
     const balance = parseFloat(wallet.balance) || 0;
-    return {
+
+    // Fetch billing mode info
+    const tenant = await db.Tenants.findOne({
+      where: { tenant_id },
+      attributes: [
+        "billing_mode",
+        "postpaid_credit_limit",
+        "billing_cycle_start",
+        "billing_cycle_end",
+      ],
+      raw: true,
+    });
+    const billing_mode = tenant?.billing_mode || "prepaid";
+
+    const result = {
       balance,
       currency: wallet.currency || "INR",
       lowBalance: balance < 100,
       balanceStatus:
         balance <= 0 ? "critical" : balance < 100 ? "low" : "healthy",
+      billing_mode,
       autoRecharge: {
         enabled: wallet.auto_recharge_enabled || false,
         threshold: parseFloat(wallet.auto_recharge_threshold) || 100,
         amount: parseFloat(wallet.auto_recharge_amount) || 500,
       },
     };
+
+    // Add postpaid-specific info
+    if (billing_mode === "postpaid") {
+      const activeCycle = await db.BillingCycles.findOne({
+        where: { tenant_id, status: "active" },
+        raw: true,
+      });
+      const creditLimit = parseFloat(tenant?.postpaid_credit_limit) || 5000;
+      const currentCycleUsage = activeCycle
+        ? parseFloat(activeCycle.total_cost_inr) || 0
+        : 0;
+
+      result.postpaid = {
+        currentCycleUsage,
+        creditLimit,
+        creditUsagePercent:
+          creditLimit > 0
+            ? Math.round((currentCycleUsage / creditLimit) * 100)
+            : 0,
+        nextInvoiceDate: tenant?.billing_cycle_end || null,
+      };
+    }
+
+    return result;
   } catch (error) {
     throw error;
   }
@@ -619,9 +866,12 @@ export const getBillingTemplateStatsService = async (
       attributes: [
         "template_name",
         "category",
-        [db.sequelize.fn("SUM", db.sequelize.col("total_cost")), "totalCost"],
+        [
+          db.sequelize.fn("SUM", db.sequelize.col("total_cost_inr")),
+          "totalCost",
+        ],
         [db.sequelize.fn("COUNT", db.sequelize.col("id")), "messageCount"],
-        [db.sequelize.fn("AVG", db.sequelize.col("rate")), "avgRate"],
+        [db.sequelize.fn("AVG", db.sequelize.col("total_cost_inr")), "avgRate"],
       ],
       where: whereClause,
       group: ["template_name", "category"],
@@ -661,10 +911,13 @@ export const getBillingCampaignStatsService = async (
       attributes: [
         "campaign_name",
         "template_name",
-        [db.sequelize.fn("SUM", db.sequelize.col("total_cost")), "totalCost"],
+        [
+          db.sequelize.fn("SUM", db.sequelize.col("total_cost_inr")),
+          "totalCost",
+        ],
         [db.sequelize.fn("COUNT", db.sequelize.col("id")), "recipientCount"],
         [
-          db.sequelize.fn("AVG", db.sequelize.col("rate")),
+          db.sequelize.fn("AVG", db.sequelize.col("total_cost_inr")),
           "avgRatePerRecipient",
         ],
       ],
@@ -751,6 +1004,15 @@ export const getAiTokenUsageService = async (tenant_id, startDate, endDate) => {
           db.sequelize.fn("SUM", db.sequelize.col("estimated_cost")),
           "totalCostUsd",
         ],
+        [
+          db.sequelize.fn("SUM", db.sequelize.col("base_cost_usd")),
+          "totalBaseCostUsd",
+        ],
+        // Use stored final_cost_inr — no frontend recalculation needed
+        [
+          db.sequelize.fn("SUM", db.sequelize.col("final_cost_inr")),
+          "totalCostInr",
+        ],
         [db.sequelize.fn("COUNT", db.sequelize.col("id")), "totalCalls"],
       ],
       where: whereClause,
@@ -774,6 +1036,7 @@ export const getAiTokenUsageService = async (tenant_id, startDate, endDate) => {
           "totalTokens",
         ],
         [db.sequelize.fn("SUM", db.sequelize.col("estimated_cost")), "costUsd"],
+        [db.sequelize.fn("SUM", db.sequelize.col("final_cost_inr")), "costInr"],
         [db.sequelize.fn("COUNT", db.sequelize.col("id")), "calls"],
       ],
       where: whereClause,
@@ -790,6 +1053,7 @@ export const getAiTokenUsageService = async (tenant_id, startDate, endDate) => {
           "totalTokens",
         ],
         [db.sequelize.fn("SUM", db.sequelize.col("estimated_cost")), "costUsd"],
+        [db.sequelize.fn("SUM", db.sequelize.col("final_cost_inr")), "costInr"],
         [db.sequelize.fn("COUNT", db.sequelize.col("id")), "calls"],
       ],
       where: whereClause,
@@ -806,6 +1070,7 @@ export const getAiTokenUsageService = async (tenant_id, startDate, endDate) => {
           "totalTokens",
         ],
         [db.sequelize.fn("SUM", db.sequelize.col("estimated_cost")), "costUsd"],
+        [db.sequelize.fn("SUM", db.sequelize.col("final_cost_inr")), "costInr"],
         [db.sequelize.fn("COUNT", db.sequelize.col("id")), "calls"],
       ],
       where: whereClause,
@@ -823,7 +1088,7 @@ export const getAiTokenUsageService = async (tenant_id, startDate, endDate) => {
     });
 
     // Convert USD to INR — use DB rate if available, else fallback
-    let usdToInr = 85;
+    let usdToInr = DEFAULT_USD_TO_INR;
     try {
       const aiPricingRule = await db.AiPricing.findOne({
         where: { is_active: true },
@@ -835,6 +1100,9 @@ export const getAiTokenUsageService = async (tenant_id, startDate, endDate) => {
       }
     } catch (_) {}
     const totalCostUsd = parseFloat(totals?.totalCostUsd) || 0;
+    const totalCostInr = parseFloat(totals?.totalCostInr) || 0;
+    const totalBaseCostUsd = parseFloat(totals?.totalBaseCostUsd) || 0;
+    const totalPlatformFeeUsd = totalCostUsd - totalBaseCostUsd;
 
     return {
       summary: {
@@ -842,8 +1110,11 @@ export const getAiTokenUsageService = async (tenant_id, startDate, endDate) => {
         totalCompletionTokens: parseInt(totals?.totalCompletionTokens) || 0,
         totalTokens: parseInt(totals?.totalTokens) || 0,
         totalCostUsd,
-        totalCostInr: totalCostUsd * usdToInr,
+        totalBaseCostUsd,
+        totalPlatformFeeUsd,
+        totalCostInr, // Authoritative — summed from stored final_cost_inr
         totalCalls: parseInt(totals?.totalCalls) || 0,
+        usdToInrRate: usdToInr,
       },
       byModel: byModel.map((m) => ({
         model: m.model,
@@ -851,18 +1122,21 @@ export const getAiTokenUsageService = async (tenant_id, startDate, endDate) => {
         completionTokens: parseInt(m.completionTokens) || 0,
         totalTokens: parseInt(m.totalTokens) || 0,
         costUsd: parseFloat(m.costUsd) || 0,
+        costInr: parseFloat(m.costInr) || 0,
         calls: parseInt(m.calls) || 0,
       })),
       bySource: bySource.map((s) => ({
         source: s.source,
         totalTokens: parseInt(s.totalTokens) || 0,
         costUsd: parseFloat(s.costUsd) || 0,
+        costInr: parseFloat(s.costInr) || 0,
         calls: parseInt(s.calls) || 0,
       })),
       daily: daily.map((d) => ({
         date: d.date,
         totalTokens: parseInt(d.totalTokens) || 0,
         costUsd: parseFloat(d.costUsd) || 0,
+        costInr: parseFloat(d.costInr) || 0,
         calls: parseInt(d.calls) || 0,
       })),
       recentCalls,
@@ -965,7 +1239,7 @@ export const getAvailableAiModelsService = async () => {
   });
 
   return models.map((m) => {
-    const usdToInr = parseFloat(m.usd_to_inr_rate) || 85;
+    const usdToInr = parseFloat(m.usd_to_inr_rate) || DEFAULT_USD_TO_INR;
     const inputUsd = parseFloat(m.input_rate);
     const outputUsd = parseFloat(m.output_rate);
     return {
@@ -1036,11 +1310,13 @@ export const addManualCreditService = async (
         message: `₹${amountInRupees.toFixed(2)} credited: ${reason}`,
       });
 
-      // If balance was restored from suspended state, emit restoration event
+      // If balance was restored, emit restoration event
       if (newBalance > 0) {
-        const { checkAndRestoreWallet } =
-          await import("../../utils/billing/walletGuard.js");
-        await checkAndRestoreWallet(tenant_id, newBalance);
+        io.to(`tenant-${tenant_id}`).emit("wallet-restored", {
+          tenant_id,
+          balance: newBalance,
+          message: "Services restored! Your account is now active.",
+        });
       }
     } catch (err) {
       console.error("[BILLING] Socket emit error:", err.message);
@@ -1071,6 +1347,60 @@ export const getWalletStatusService = async (tenant_id) => {
     const { checkWalletStatus } =
       await import("../../utils/billing/walletGuard.js");
     return await checkWalletStatus(tenant_id);
+  } catch (error) {
+    throw error;
+  }
+};
+
+/**
+ * Get tenant billing mode + cycle + credit info.
+ */
+export const getBillingModeService = async (tenant_id) => {
+  try {
+    const tenant = await db.Tenants.findOne({
+      where: { tenant_id },
+      attributes: [
+        "billing_mode",
+        "billing_cycle_start",
+        "billing_cycle_end",
+        "postpaid_credit_limit",
+        "max_daily_messages",
+        "max_monthly_messages",
+        "max_daily_ai_calls",
+        "max_monthly_ai_calls",
+      ],
+      raw: true,
+    });
+
+    if (!tenant) throw new Error("Tenant not found");
+
+    const result = {
+      billing_mode: tenant.billing_mode || "prepaid",
+      billing_cycle_start: tenant.billing_cycle_start,
+      billing_cycle_end: tenant.billing_cycle_end,
+      limits: {
+        max_daily_messages: tenant.max_daily_messages,
+        max_monthly_messages: tenant.max_monthly_messages,
+        max_daily_ai_calls: tenant.max_daily_ai_calls,
+        max_monthly_ai_calls: tenant.max_monthly_ai_calls,
+      },
+    };
+
+    if (tenant.billing_mode === "postpaid") {
+      const activeCycle = await db.BillingCycles.findOne({
+        where: { tenant_id, status: "active" },
+        raw: true,
+      });
+      result.postpaid = {
+        credit_limit: parseFloat(tenant.postpaid_credit_limit) || 5000,
+        current_usage: activeCycle
+          ? parseFloat(activeCycle.total_cost_inr) || 0
+          : 0,
+        cycle_number: activeCycle?.cycle_number || 0,
+      };
+    }
+
+    return result;
   } catch (error) {
     throw error;
   }

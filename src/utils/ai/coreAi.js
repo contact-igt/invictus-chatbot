@@ -73,9 +73,16 @@ export const callAI = async ({
     );
   }
 
+  const rawContent = response.choices?.[0]?.message?.content;
+  if (rawContent == null) {
+    console.warn(
+      `[AI-SERVICE:${source}] OpenAI returned null content for tenant ${tenant_id}`,
+    );
+  }
+
   return {
-    content: response.choices[0].message.content.trim(),
-    finishReason: response.choices[0].finish_reason,
+    content: rawContent?.trim() || "",
+    finishReason: response.choices?.[0]?.finish_reason || "unknown",
     usage: response.usage || {},
     raw: response,
   };

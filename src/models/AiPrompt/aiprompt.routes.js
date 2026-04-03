@@ -16,11 +16,17 @@ import {
   authenticate,
   authorize,
 } from "../../middlewares/auth/authMiddlewares.js";
+import { requireAiAccess } from "../../middlewares/billing/billingAccessGuard.js";
 
 const router = express.Router();
 
 // Generic AI completion endpoint for frontend use
-router.post("/ai/completion", authenticate, generateAiCompletionController);
+router.post(
+  "/ai/completion",
+  authenticate,
+  requireAiAccess,
+  generateAiCompletionController,
+);
 
 router.post("/prompt", authenticate, uploadAiPrompt);
 router.get(
