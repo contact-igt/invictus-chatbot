@@ -181,18 +181,9 @@ export const getAllTenantUsersService = async (tenant_id) => {
       tu.role,
       tu.mobile,
       tu.country_code,
-      COALESCE(ti.status, tu.status) as status,
+      tu.status,
       tu.created_at
     FROM ${tableNames.TENANT_USERS} tu
-    LEFT JOIN (
-      SELECT tenant_user_id, status
-      FROM ${tableNames.TENANT_INVITATIONS}
-      WHERE id IN (
-        SELECT MAX(id)
-        FROM ${tableNames.TENANT_INVITATIONS}
-        GROUP BY tenant_user_id
-      )
-    ) ti ON tu.tenant_user_id = ti.tenant_user_id
     WHERE tu.tenant_id = ?
       AND tu.is_deleted = ?
     ORDER BY tu.created_at DESC
