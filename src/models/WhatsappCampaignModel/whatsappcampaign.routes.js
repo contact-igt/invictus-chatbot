@@ -14,6 +14,7 @@ import {
   getDeletedCampaignListController,
   restoreCampaignController,
   uploadCampaignMediaController,
+  estimateCampaignCostController,
 } from "./whatsappcampaign.controller.js";
 
 const router = express.Router();
@@ -25,6 +26,13 @@ router.post(
   authenticate,
   authorize({ user_type: "tenant", roles: tenantRoles }),
   createCampaignController,
+);
+
+router.post(
+  "/whatsapp-campaign/estimate-cost",
+  authenticate,
+  authorize({ user_type: "tenant", roles: tenantRoles }),
+  estimateCampaignCostController,
 );
 
 router.post(

@@ -120,7 +120,15 @@ export const requireSufficientBalance = async (req, res, next) => {
     if (!tenant_id) return next();
 
     let category = (req.body.category || "utility").toLowerCase();
-    const country = req.body.country || "Global";
+
+    // Look up tenant's country and phone code
+    const tenant = await db.Tenants.findOne({
+      where: { tenant_id },
+      attributes: ["country", "owner_country_code", "timezone"],
+      raw: true,
+    });
+    const isIndia = (tenant?.owner_country_code === "91" || tenant?.timezone === "Asia/Kolkata");
+    const country = req.body.country || tenant?.country || (isIndia ? "IN" : "Global");
 
     // If template_id is provided, look up the actual template category from DB
     if (req.body.template_id) {
@@ -248,7 +256,14 @@ export const requireCampaignAccess = async (req, res, next) => {
       }
     }
 
-    const country = req.body.country || "Global";
+    // Look up tenant's country and phone code
+    const tenant = await db.Tenants.findOne({
+      where: { tenant_id },
+      attributes: ["country", "owner_country_code", "timezone"],
+      raw: true,
+    });
+    const isIndia = (tenant?.owner_country_code === "91" || tenant?.timezone === "Asia/Kolkata");
+    const country = req.body.country || tenant?.country || (isIndia ? "IN" : "Global");
 
     const cost = await estimateMetaCost(category, country);
     const estimated_cost = cost.totalCostInr * recipientCount;
@@ -258,6 +273,7 @@ export const requireCampaignAccess = async (req, res, next) => {
       return res.status(403).json({
         success: false,
         ...access,
+        message: access.reason,
         recipient_count: recipientCount,
         estimated_cost,
       });

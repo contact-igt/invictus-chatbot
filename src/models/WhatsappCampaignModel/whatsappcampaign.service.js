@@ -401,7 +401,17 @@ export const executeCampaignBatchService = async (
       const category = (
         campaign.template?.category || "marketing"
       ).toLowerCase();
-      const cost = await estimateMetaCost(category, "Global");
+      const tenantForBilling = await db.Tenants.findOne({
+        where: { tenant_id },
+        attributes: ["country", "owner_country_code", "timezone"],
+        raw: true,
+      });
+      const isIndia =
+        tenantForBilling?.owner_country_code === "91" ||
+        tenantForBilling?.timezone === "Asia/Kolkata";
+      const billingCountry =
+        tenantForBilling?.country || (isIndia ? "IN" : "Global");
+      const cost = await estimateMetaCost(category, billingCountry);
       const batchCost = cost.totalCostInr * recipients.length;
       const billingCheck = await canSendCampaign(tenant_id, batchCost);
 
@@ -942,7 +952,17 @@ export const startCampaignSchedulerService = () => {
             raw: true,
           });
           const category = (template?.category || "marketing").toLowerCase();
-          const cost = await estimateMetaCost(category, "Global");
+          const tenantForBilling = await db.Tenants.findOne({
+            where: { tenant_id: campaign.tenant_id },
+            attributes: ["country", "owner_country_code", "timezone"],
+            raw: true,
+          });
+          const isIndia =
+            tenantForBilling?.owner_country_code === "91" ||
+            tenantForBilling?.timezone === "Asia/Kolkata";
+          const billingCountry =
+            tenantForBilling?.country || (isIndia ? "IN" : "Global");
+          const cost = await estimateMetaCost(category, billingCountry);
           // Estimate cost for a single batch of 100 messages
           const pendingCount = await db.WhatsappCampaignRecipients.count({
             where: { campaign_id: campaign.campaign_id, status: "pending" },

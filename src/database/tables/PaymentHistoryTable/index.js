@@ -25,7 +25,6 @@ export const PaymentHistoryTable = (sequelize, Sequelize) => {
       razorpay_payment_id: {
         type: Sequelize.STRING,
         allowNull: true,
-        unique: true,
         comment: "Razorpay Payment ID - unique to prevent duplicate credits",
       },
 

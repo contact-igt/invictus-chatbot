@@ -19,7 +19,6 @@ export const BillingLedgerTable = (sequelize, Sequelize) => {
       message_usage_id: {
         type: Sequelize.INTEGER,
         allowNull: true,
-        unique: true,
         comment:
           "Unique constraint prevents duplicate billing for the same message (NULL for AI entries)",
       },
@@ -27,7 +26,6 @@ export const BillingLedgerTable = (sequelize, Sequelize) => {
       ai_token_usage_id: {
         type: Sequelize.INTEGER,
         allowNull: true,
-        unique: true,
         comment:
           "FK to ai_token_usage — set for AI billing entries (NULL for message entries)",
       },
