@@ -13,7 +13,72 @@ import { uploadToCloudinary } from "../../middlewares/cloudinary/cloudinaryUploa
 import { checkBillingAccess } from "../../middlewares/billing/billingAccessGuard.js";
 import { estimateMetaCost } from "../../utils/billing/costEstimator.js";
 
+/**
+ * GET /whatsapp-campaign/estimate-cost
+ * Returns estimated cost for a campaign given template_id and recipient_count.
+ */
+export const estimateCampaignCostController = async (req, res) => {
+  const tenant_id = req.user.tenant_id;
+  const { template_id, recipient_count } = req.body;
+
+  try {
+    const recipientCount = parseInt(recipient_count, 10) || 1;
+
+    // Look up template category
+    const { default: db } = await import("../../database/index.js");
+    const template = await db.WhatsappTemplates.findOne({
+      where: { template_id },
+      attributes: ["category"],
+      raw: true,
+    });
+    const category = (template?.category || "marketing").toLowerCase();
+
+    // Look up tenant's country and phone code
+    const tenant = await db.Tenants.findOne({
+      where: { tenant_id },
+      attributes: ["country", "owner_country_code", "timezone"],
+      raw: true,
+    });
+    
+    // Auto-detect India based on timezone or country code
+    const isIndia = (tenant?.owner_country_code === "91" || tenant?.timezone === "Asia/Kolkata");
+    const country = req.body.country || tenant?.country || (isIndia ? "IN" : "Global");
+
+    // Get cost per message
+    const cost = await estimateMetaCost(category, country);
+    const perMessageCostInr = cost.totalCostInr;
+    const totalCostInr = perMessageCostInr * recipientCount;
+
+    // Get wallet balance for comparison
+    const wallet = await db.Wallets.findOne({
+      where: { tenant_id },
+      attributes: ["balance"],
+      raw: true,
+    });
+    const walletBalance = wallet ? parseFloat(wallet.balance) || 0 : 0;
+
+    return res.status(200).json({
+      success: true,
+      category,
+      recipient_count: recipientCount,
+      per_message_cost_inr: perMessageCostInr,
+      total_cost_inr: totalCostInr,
+      wallet_balance: walletBalance,
+      is_sufficient: walletBalance >= totalCostInr,
+      shortfall: Math.max(0, totalCostInr - walletBalance),
+      base_rate_usd: cost.baseRate,
+      markup_percent: cost.markupPercent,
+      conversion_rate: cost.conversionRate,
+    });
+  } catch (err) {
+    console.error("[CAMPAIGN-ESTIMATE] Error:", err.message);
+    return res.status(500).json({ message: err.message });
+  }
+};
+
 // ... existing code ...
+
+
 
 export const getDeletedCampaignListController = async (req, res) => {
   const tenant_id = req.user.tenant_id;
@@ -90,7 +155,17 @@ export const createCampaignController = async (req, res) => {
           raw: true,
         });
         const category = (template?.category || "marketing").toLowerCase();
-        const cost = await estimateMetaCost(category, "Global");
+        
+        // Look up tenant's country and timezone
+        const tenant = await db.Tenants.findOne({
+          where: { tenant_id },
+          attributes: ["country", "owner_country_code", "timezone"],
+          raw: true,
+        });
+        const isIndia = (tenant?.owner_country_code === "91" || tenant?.timezone === "Asia/Kolkata");
+        const country = req.body.country || tenant?.country || (isIndia ? "IN" : "Global");
+        
+        const cost = await estimateMetaCost(category, country);
         const estimated_cost = cost.totalCostInr * recipientCount;
 
         const access = await checkBillingAccess(tenant_id, estimated_cost);
@@ -98,6 +173,7 @@ export const createCampaignController = async (req, res) => {
           return res.status(403).json({
             success: false,
             ...access,
+            message: access.reason,
             recipient_count: recipientCount,
             estimated_cost,
           });

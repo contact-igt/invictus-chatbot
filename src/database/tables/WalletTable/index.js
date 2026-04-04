@@ -14,7 +14,6 @@ export const WalletTable = (sequelize, Sequelize) => {
       tenant_id: {
         type: Sequelize.STRING,
         allowNull: false,
-        unique: true,
       },
 
       balance: {
@@ -70,6 +69,7 @@ export const WalletTable = (sequelize, Sequelize) => {
       indexes: [
         {
           name: "idx_wallets_tenant",
+          unique: true,
           fields: ["tenant_id"],
         },
       ],

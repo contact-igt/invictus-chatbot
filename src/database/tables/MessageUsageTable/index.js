@@ -19,7 +19,6 @@ export const MessageUsageTable = (sequelize, Sequelize) => {
       message_id: {
         type: Sequelize.STRING,
         allowNull: false,
-        unique: true,
       },
 
       conversation_id: {

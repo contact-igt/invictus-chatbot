@@ -14,7 +14,6 @@ export const BookingSessionTable = (sequelize, Sequelize) => {
       session_id: {
         type: Sequelize.STRING(50),
         allowNull: false,
-        unique: true,
       },
 
       tenant_id: {
@@ -127,6 +126,11 @@ export const BookingSessionTable = (sequelize, Sequelize) => {
       tableName: tableNames.BOOKING_SESSIONS,
       timestamps: true,
       indexes: [
+        {
+          name: "idx_session_id",
+          unique: true,
+          fields: ["session_id"],
+        },
         {
           name: "idx_session_tenant",
           fields: ["tenant_id", "contact_id", "status"],
