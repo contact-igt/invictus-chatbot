@@ -412,7 +412,6 @@ export const deleteTenantService = async (tenant_id) => {
       tableNames.BILLING_LEDGER,
       tableNames.WALLET_TRANSACTIONS,
       tableNames.WALLETS,
-      tableNames.OTP_VERIFICATIONS,
       tableNames.TENANT_INVITATIONS,
       tableNames.TENANT_USERS,
       tableNames.TENANTS, // Delete tenant last
@@ -424,6 +423,12 @@ export const deleteTenantService = async (tenant_id) => {
         transaction,
       });
     }
+
+    // Delete OTP records by matching tenant user emails (otp_verifications has no tenant_id)
+    await db.sequelize.query(
+      `DELETE FROM ${tableNames.OTP_VERIFICATIONS} WHERE email IN (SELECT email FROM ${tableNames.TENANT_USERS} WHERE tenant_id = ? AND is_deleted = 0) OR email IN (SELECT owner_email FROM ${tableNames.TENANTS} WHERE tenant_id = ?)`,
+      { replacements: [tenant_id, tenant_id], transaction },
+    );
 
     await transaction.commit();
     return true;
@@ -513,7 +518,7 @@ export const restoreTenantService = async (tenant_id) => {
 };
 
 export const activateTenantService = async (tenant_id) => {
-  const Query = `UPDATE ${tableNames?.TENANTS} SET status = ? WHERE tenant_id = ? AND is_deleted = ? AND status IN ('inactive', 'invited')`;
+  const Query = `UPDATE ${tableNames?.TENANTS} SET status = ? WHERE tenant_id = ? AND is_deleted = ? AND status IN ('inactive', 'invited', 'trial')`;
 
   try {
     const values = ["active", tenant_id, 0];
@@ -565,6 +570,7 @@ export const getTenantInvitationListService = async () => {
       FROM ${tableNames.TENANT_INVITATIONS}
       GROUP BY tenant_user_id
     ) AND t.is_deleted = ?
+      AND ti.status IN ('pending', 'accepted')
     ORDER BY ti.invited_at DESC`;
 
   try {

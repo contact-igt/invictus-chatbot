@@ -172,19 +172,16 @@ export const createCampaignController = async (req, res) => {
           raw: true,
         });
         const category = (template?.category || "marketing").toLowerCase();
-
+        
         // Look up tenant's country and timezone
         const tenant = await db.Tenants.findOne({
           where: { tenant_id },
           attributes: ["country", "owner_country_code", "timezone"],
           raw: true,
         });
-        const isIndia =
-          tenant?.owner_country_code === "91" ||
-          tenant?.timezone === "Asia/Kolkata";
-        const country =
-          req.body.country || tenant?.country || (isIndia ? "IN" : "Global");
-
+        const isIndia = (tenant?.owner_country_code === "91" || tenant?.timezone === "Asia/Kolkata");
+        const country = req.body.country || tenant?.country || (isIndia ? "IN" : "Global");
+        
         const cost = await estimateMetaCost(category, country);
         const estimated_cost = cost.totalCostInr * recipientCount;
 

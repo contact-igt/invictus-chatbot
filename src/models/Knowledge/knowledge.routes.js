@@ -33,7 +33,6 @@ router.post(
   "/knowledge",
   authenticate,
   authorize({ user_type: "tenant", roles: managerRoles }),
-  requireAiAccess,
   uploadKnowledge,
 );
 router.get(
