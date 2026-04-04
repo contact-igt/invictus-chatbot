@@ -141,7 +141,24 @@ export const createCampaignController = async (req, res) => {
       });
     }
 
-    // Billing check: estimate total cost for all recipients before creating
+    // Validate scheduled_at is in the future (at least 1 minute ahead)
+    if (campaign_type === "scheduled" && req.body.scheduled_at) {
+      const scheduledTime = new Date(req.body.scheduled_at);
+      const now = new Date();
+      if (isNaN(scheduledTime.getTime())) {
+        return res.status(400).send({ message: "Invalid scheduled_at date format" });
+      }
+      if (scheduledTime.getTime() <= now.getTime() + 60_000) {
+        return res.status(400).send({
+          message: "Scheduled time must be at least 1 minute in the future",
+        });
+      }
+    }
+
+    // Billing check: wallet must cover the estimated total cost for ALL campaign types,
+    // including scheduled. If wallet is insufficient at creation time, block the campaign.
+    // At scheduled execution time the wallet is checked again per-batch — if it has
+    // dropped below cost by then, the campaign will be automatically paused.
     const recipientCount = Array.isArray(audience_data)
       ? audience_data.length
       : 1;
@@ -155,16 +172,19 @@ export const createCampaignController = async (req, res) => {
           raw: true,
         });
         const category = (template?.category || "marketing").toLowerCase();
-        
+
         // Look up tenant's country and timezone
         const tenant = await db.Tenants.findOne({
           where: { tenant_id },
           attributes: ["country", "owner_country_code", "timezone"],
           raw: true,
         });
-        const isIndia = (tenant?.owner_country_code === "91" || tenant?.timezone === "Asia/Kolkata");
-        const country = req.body.country || tenant?.country || (isIndia ? "IN" : "Global");
-        
+        const isIndia =
+          tenant?.owner_country_code === "91" ||
+          tenant?.timezone === "Asia/Kolkata";
+        const country =
+          req.body.country || tenant?.country || (isIndia ? "IN" : "Global");
+
         const cost = await estimateMetaCost(category, country);
         const estimated_cost = cost.totalCostInr * recipientCount;
 

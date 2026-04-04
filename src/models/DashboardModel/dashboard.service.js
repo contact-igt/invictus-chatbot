@@ -687,11 +687,11 @@ export const getDashboardStatsService = async (tenantId, period = "30days") => {
     const billingKpiRows = await db.sequelize.query(
       `
             SELECT
-                COALESCE(SUM(total_cost), 0) as total_spent,
-                COALESCE(SUM(CASE WHEN category = 'marketing' THEN total_cost ELSE 0 END), 0) as marketing_spent,
-                COALESCE(SUM(CASE WHEN category = 'utility' THEN total_cost ELSE 0 END), 0) as utility_spent,
-                COALESCE(SUM(CASE WHEN category = 'authentication' THEN total_cost ELSE 0 END), 0) as auth_spent,
-                COALESCE(SUM(CASE WHEN category = 'service' THEN total_cost ELSE 0 END), 0) as service_spent
+                COALESCE(SUM(total_cost_inr), 0) as total_spent,
+                COALESCE(SUM(CASE WHEN category = 'marketing' THEN total_cost_inr ELSE 0 END), 0) as marketing_spent,
+                COALESCE(SUM(CASE WHEN category = 'utility' THEN total_cost_inr ELSE 0 END), 0) as utility_spent,
+                COALESCE(SUM(CASE WHEN category = 'authentication' THEN total_cost_inr ELSE 0 END), 0) as auth_spent,
+                COALESCE(SUM(CASE WHEN category = 'service' THEN total_cost_inr ELSE 0 END), 0) as service_spent
             FROM ${tableNames.BILLING_LEDGER}
             WHERE tenant_id = :tenantId
             ${periodStart ? "AND created_at >= :periodStart" : ""}
@@ -722,7 +722,7 @@ export const getDashboardStatsService = async (tenantId, period = "30days") => {
 
     const revenueTodayRows = await db.sequelize.query(
       `
-            SELECT COALESCE(SUM(total_cost), 0) as revenue
+            SELECT COALESCE(SUM(total_cost_inr), 0) as revenue
             FROM ${tableNames.BILLING_LEDGER}
             WHERE tenant_id = :tenantId
               AND created_at >= :targetTime
