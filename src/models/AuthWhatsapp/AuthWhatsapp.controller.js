@@ -50,6 +50,8 @@ import {
   getLivechatByIdService,
   updateLiveChatTimestampService,
 } from "../LiveChatModel/livechat.service.js";
+import { markMediaAsApprovedService } from "../GalleryModel/gallery.service.js";
+import { tableNames } from "../../database/tableName.js";
 
 export const verifyWebhook = async (req, res) => {
   try {
@@ -81,9 +83,57 @@ export const verifyWebhook = async (req, res) => {
 export const receiveMessage = async (req, res) => {
   const io = getIO();
   try {
-    const value = req.body?.entry?.[0]?.changes?.[0]?.value;
+    const change = req.body?.entry?.[0]?.changes?.[0];
+    const value = change?.value;
+    const field = change?.field;
     const msg = value?.messages?.[0];
     const statusUpdate = value?.statuses?.[0];
+
+    // 0. Handle Template Status Updates (Meta approval/rejection)
+    if (field === "message_template_status_update") {
+      const templateName = value.message_template_name;
+      const templateId = value.message_template_id;
+      const status = value.event; // e.g., "APPROVED", "REJECTED"
+      const wabaId = req.body?.entry?.[0]?.id;
+
+      console.log(`[WEBHOOK] Template Status Update: ${templateName} (${status}) for WABA ${wabaId}`);
+
+      // Map Meta status to our local status
+      const STATUS_MAP = {
+        APPROVED: "approved",
+        REJECTED: "rejected",
+        PENDING: "pending",
+        PAUSED: "paused",
+        DISABLED: "disabled",
+      };
+
+      const mappedStatus = STATUS_MAP[status] || "pending";
+
+      try {
+        // Update template status in DB
+        const [[template]] = await db.sequelize.query(
+          `SELECT template_id, media_asset_id FROM ${tableNames.WHATSAPP_TEMPLATE} WHERE meta_template_id = ? OR template_name = ? LIMIT 1`,
+          { replacements: [templateId, templateName] }
+        );
+
+        if (template) {
+          await db.sequelize.query(
+            `UPDATE ${tableNames.WHATSAPP_TEMPLATE} SET status = ? WHERE template_id = ?`,
+            { replacements: [mappedStatus, template.template_id] }
+          );
+
+          // If approved and has media, mark media as approved
+          if (status === "APPROVED" && template.media_asset_id) {
+            await markMediaAsApprovedService(template.media_asset_id);
+            console.log(`[WEBHOOK] Gallery Asset ${template.media_asset_id} auto-approved via template ${templateName}`);
+          }
+        }
+      } catch (err) {
+        console.error("[WEBHOOK] Error processing template status update:", err);
+      }
+
+      return res.sendStatus(200);
+    }
 
     // 1. Handle Status Updates (Sent/Delivered/Read)
     if (statusUpdate) {

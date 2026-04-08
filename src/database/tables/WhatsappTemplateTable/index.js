@@ -71,6 +71,16 @@ export const WhatsappTemplateTable = (sequelize, Sequelize) => {
         allowNull: true,
       },
 
+      media_asset_id: {
+        type: Sequelize.STRING,
+        allowNull: true,
+      },
+
+      media_handle: {
+        type: Sequelize.TEXT,
+        allowNull: true,
+      },
+
       created_by: {
         type: Sequelize.STRING,
         allowNull: false, // tenant_user_id

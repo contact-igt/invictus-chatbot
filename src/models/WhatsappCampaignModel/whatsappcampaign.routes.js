@@ -13,7 +13,6 @@ import {
   permanentDeleteCampaignController,
   getDeletedCampaignListController,
   restoreCampaignController,
-  uploadCampaignMediaController,
   estimateCampaignCostController,
 } from "./whatsappcampaign.controller.js";
 
@@ -33,13 +32,6 @@ router.post(
   authenticate,
   authorize({ user_type: "tenant", roles: tenantRoles }),
   estimateCampaignCostController,
-);
-
-router.post(
-  "/whatsapp-campaign/upload-media",
-  authenticate,
-  authorize({ user_type: "tenant", roles: tenantRoles }),
-  uploadCampaignMediaController,
 );
 
 router.get(

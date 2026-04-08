@@ -21,6 +21,7 @@ import cron from "node-cron";
 import { generateWhatsAppOTPService } from "../OtpVerificationModel/otpverification.service.js";
 import { canSendCampaign } from "../../utils/billing/walletGuard.js";
 import { estimateMetaCost } from "../../utils/billing/costEstimator.js";
+import { addCampaignUsageService } from "../GalleryModel/gallery.service.js";
 
 /**
  * Creates a new campaign and populates its recipients.
@@ -40,6 +41,8 @@ export const createCampaignService = async (tenant_id, data, created_by) => {
       header_file_name,
       location_params,
       card_media_urls,
+      media_asset_id,  // Gallery asset ID (optional)
+      media_handle,    // Meta media handle from gallery (optional)
     } = data;
 
     // 0. Check for duplicate campaign name
@@ -200,13 +203,15 @@ export const createCampaignService = async (tenant_id, data, created_by) => {
         campaign_name,
         campaign_type,
         template_id,
-        status: campaign_type === "scheduled" ? "scheduled" : "active", // Changed from "draft" to "active" for Send Now
+        status: campaign_type === "scheduled" ? "scheduled" : "active",
         total_audience: recipients.length,
         scheduled_at,
         header_media_url,
         header_file_name,
         location_params,
         card_media_urls,
+        media_asset_id: media_asset_id || null,
+        media_handle: media_handle || null,
         created_by,
       },
       { transaction },
@@ -226,6 +231,14 @@ export const createCampaignService = async (tenant_id, data, created_by) => {
     });
 
     await transaction.commit();
+
+    // 5. Track gallery asset usage (fire and forget, after commit)
+    if (media_asset_id) {
+      addCampaignUsageService(media_asset_id, campaign_id).catch((err) =>
+        console.error("[CAMPAIGN-CREATE] Failed to log gallery asset usage:", err.message)
+      );
+    }
+
     return campaign;
   } catch (err) {
     await transaction.rollback();
@@ -592,11 +605,14 @@ export const executeCampaignBatchService = async (
         // 2. Add Header Component (Media or Location)
         if (headerComponent) {
           const hFormat = headerComponent.header_format?.toUpperCase();
+          const mediaHandle = campaign.media_handle;
+          
           if (
             ["IMAGE", "VIDEO", "DOCUMENT"].includes(hFormat) &&
-            campaignHeaderMediaUrl
+            (mediaHandle || campaignHeaderMediaUrl)
           ) {
-            const mediaObj = { link: campaignHeaderMediaUrl };
+            const mediaObj = mediaHandle ? { handle: mediaHandle } : { link: campaignHeaderMediaUrl };
+            
             if (hFormat === "DOCUMENT") {
               mediaObj.filename = campaign.header_file_name || "document.pdf";
             }

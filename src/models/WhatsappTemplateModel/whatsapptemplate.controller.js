@@ -16,7 +16,6 @@ import {
   getDeletedTemplateListService,
   restoreTemplateService,
 } from "./whatsapptemplate.service.js";
-import { uploadToCloudinary } from "../../middlewares/cloudinary/cloudinaryUpload.js";
 
 export const getDeletedTemplateListController = async (req, res) => {
   const tenant_id = req.user.tenant_id;
@@ -536,32 +535,5 @@ export const generateAiTemplateController = async (req, res) => {
     return res.status(500).json({
       message: err.message,
     });
-  }
-};
-
-export const uploadWhatsappTemplateMediaController = async (req, res) => {
-  try {
-    const file = req.files?.file;
-    const { type } = req.body; // image | video | raw (for document)
-
-    if (!file) {
-      return res.status(400).json({ message: "No file uploaded" });
-    }
-
-    const folder = `whatsapp_templates/${req.user.tenant_id}`;
-    const secureUrl = await uploadToCloudinary(
-      file,
-      type || "auto",
-      "public",
-      folder,
-    );
-
-    return res.status(200).json({
-      message: "Media uploaded successfully",
-      url: secureUrl,
-    });
-  } catch (err) {
-    console.error("Template media upload error:", err);
-    return res.status(500).json({ message: err.message });
   }
 };

@@ -86,6 +86,7 @@ export const whatsappOAuthCallbackController = async (req, res) => {
       phone.id,
       waba.id,
       access_token,
+      process.env.META_APP_ID,
     );
 
     return res.redirect(
@@ -103,7 +104,7 @@ export const manualConnectWhatsappController = async (req, res) => {
   try {
     const tenant_id = req.user.tenant_id;
 
-    const { whatsapp_number, phone_number_id, waba_id, access_token } =
+    const { whatsapp_number, phone_number_id, waba_id, access_token, app_id } =
       req.body;
 
     if (!tenant_id) {
@@ -130,6 +131,7 @@ export const manualConnectWhatsappController = async (req, res) => {
       phone_number_id,
       waba_id,
       access_token,
+      app_id,
     );
 
     return res.status(200).send({

@@ -19,6 +19,7 @@ import TenantInvitationRouter from "./models/TenantInvitationModel/tenantinvitat
 import TenantUserRouter from "./models/TenantUserModel/tenantuser.routes.js";
 import WhatsappTemplateRouter from "./models/WhatsappTemplateModel/whatsapptemplate.routes.js";
 import WhatsappCampaignRouter from "./models/WhatsappCampaignModel/whatsappcampaign.routes.js";
+import GalleryRouter from "./models/GalleryModel/gallery.routes.js";
 import ContactGroupRouter from "./models/ContactGroupModel/contactGroup.routes.js";
 import { startCampaignSchedulerService } from "./models/WhatsappCampaignModel/whatsappcampaign.service.js";
 import { startLeadHeatDecayCronService } from "./models/LeadsModel/leads.service.js";
@@ -91,6 +92,7 @@ app.use(
   LiveChatRouter,
   WhatsappTemplateRouter,
   WhatsappCampaignRouter,
+  GalleryRouter,
   ContactGroupRouter,
   DoctorRouter,
   SpecializationRouter,

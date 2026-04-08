@@ -548,5 +548,65 @@ export const defineAssociations = (db) => {
     constraints: false,
   });
 
+  // ========================================
+  // MEDIA ASSET RELATIONSHIPS
+  // ========================================
+
+  // Tenant → MediaAsset (One-to-Many)
+  db.Tenants.hasMany(db.MediaAsset, {
+    foreignKey: "tenant_id",
+    sourceKey: "tenant_id",
+    as: "mediaAssets",
+    constraints: false,
+  });
+  db.MediaAsset.belongsTo(db.Tenants, {
+    foreignKey: "tenant_id",
+    targetKey: "tenant_id",
+    as: "tenant",
+    constraints: false,
+  });
+
+  // TenantUser → MediaAsset (One-to-Many)
+  db.TenantUsers.hasMany(db.MediaAsset, {
+    foreignKey: "uploaded_by",
+    sourceKey: "tenant_user_id",
+    as: "uploadedMedia",
+    constraints: false,
+  });
+  db.MediaAsset.belongsTo(db.TenantUsers, {
+    foreignKey: "uploaded_by",
+    targetKey: "tenant_user_id",
+    as: "uploader",
+    constraints: false,
+  });
+
+  // WhatsappTemplate → MediaAsset (Belongs-to)
+  db.WhatsappTemplates.belongsTo(db.MediaAsset, {
+    foreignKey: "media_asset_id",
+    targetKey: "media_asset_id",
+    as: "mediaAsset",
+    constraints: false,
+  });
+  db.MediaAsset.hasMany(db.WhatsappTemplates, {
+    foreignKey: "media_asset_id",
+    sourceKey: "media_asset_id",
+    as: "templates",
+    constraints: false,
+  });
+
+  // WhatsappCampaign → MediaAsset (Belongs-to)
+  db.WhatsappCampaigns.belongsTo(db.MediaAsset, {
+    foreignKey: "media_asset_id",
+    targetKey: "media_asset_id",
+    as: "mediaAsset",
+    constraints: false,
+  });
+  db.MediaAsset.hasMany(db.WhatsappCampaigns, {
+    foreignKey: "media_asset_id",
+    sourceKey: "media_asset_id",
+    as: "campaigns",
+    constraints: false,
+  });
+
   return db;
 };

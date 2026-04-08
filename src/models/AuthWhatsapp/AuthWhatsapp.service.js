@@ -39,7 +39,7 @@ export const sendWhatsAppMessage = async (tenant_id, to, message) => {
 
     const { phone_number_id, access_token } = rows[0];
 
-    const META_API_VERSION = process.env.META_API_VERSION || "v22.0";
+    const META_API_VERSION = process.env.META_API_VERSION || "v23.0";
     console.log(
       `[SEND-MSG] Using Meta API version: ${META_API_VERSION}, phone_number_id: ${phone_number_id}, to: ${to}`,
     );
@@ -127,7 +127,7 @@ export const sendWhatsAppLocation = async (tenant_id, to, locationParams) => {
   }
 
   const { phone_number_id, access_token } = rows[0];
-  const META_API_VERSION = process.env.META_API_VERSION || "v22.0";
+  const META_API_VERSION = process.env.META_API_VERSION || "v23.0";
 
   const payload = {
     messaging_product: "whatsapp",
@@ -221,7 +221,7 @@ export const sendWhatsAppTemplate = async (
     },
   };
   console.log("Full Payload:", JSON.stringify(payload, null, 2));
-  const META_API_VERSION = process.env.META_API_VERSION || "v22.0";
+  const META_API_VERSION = process.env.META_API_VERSION || "v23.0";
   console.log(
     `[SEND-TEMPLATE] Using Meta API version: ${META_API_VERSION}, phone_number_id: ${phone_number_id}, to: ${to}`,
   );
@@ -280,7 +280,7 @@ export const sendReadReceipt = async (
 
     if (!rows.length) return;
 
-    const META_API_VERSION = process.env.META_API_VERSION || "v22.0";
+    const META_API_VERSION = process.env.META_API_VERSION || "v23.0";
     try {
       await axios.post(
         `https://graph.facebook.com/${META_API_VERSION}/${phone_number_id}/messages`,
@@ -348,7 +348,7 @@ export const sendTypingIndicator = async (
 
     if (!rows.length) return;
 
-    const META_API_VERSION = process.env.META_API_VERSION || "v22.0";
+    const META_API_VERSION = process.env.META_API_VERSION || "v23.0";
     const access_token = rows[0]?.access_token;
     if (!access_token) return;
 

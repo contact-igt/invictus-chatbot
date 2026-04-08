@@ -18,7 +18,6 @@ import {
   generateAiTemplateController,
   getDeletedTemplateListController,
   restoreTemplateController,
-  uploadWhatsappTemplateMediaController,
 } from "./whatsapptemplate.controller.js";
 
 const router = express.Router();
@@ -103,13 +102,6 @@ router.post(
   authorize({ user_type: "tenant", roles: tenantRoles }),
   requireAiAccess,
   generateAiTemplateController,
-);
-
-router.post(
-  "/whatsapp-template/upload-media",
-  authenticate,
-  authorize({ user_type: "tenant", roles: tenantRoles }),
-  uploadWhatsappTemplateMediaController,
 );
 
 router.delete(

@@ -10,6 +10,7 @@ export const tableNames = {
   WHATSAPP_ACCOUNT: "whatsapp_accounts",
   WHATSAPP_CAMPAIGN: "whatsapp_campaigns",
   WHATSAPP_CAMPAIGN_RECIPIENT: "whatsapp_campaign_recipients",
+  MEDIA_ASSETS: "media_assets",
   KNOWLEDGESOURCE: "knowledge_sources",
   KNOWLEDGECHUNKS: "knowledge_chunks",
   AIPROMPT: "ai_prompts",

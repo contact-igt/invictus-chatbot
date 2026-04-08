@@ -48,6 +48,7 @@ import { DailyUsageSummaryTable } from "./tables/DailyUsageSummaryTable/index.js
 import { MonthlyUsageSummaryTable } from "./tables/MonthlyUsageSummaryTable/index.js";
 import { CronExecutionLogTable } from "./tables/CronExecutionLogTable/index.js";
 import { defineAssociations } from "./associations.js";
+import { MediaAssetTable } from "./tables/MediaAssetTable/index.js";
 
 const dbconfig =
   ServerEnvironmentConfig?.server?.line === "production"
@@ -142,7 +143,9 @@ db.BillingSystemHealth = BillingSystemHealthTable(sequelize, Sequelize);
 db.DailyUsageSummary = DailyUsageSummaryTable(sequelize, Sequelize);
 db.MonthlyUsageSummary = MonthlyUsageSummaryTable(sequelize, Sequelize);
 db.CronExecutionLog = CronExecutionLogTable(sequelize, Sequelize);
+db.MediaAsset = MediaAssetTable(sequelize , Sequelize);
 // db.BookingSession = BookingSessionTable(sequelize, Sequelize);
+
 
 // ========================================
 // IMPORT AND DEFINE ASSOCIATIONS

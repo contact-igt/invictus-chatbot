@@ -35,6 +35,11 @@ export const WhatsappAccountTable = (sequelize, Sequelize) => {
         type: Sequelize.TEXT, // encrypted token
         allowNull: false,
       },
+  
+      app_id: {
+        type: Sequelize.STRING,
+        allowNull: true,
+      },
 
       provider: {
         type: Sequelize.ENUM("meta"),
