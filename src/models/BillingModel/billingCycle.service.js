@@ -433,6 +433,248 @@ export const checkCreditLimit = async (tenant_id) => {
   };
 };
 
+// ─── AUTO-RECHARGE ─────────────────────────────────────────────────
+
+/**
+ * Auto-recharge cron job.
+ * Runs every 5 minutes. Scans all prepaid wallets with auto-recharge enabled
+ * whose balance has dropped below the configured threshold. For each one it:
+ *   1. Creates a Razorpay order for the configured recharge amount
+ *   2. Persists a 'pending' PaymentHistory row (amount is authoritative)
+ *   3. Emits an "auto-recharge-initiated" socket event so the frontend can
+ *      open the Razorpay payment modal without requiring the user to click
+ *      "Add Funds" manually.
+ *
+ * True background auto-debit (e-NACH mandate) is not implemented because it
+ * requires per-tenant mandate setup with Razorpay Subscriptions. This cron
+ * bridges the gap by prompting the user at the right moment.
+ */
+export const runAutoRechargeCron = async () => {
+  let lockId = null;
+
+  try {
+    lockId = await acquireCronLock("auto_recharge_cron");
+    if (!lockId) return;
+
+    const stats = { checked: 0, triggered: 0, errors: 0 };
+
+    // Find wallets that need recharging
+    const walletsToRecharge = await db.Wallets.findAll({
+      where: {
+        auto_recharge_enabled: true,
+        [Op.and]: db.sequelize.literal(
+          "balance < auto_recharge_threshold",
+        ),
+      },
+      raw: true,
+    });
+
+    for (const wallet of walletsToRecharge) {
+      stats.checked++;
+      const { tenant_id, auto_recharge_amount, balance } = wallet;
+      const rechargeAmount = parseFloat(auto_recharge_amount) || 500;
+
+      try {
+        // Check tenant is still prepaid and active
+        const tenant = await db.Tenants.findOne({
+          where: { tenant_id, is_deleted: false },
+          attributes: ["billing_mode", "status"],
+          raw: true,
+        });
+
+        if (!tenant || tenant.billing_mode !== "prepaid") continue;
+
+        // Create a pending PaymentHistory row with the authoritative amount
+        const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+        const suffix = Math.random().toString(36).substring(2, 7).toUpperCase();
+        const receipt = `autorecharge_${Date.now()}_${tenant_id}`;
+
+        // Create Razorpay order
+        const Razorpay = (await import("razorpay")).default;
+        const rzp = new Razorpay({
+          key_id: process.env.RAZORPAY_KEY_ID,
+          key_secret: process.env.RAZORPAY_KEY_SECRET,
+        });
+
+        const order = await rzp.orders.create({
+          amount: Math.round(rechargeAmount * 100), // paise
+          currency: "INR",
+          receipt,
+        });
+
+        // Persist pending record (authoritative amount)
+        await db.PaymentHistory.create({
+          tenant_id,
+          razorpay_order_id: order.id,
+          razorpay_payment_id: null,
+          amount: rechargeAmount,
+          currency: "INR",
+          status: "pending",
+          payment_method: "Auto-Recharge",
+          description: "Auto-Recharge (Threshold Triggered)",
+          balance_before: parseFloat(balance),
+          balance_after: null,
+          invoice_number: null,
+          metadata: {
+            trigger: "auto_recharge_cron",
+            threshold: wallet.auto_recharge_threshold,
+            current_balance: balance,
+            created_at: new Date().toISOString(),
+          },
+        });
+
+        // Emit socket event so frontend opens Razorpay modal
+        try {
+          const io = getIO();
+          io.to(`tenant-${tenant_id}`).emit("auto-recharge-initiated", {
+            order_id: order.id,
+            amount: rechargeAmount,
+            current_balance: parseFloat(balance),
+            threshold: parseFloat(wallet.auto_recharge_threshold),
+            message: `Auto-recharge of ₹${rechargeAmount.toFixed(2)} initiated. Complete payment to restore services.`,
+          });
+        } catch (_) {}
+
+        stats.triggered++;
+        console.log(
+          `[AUTO-RECHARGE-CRON] Triggered ₹${rechargeAmount} recharge for tenant ${tenant_id} (balance: ₹${parseFloat(balance).toFixed(2)})`,
+        );
+      } catch (err) {
+        stats.errors++;
+        console.error(
+          `[AUTO-RECHARGE-CRON] Error for tenant ${tenant_id}:`,
+          err.message,
+        );
+        await recordHealthEvent(
+          "auto_recharge_failure",
+          tenant_id,
+          err.message,
+          { wallet_id: wallet.id },
+        );
+      }
+    }
+
+    await releaseCronLock(lockId, "completed", {
+      cycles_closed: 0,
+      invoices_generated: 0,
+      overdue_marked: 0,
+      ...stats,
+    });
+
+    if (stats.triggered > 0) {
+      console.log(
+        `[AUTO-RECHARGE-CRON] Completed: ${stats.triggered}/${stats.checked} wallets triggered (${stats.errors} errors)`,
+      );
+    }
+  } catch (error) {
+    console.error("[AUTO-RECHARGE-CRON] Failed:", error.message);
+    if (lockId) {
+      await releaseCronLock(lockId, "failed", { error_message: error.message });
+    }
+    await recordHealthEvent("cron_failure", null, error.message, {
+      cron: "auto_recharge_cron",
+    });
+  }
+};
+
+// ─── INVOICE RETRY ─────────────────────────────────────────────────
+
+/**
+ * Invoice retry cron job.
+ * Runs every hour. Finds overdue invoices that haven't exceeded MAX_RETRIES
+ * and whose last retry was more than RETRY_INTERVAL_HOURS ago.
+ * Emits a socket event so the frontend can prompt the tenant to pay.
+ */
+export const runInvoiceRetryCron = async () => {
+  let lockId = null;
+
+  try {
+    lockId = await acquireCronLock("invoice_retry_cron");
+    if (!lockId) return;
+
+    const { MAX_INVOICE_RETRIES, RETRY_INTERVAL_HOURS } = await import(
+      "../../config/billing.config.js"
+    );
+    const retryWindowMs = RETRY_INTERVAL_HOURS * 60 * 60 * 1000;
+    const cutoff = new Date(Date.now() - retryWindowMs);
+
+    const invoicesToRetry = await db.MonthlyInvoices.findAll({
+      where: {
+        status: "overdue",
+        retry_count: { [Op.lt]: MAX_INVOICE_RETRIES },
+        [Op.or]: [
+          { last_retry_at: null },
+          { last_retry_at: { [Op.lt]: cutoff } },
+        ],
+      },
+    });
+
+    let retried = 0;
+    for (const invoice of invoicesToRetry) {
+      try {
+        await invoice.update({ last_retry_at: new Date() });
+        await invoice.increment("retry_count");
+
+        // Emit payment reminder to tenant
+        try {
+          const io = getIO();
+          io.to(`tenant-${invoice.tenant_id}`).emit("invoice-payment-reminder", {
+            invoice_number: invoice.invoice_number,
+            amount: parseFloat(invoice.amount),
+            due_date: invoice.due_date,
+            retry_count: invoice.retry_count + 1,
+            max_retries: MAX_INVOICE_RETRIES,
+            message: `Your invoice ${invoice.invoice_number} of ₹${parseFloat(invoice.amount).toFixed(2)} is overdue. Please pay to restore services.`,
+          });
+        } catch (_) {}
+
+        retried++;
+
+        // On final retry, escalate to admin socket room
+        if (invoice.retry_count + 1 >= MAX_INVOICE_RETRIES) {
+          try {
+            const io = getIO();
+            io.emit("admin-invoice-escalation", {
+              tenant_id: invoice.tenant_id,
+              invoice_number: invoice.invoice_number,
+              amount: parseFloat(invoice.amount),
+              retry_count: invoice.retry_count + 1,
+            });
+          } catch (_) {}
+          console.warn(
+            `[INVOICE-RETRY-CRON] Max retries reached for invoice ${invoice.invoice_number}, tenant ${invoice.tenant_id}`,
+          );
+        }
+      } catch (err) {
+        console.error(
+          `[INVOICE-RETRY-CRON] Error retrying invoice ${invoice.id}:`,
+          err.message,
+        );
+      }
+    }
+
+    await releaseCronLock(lockId, "completed", {
+      cycles_closed: 0,
+      invoices_generated: 0,
+      overdue_marked: retried,
+    });
+
+    if (retried > 0) {
+      console.log(
+        `[INVOICE-RETRY-CRON] Completed: ${retried} invoices retried`,
+      );
+    }
+  } catch (error) {
+    console.error("[INVOICE-RETRY-CRON] Failed:", error.message);
+    if (lockId) {
+      await releaseCronLock(lockId, "failed", { error_message: error.message });
+    }
+    await recordHealthEvent("cron_failure", null, error.message, {
+      cron: "invoice_retry_cron",
+    });
+  }
+};
+
 // ─── CRON ──────────────────────────────────────────────────────────
 
 /**

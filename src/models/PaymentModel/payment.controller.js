@@ -2,7 +2,9 @@ import {
   createRazorpayOrderService,
   verifyRazorpayPaymentService,
   getPaymentHistoryService,
+  handleRazorpayWebhookService,
 } from "./payment.service.js";
+import { logger } from "../../utils/logger.js";
 
 export const createRazorpayOrderController = async (req, res) => {
   try {
@@ -77,5 +79,43 @@ export const getPaymentHistoryController = async (req, res) => {
       message: "Failed to fetch payment history",
       error: error.message,
     });
+  }
+};
+
+/**
+ * Razorpay webhook handler — NO auth middleware.
+ * Signature verification is done inside handleRazorpayWebhookService using
+ * the raw request body.
+ *
+ * IMPORTANT: This route must receive the raw body (Buffer), not JSON-parsed.
+ * The route is registered BEFORE express.json() is applied to it.
+ */
+export const razorpayWebhookController = async (req, res) => {
+  try {
+    const signature = req.headers["x-razorpay-signature"];
+    if (!signature) {
+      return res.status(400).json({ success: false, message: "Missing signature header" });
+    }
+
+    // rawBody is populated by the express.raw() middleware applied only on this route
+    const rawBody = req.rawBody;
+    if (!rawBody) {
+      return res.status(400).json({ success: false, message: "Empty webhook body" });
+    }
+
+    const result = await handleRazorpayWebhookService(rawBody, signature);
+    logger.debug("[PAYMENT-WEBHOOK] Processed:", result);
+
+    // Always return 200 to Razorpay to prevent retries on business-logic outcomes
+    return res.status(200).json({ success: true, ...result });
+  } catch (error) {
+    // Invalid signature → 400, so Razorpay knows not to retry
+    if (error.message === "Invalid webhook signature") {
+      logger.warn("[PAYMENT-WEBHOOK] Invalid signature attempt");
+      return res.status(400).json({ success: false, message: error.message });
+    }
+    logger.error("[PAYMENT-WEBHOOK] Error:", error.message);
+    // Return 500 so Razorpay retries
+    return res.status(500).json({ success: false, message: "Webhook processing failed" });
   }
 };

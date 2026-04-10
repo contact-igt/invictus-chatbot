@@ -26,18 +26,22 @@ import { startLeadHeatDecayCronService } from "./models/LeadsModel/leads.service
 import { startLiveChatCleanupService } from "./models/LiveChatModel/livechat.service.js";
 import DoctorRouter from "./models/DoctorModel/doctor.routes.js";
 import SpecializationRouter from "./models/SpecializationModel/specialization.routes.js";
-import AppointmentRouter from "./models/AppointmentModel/appointment.routes.js";
 import DashboardRouter from "./models/DashboardModel/dashboard.routes.js";
-import { startAppointmentSchedulerService } from "./models/AppointmentModel/appointment.service.js";
 import PlaygroundRouter from "./models/Playground/playground.routes.js";
 import BillingRouter from "./models/BillingModel/billing.routes.js";
 import WhatsappOtpRouter from "./models/OtpVerificationModel/otpverification.routes.js";
 import PaymentRouter from "./models/PaymentModel/payment.routes.js";
 import SuperAdminDashboardRouter from "./models/SuperAdminDashboardModel/superAdminDashboard.routes.js";
-import { runBillingCycleCron } from "./models/BillingModel/billingCycle.service.js";
+import {
+  runBillingCycleCron,
+  runAutoRechargeCron,
+  runInvoiceRetryCron,
+} from "./models/BillingModel/billingCycle.service.js";
 import { checkHealthAlerts } from "./utils/billing/billingHealthMonitor.js";
 import { runDailyReconciliation } from "./utils/billing/paymentReconciler.js";
 import { initBillingQueue } from "./utils/billing/billingQueue.js";
+import { validateRazorpayConfig } from "./models/PaymentModel/payment.service.js";
+import { logger } from "./utils/logger.js";
 import cron from "node-cron";
 
 dns.setDefaultResultOrder("ipv4first");
@@ -63,6 +67,10 @@ app.options("*", cors());
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.use((req, res, next) => {
+  res.setHeader("Content-Type", "application/json; charset=utf-8");
+  next();
+});
 
 app.use(
   fileUpload({
@@ -72,7 +80,7 @@ app.use(
 );
 
 app.use((req, res, next) => {
-  console.log("➡️ Incoming:", req.method, req.url);
+  logger.debug("Incoming:", req.method, req.url);
   next();
 });
 
@@ -96,7 +104,6 @@ app.use(
   ContactGroupRouter,
   DoctorRouter,
   SpecializationRouter,
-  AppointmentRouter,
   PlaygroundRouter,
   DashboardRouter,
   BillingRouter,
@@ -104,30 +111,52 @@ app.use(
   PaymentRouter,
 );
 
+app.use(
+  "/api/v1",
+  WhatsappTemplateRouter,
+  WhatsappCampaignRouter,
+  GalleryRouter,
+);
+
 app.get("/", (req, res) => {
   res.json({ status: "OK" });
 });
 
 await db.sequelize.sync({ alter: true });
-console.log("DB connected");
+logger.info("DB connected");
+
+// Validate Razorpay configuration at startup (fail-fast if misconfigured)
+try {
+  validateRazorpayConfig();
+  logger.info("[PAYMENT] Razorpay configuration validated successfully");
+} catch (err) {
+  logger.warn(`[PAYMENT] ${err.message} — payment features will be unavailable until fixed`);
+}
 
 startLeadHeatDecayCronService();
 startLiveChatCleanupService();
 startCampaignSchedulerService();
-startAppointmentSchedulerService();
 
 // Billing system crons
 cron.schedule("5 0 * * *", () => {
-  console.log("[CRON] Running billing cycle cron...");
+  logger.debug("[CRON] Running billing cycle cron...");
   runBillingCycleCron();
 }); // Daily at 00:05 UTC
+
+cron.schedule("*/5 * * * *", () => {
+  runAutoRechargeCron();
+}); // Every 5 minutes — check low-balance wallets with auto-recharge enabled
+
+cron.schedule("0 * * * *", () => {
+  runInvoiceRetryCron();
+}); // Every hour — retry overdue invoice payment reminders
 
 cron.schedule("*/15 * * * *", () => {
   checkHealthAlerts();
 }); // Every 15 minutes
 
 cron.schedule("0 2 * * *", () => {
-  console.log("[CRON] Running daily reconciliation...");
+  logger.debug("[CRON] Running daily reconciliation...");
   runDailyReconciliation();
 }); // Daily at 02:00 UTC
 
@@ -140,5 +169,7 @@ const server = http.createServer(app);
 initSocket(server);
 
 server.listen(PORT, () => {
-  console.log("✅ Server + Socket running on", PORT);
+  logger.info("Server + Socket running on", PORT);
 });
+
+

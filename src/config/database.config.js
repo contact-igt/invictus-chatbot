@@ -23,6 +23,13 @@ const DatabaseEnvironmentConfig = {
     password: process.env.DATABASE_PASSWORD,
     databse: process.env.DATABASE_DB,
   },
+
+  stage: {
+    host: process.env.DATABASE_STAGE_HOST,
+    user: process.env.DATABASE_STAGE_USER,
+    password: process.env.DATABASE_STAGE_PASSWORD,
+    databse: process.env.DATABASE_STAGE_DB,
+  },
 };
 
 export default DatabaseEnvironmentConfig;

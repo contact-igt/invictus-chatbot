@@ -2,13 +2,14 @@ import Razorpay from "razorpay";
 import db from "../../database/index.js";
 import { getIO } from "../../middlewares/socket/socket.js";
 import crypto from "crypto";
+import { logger } from "../../utils/logger.js";
 
 const razorpay = new Razorpay({
   key_id: process.env.RAZORPAY_KEY_ID,
   key_secret: process.env.RAZORPAY_KEY_SECRET,
 });
 
-console.log(
+logger.info(
   "[PAYMENT] Razorpay initialized with Key ID:",
   process.env.RAZORPAY_KEY_ID
     ? `${process.env.RAZORPAY_KEY_ID.slice(0, 8)}...`
@@ -16,11 +17,33 @@ console.log(
 );
 
 /**
+ * Validate Razorpay configuration at startup.
+ * Throws if key is missing or is the placeholder value.
+ */
+export const validateRazorpayConfig = () => {
+  const keyId = process.env.RAZORPAY_KEY_ID;
+  const keySecret = process.env.RAZORPAY_KEY_SECRET;
+
+  if (!keyId || keyId === "rzp_test_placeholder") {
+    throw new Error(
+      "[PAYMENT] RAZORPAY_KEY_ID is missing or is a placeholder. Set a real key in .env before starting.",
+    );
+  }
+  if (!keySecret) {
+    throw new Error(
+      "[PAYMENT] RAZORPAY_KEY_SECRET is missing. Set it in .env before starting.",
+    );
+  }
+};
+
+/**
  * Creates a Razorpay order for wallet recharge.
+ * Also records a 'pending' PaymentHistory row so the verify step can
+ * validate the authoritative amount instead of trusting the client payload.
  */
 export const createRazorpayOrderService = async (tenant_id, amount) => {
   try {
-    console.log(
+    logger.debug(
       `[PAYMENT] Creating order for Tenant: ${tenant_id}, Amount: ${amount}`,
     );
 
@@ -39,15 +62,30 @@ export const createRazorpayOrderService = async (tenant_id, amount) => {
       receipt: `recharge_${Date.now()}_${tenant_id}`,
     };
 
-    console.log("[PAYMENT] Razorpay Options:", options);
     const order = await razorpay.orders.create(options);
-    console.log("[PAYMENT] Order created successfully:", order.id);
+    logger.debug(`[PAYMENT] Order created successfully: ${order.id}`);
+
+    // Persist a pending record so verify can cross-check the authoritative amount
+    await db.PaymentHistory.create({
+      tenant_id,
+      razorpay_order_id: order.id,
+      razorpay_payment_id: null,
+      amount: amount, // INR — from validated server input, not client
+      currency: "INR",
+      status: "pending",
+      payment_method: "Online",
+      description: "Wallet Recharge (Pending)",
+      balance_before: null,
+      balance_after: null,
+      invoice_number: null,
+      metadata: { created_at: new Date().toISOString() },
+    });
+
     return order;
   } catch (error) {
-    console.error("[PAYMENT SERVICE] Error creating order:", error);
-    // Log more specific Razorpay errors if they exist
+    logger.error("[PAYMENT SERVICE] Error creating order:", error);
     if (error.error)
-      console.error(
+      logger.error(
         "[PAYMENT SERVICE] Razorpay API Error Details:",
         error.error,
       );
@@ -57,6 +95,8 @@ export const createRazorpayOrderService = async (tenant_id, amount) => {
 
 /**
  * Verifies Razorpay payment signature and credits the wallet.
+ * Amount is taken from the server-side pending PaymentHistory record
+ * (created during order creation) — NEVER from the client payload.
  */
 export const verifyRazorpayPaymentService = async (tenant_id, paymentData) => {
   const { razorpay_order_id, razorpay_payment_id, razorpay_signature } =
@@ -74,59 +114,97 @@ export const verifyRazorpayPaymentService = async (tenant_id, paymentData) => {
     .update(body.toString())
     .digest("hex");
 
-  if (expectedSignature === razorpay_signature) {
-    // Transaction to verify idempotency + credit wallet atomically
-    const amountInPaise = paymentData.amount || 0;
-    const amountInRupees = amountInPaise / 100;
+  // 1. Verify signature first — throws immediately if invalid
+  if (expectedSignature !== razorpay_signature) {
+    throw new Error("Invalid payment signature");
+  }
 
-    // Generate invoice number: INV-YYYYMMDD-XXXXX
-    const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
-    const randomSuffix = Math.random()
-      .toString(36)
-      .substring(2, 7)
-      .toUpperCase();
-    const invoiceNumber = `INV-${dateStr}-${randomSuffix}`;
+  // 2. Resolve authoritative amount from server-side pending record.
+  //    This prevents clients from passing a manipulated amount in the payload.
+  const pendingRecord = await db.PaymentHistory.findOne({
+    where: { razorpay_order_id, tenant_id, status: "pending" },
+  });
 
-    await db.sequelize.transaction(async (t) => {
-      // 1. Check for duplicate payment INSIDE transaction (race-safe)
-      const existingPayment = await db.PaymentHistory.findOne({
-        where: { razorpay_payment_id },
-        transaction: t,
-        lock: t.LOCK.UPDATE,
-      });
-      if (existingPayment) {
-        console.log(
-          `[PAYMENT] Payment ${razorpay_payment_id} already verified, skipping duplicate`,
-        );
-        return;
-      }
+  let amountInRupees;
+  if (pendingRecord) {
+    amountInRupees = parseFloat(pendingRecord.amount);
+  } else {
+    // Fallback: fetch directly from Razorpay API (pending record may have been
+    // lost due to a crash between order creation and payment completion)
+    try {
+      const order = await razorpay.orders.fetch(razorpay_order_id);
+      amountInRupees = order.amount / 100;
+      logger.warn(
+        `[PAYMENT] No pending record for order ${razorpay_order_id} — used Razorpay API amount: ₹${amountInRupees}`,
+      );
+    } catch (fetchErr) {
+      logger.error("[PAYMENT] Could not fetch order from Razorpay:", fetchErr.message);
+      throw new Error("Payment order not found. Please contact support.");
+    }
+  }
 
-      // 2. Credit wallet
-      let [wallet] = await db.Wallets.findOrCreate({
-        where: { tenant_id },
-        defaults: { tenant_id, balance: 0, currency: "INR" },
-        transaction: t,
-      });
+  // Generate invoice number: INV-YYYYMMDD-XXXXX
+  const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+  const randomSuffix = Math.random().toString(36).substring(2, 7).toUpperCase();
+  const invoiceNumber = `INV-${dateStr}-${randomSuffix}`;
 
-      // NaN protection: ensure balance is a valid number
-      const currentBalance = parseFloat(wallet.balance) || 0;
-      const newBalance = currentBalance + amountInRupees;
-      await wallet.update({ balance: newBalance }, { transaction: t });
+  await db.sequelize.transaction(async (t) => {
+    // Check for duplicate payment INSIDE transaction (race-safe)
+    const existingPayment = await db.PaymentHistory.findOne({
+      where: { razorpay_payment_id },
+      transaction: t,
+      lock: t.LOCK.UPDATE,
+    });
+    if (existingPayment && existingPayment.status === "success") {
+      logger.debug(
+        `[PAYMENT] Payment ${razorpay_payment_id} already verified, skipping duplicate`,
+      );
+      return;
+    }
 
-      // Save to WalletTransactions (for legacy compatibility)
-      await db.WalletTransactions.create(
+    // Credit wallet with row-level lock
+    let [wallet] = await db.Wallets.findOrCreate({
+      where: { tenant_id },
+      defaults: { tenant_id, balance: 0, currency: "INR" },
+      transaction: t,
+    });
+
+    // NaN protection: ensure balance is a valid number
+    const currentBalance = parseFloat(wallet.balance) || 0;
+    const newBalance = currentBalance + amountInRupees;
+    await wallet.update({ balance: newBalance }, { transaction: t });
+
+    // Save to WalletTransactions (audit trail)
+    await db.WalletTransactions.create(
+      {
+        tenant_id,
+        type: "credit",
+        amount: amountInRupees,
+        reference_id: razorpay_payment_id,
+        description: "Wallet Recharge (Online)",
+        balance_after: newBalance,
+      },
+      { transaction: t },
+    );
+
+    // Update or create PaymentHistory record (pending → success)
+    if (pendingRecord) {
+      await pendingRecord.update(
         {
-          tenant_id,
-          type: "credit",
-          amount: amountInRupees,
-          reference_id: razorpay_payment_id,
-          description: "Wallet Recharge (Online)",
+          razorpay_payment_id,
+          status: "success",
+          description: "Wallet Recharge",
+          balance_before: currentBalance,
           balance_after: newBalance,
+          invoice_number: invoiceNumber,
+          metadata: {
+            order_id: razorpay_order_id,
+            verified_at: new Date().toISOString(),
+          },
         },
         { transaction: t },
       );
-
-      // Save to PaymentHistory (dedicated payment tracking)
+    } else {
       await db.PaymentHistory.create(
         {
           tenant_id,
@@ -147,42 +225,37 @@ export const verifyRazorpayPaymentService = async (tenant_id, paymentData) => {
         },
         { transaction: t },
       );
+    }
+  });
+
+  // Emit socket update for payment success
+  try {
+    const wallet = await db.Wallets.findOne({ where: { tenant_id } });
+    const newBalance = parseFloat(wallet.balance);
+    const io = getIO();
+
+    io.to(`tenant-${tenant_id}`).emit("payment-update", {
+      type: "PAYMENT_SUCCESS",
+      amount: amountInRupees,
+      balance: newBalance,
     });
 
-    // 3. Emit socket update for payment success
-    try {
-      const wallet = await db.Wallets.findOne({ where: { tenant_id } });
-      const newBalance = parseFloat(wallet.balance);
-
-      const io = getIO();
-
-      // Emit payment success
-      io.to(`tenant-${tenant_id}`).emit("payment-update", {
-        type: "PAYMENT_SUCCESS",
-        amount: amountInRupees,
+    if (newBalance > 0) {
+      io.to(`tenant-${tenant_id}`).emit("wallet-restored", {
+        tenant_id,
         balance: newBalance,
+        status: newBalance > 100 ? "healthy" : "low",
+        message: "Services restored! Your account is now active.",
       });
-
-      // Emit restoration event if balance is positive
-      if (newBalance > 0) {
-        io.to(`tenant-${tenant_id}`).emit("wallet-restored", {
-          tenant_id,
-          balance: newBalance,
-          status: newBalance > 100 ? "healthy" : "low",
-          message: "Services restored! Your account is now active.",
-        });
-        console.log(
-          `[PAYMENT] Wallet restored for tenant ${tenant_id}. New balance: ₹${newBalance.toFixed(2)}`,
-        );
-      }
-    } catch (err) {
-      console.error("[PAYMENT] Socket emit error:", err.message);
+      logger.info(
+        `[PAYMENT] Wallet restored for tenant ${tenant_id}. New balance: ₹${newBalance.toFixed(2)}`,
+      );
     }
-
-    return { success: true, message: "Payment verified and wallet credited" };
-  } else {
-    throw new Error("Invalid payment signature");
+  } catch (err) {
+    logger.error("[PAYMENT] Socket emit error:", err.message);
   }
+
+  return { success: true, message: "Payment verified and wallet credited" };
 };
 
 /**
@@ -213,7 +286,7 @@ export const getPaymentHistoryService = async (
       },
     };
   } catch (error) {
-    console.error("[PAYMENT] Error fetching payment history:", error);
+    logger.error("[PAYMENT] Error fetching payment history:", error);
     throw error;
   }
 };
@@ -275,7 +348,7 @@ export const payInvoiceService = async (tenant_id, invoice_id, paymentData) => {
     }
   } catch (fetchErr) {
     if (fetchErr.message.includes("Payment amount mismatch")) throw fetchErr;
-    console.error("[PAYMENT] Razorpay order fetch failed:", fetchErr.message);
+    logger.error("[PAYMENT] Razorpay order fetch failed:", fetchErr.message);
     // If Razorpay API is unreachable, proceed with signature verification only
   }
 
@@ -288,7 +361,7 @@ export const payInvoiceService = async (tenant_id, invoice_id, paymentData) => {
       lock: t.LOCK.UPDATE,
     });
     if (existingPayment) {
-      console.log(
+      logger.debug(
         `[PAYMENT] Invoice payment ${razorpay_payment_id} already verified, skipping duplicate`,
       );
       return;
@@ -345,7 +418,7 @@ export const payInvoiceService = async (tenant_id, invoice_id, paymentData) => {
     }
   } catch (_) {}
 
-  console.log(
+  logger.info(
     `[PAYMENT] Invoice ${invoice.invoice_number} paid for tenant ${tenant_id}. Payment: ${razorpay_payment_id}`,
   );
 
@@ -354,6 +427,177 @@ export const payInvoiceService = async (tenant_id, invoice_id, paymentData) => {
     message: "Invoice paid successfully",
     invoice_number: invoice.invoice_number,
   };
+};
+
+/**
+ * Handle an incoming Razorpay webhook event.
+ * Verified via the X-Razorpay-Signature header (HMAC-SHA256 of raw body).
+ *
+ * Supported events:
+ *   payment.authorized  — payment captured; credit wallet / mark invoice paid
+ *   payment.failed      — payment failed; record failure for retry
+ */
+export const handleRazorpayWebhookService = async (rawBody, signature) => {
+  const razorpaySecret = process.env.RAZORPAY_WEBHOOK_SECRET || process.env.RAZORPAY_KEY_SECRET;
+  if (!razorpaySecret) {
+    throw new Error("Razorpay webhook secret not configured");
+  }
+
+  // Verify webhook signature
+  const expectedSignature = crypto
+    .createHmac("sha256", razorpaySecret)
+    .update(rawBody)
+    .digest("hex");
+
+  if (expectedSignature !== signature) {
+    throw new Error("Invalid webhook signature");
+  }
+
+  const event = JSON.parse(rawBody);
+  const eventType = event.event;
+  const paymentEntity = event.payload?.payment?.entity;
+
+  if (!paymentEntity) {
+    logger.warn(`[PAYMENT-WEBHOOK] No payment entity in event: ${eventType}`);
+    return { processed: false, reason: "no_payment_entity" };
+  }
+
+  const { id: razorpay_payment_id, order_id: razorpay_order_id, amount: amountPaise } = paymentEntity;
+
+  if (eventType === "payment.authorized" || eventType === "payment.captured") {
+    // Look up pending PaymentHistory row to identify tenant + amount
+    const pendingRecord = await db.PaymentHistory.findOne({
+      where: { razorpay_order_id, status: "pending" },
+    });
+
+    if (!pendingRecord) {
+      // Could be an invoice payment — look up by order_id in MonthlyInvoices metadata
+      logger.warn(
+        `[PAYMENT-WEBHOOK] No pending record for order ${razorpay_order_id} — event ${eventType}`,
+      );
+      return { processed: false, reason: "pending_record_not_found" };
+    }
+
+    const tenant_id = pendingRecord.tenant_id;
+    const amountInRupees = parseFloat(pendingRecord.amount);
+
+    // Idempotency: skip if already processed by verify endpoint
+    const alreadyProcessed = await db.PaymentHistory.findOne({
+      where: { razorpay_payment_id, status: "success" },
+    });
+    if (alreadyProcessed) {
+      logger.debug(`[PAYMENT-WEBHOOK] Payment ${razorpay_payment_id} already processed, skipping`);
+      return { processed: false, reason: "already_processed" };
+    }
+
+    // Credit wallet atomically
+    await db.sequelize.transaction(async (t) => {
+      const [wallet] = await db.Wallets.findOrCreate({
+        where: { tenant_id },
+        defaults: { tenant_id, balance: 0, currency: "INR" },
+        transaction: t,
+      });
+
+      const currentBalance = parseFloat(wallet.balance) || 0;
+      const newBalance = currentBalance + amountInRupees;
+      await wallet.update({ balance: newBalance }, { transaction: t });
+
+      await db.WalletTransactions.create(
+        {
+          tenant_id,
+          type: "credit",
+          amount: amountInRupees,
+          reference_id: razorpay_payment_id,
+          description: "Wallet Recharge (Webhook)",
+          balance_after: newBalance,
+        },
+        { transaction: t },
+      );
+
+      const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+      const suffix = Math.random().toString(36).substring(2, 7).toUpperCase();
+      await pendingRecord.update(
+        {
+          razorpay_payment_id,
+          status: "success",
+          description: "Wallet Recharge (Webhook)",
+          balance_before: currentBalance,
+          balance_after: newBalance,
+          invoice_number: `INV-${dateStr}-${suffix}`,
+          metadata: {
+            ...pendingRecord.metadata,
+            razorpay_payment_id,
+            webhook_event: eventType,
+            captured_at: new Date().toISOString(),
+          },
+        },
+        { transaction: t },
+      );
+    });
+
+    // Notify tenant via socket
+    try {
+      const io = getIO();
+      const wallet = await db.Wallets.findOne({ where: { tenant_id } });
+      const newBalance = parseFloat(wallet.balance);
+      io.to(`tenant-${tenant_id}`).emit("payment-update", {
+        type: "PAYMENT_SUCCESS",
+        amount: amountInRupees,
+        balance: newBalance,
+        source: "webhook",
+      });
+      if (newBalance > 0) {
+        io.to(`tenant-${tenant_id}`).emit("wallet-restored", {
+          tenant_id,
+          balance: newBalance,
+          status: newBalance > 100 ? "healthy" : "low",
+          message: "Payment confirmed. Your account is now active.",
+        });
+      }
+    } catch (_) {}
+
+    logger.info(
+      `[PAYMENT-WEBHOOK] Credited ₹${amountInRupees} to tenant ${tenant_id} via webhook ${eventType}`,
+    );
+    return { processed: true };
+  }
+
+  if (eventType === "payment.failed") {
+    const pendingRecord = await db.PaymentHistory.findOne({
+      where: { razorpay_order_id, status: "pending" },
+    });
+
+    if (pendingRecord) {
+      await pendingRecord.update({
+        razorpay_payment_id,
+        status: "failed",
+        metadata: {
+          ...pendingRecord.metadata,
+          error_code: paymentEntity.error_code,
+          error_description: paymentEntity.error_description,
+          failed_at: new Date().toISOString(),
+        },
+      });
+
+      // Notify tenant
+      try {
+        const io = getIO();
+        io.to(`tenant-${pendingRecord.tenant_id}`).emit("payment-failed", {
+          order_id: razorpay_order_id,
+          error: paymentEntity.error_description || "Payment failed",
+        });
+      } catch (_) {}
+
+      logger.warn(
+        `[PAYMENT-WEBHOOK] Payment failed for order ${razorpay_order_id}: ${paymentEntity.error_description}`,
+      );
+    }
+
+    return { processed: true };
+  }
+
+  // Unknown event — acknowledge receipt but don't process
+  return { processed: false, reason: "unhandled_event_type" };
 };
 
 /**
@@ -382,7 +626,7 @@ export const recordInvoicePaymentFailure = async (tenant_id, invoice_id) => {
       });
     } catch (_) {}
 
-    console.warn(
+    logger.warn(
       `[PAYMENT] Max retries reached for ${invoice.invoice_number}, tenant ${tenant_id}`,
     );
   }

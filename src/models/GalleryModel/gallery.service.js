@@ -1,12 +1,82 @@
-/**
+﻿/**
  * Gallery Service
  * Business logic for media asset management
  */
 
 import db from "../../database/index.js";
 import { Op } from "sequelize";
+import { tableNames } from "../../database/tableName.js";
 import { uploadMediaToMeta } from "../../services/mediaUploadService.js";
 import { validateMediaFile, getFileTypeFromMimeType } from "../../utils/mediaValidation.js";
+import {
+  uploadPreviewToStorage,
+  deletePreviewFromStorage,
+} from "../../services/storageService.js";
+import { logger } from "../../utils/logger.js";
+
+const normalizeUsageArray = (value) => {
+  if (Array.isArray(value)) return value;
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+};
+
+const buildAssetLookupWhere = (assetId, tenantId, includeDeleted = false) => {
+  const where = {
+    tenant_id: tenantId,
+    ...(includeDeleted ? {} : { is_deleted: false }),
+  };
+
+  const numericId = Number(assetId);
+  if (!Number.isNaN(numericId) && String(numericId) === String(assetId)) {
+    where[Op.or] = [{ media_asset_id: assetId }, { id: numericId }];
+  } else {
+    where.media_asset_id = assetId;
+  }
+
+  return where;
+};
+
+const getActiveUsageIds = async (tenantId, templateIds = [], campaignIds = []) => {
+  const activeTemplateIds = [];
+  const activeCampaignIds = [];
+
+  if (templateIds.length > 0) {
+    const [rows] = await db.sequelize.query(
+      `
+      SELECT template_id
+      FROM ${tableNames.WHATSAPP_TEMPLATE}
+      WHERE tenant_id = ?
+        AND is_deleted = false
+        AND template_id IN (?)
+      `,
+      { replacements: [tenantId, templateIds] },
+    );
+    for (const row of rows) activeTemplateIds.push(row.template_id);
+  }
+
+  if (campaignIds.length > 0) {
+    const [rows] = await db.sequelize.query(
+      `
+      SELECT campaign_id
+      FROM ${tableNames.WHATSAPP_CAMPAIGN}
+      WHERE tenant_id = ?
+        AND is_deleted = false
+        AND campaign_id IN (?)
+      `,
+      { replacements: [tenantId, campaignIds] },
+    );
+    for (const row of rows) activeCampaignIds.push(row.campaign_id);
+  }
+
+  return { activeTemplateIds, activeCampaignIds };
+};
 
 /**
  * Upload media file to Meta and create MediaAsset record
@@ -48,6 +118,9 @@ export const uploadMediaService = async (
       throw new Error(validation.error);
     }
 
+    // Generate asset ID before uploads (needed for R2 file key)
+    const assetId = `media_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
     // Upload to Meta Resumable Upload API
     const mediaHandle = await uploadMediaToMeta(
       file.data,
@@ -56,15 +129,28 @@ export const uploadMediaService = async (
       appId,
     );
 
+    // Upload thumbnail preview to R2 for Gallery UI display
+    // Non-blocking — previewUrl is null if upload fails or file is video
+    // This does NOT affect media_handle or Meta upload in any way
+    const previewUrl = await uploadPreviewToStorage(
+      file.data,
+      file.mimetype,
+      fileType,
+      file.name,
+      tenantId,
+      assetId,
+    );
+
     // Create MediaAsset record
     const mediaAsset = await db.MediaAsset.create({
-      media_asset_id: `media_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      media_asset_id: assetId,
       tenant_id: tenantId,
       file_name: file.name,
       file_type: fileType,
       mime_type: file.mimetype,
       file_size: file.size,
       media_handle: mediaHandle,
+      preview_url: previewUrl,
       tags: metadata.tags || [],
       folder: metadata.folder || "root",
       is_approved: false,
@@ -76,7 +162,7 @@ export const uploadMediaService = async (
 
     return mediaAsset;
   } catch (error) {
-    console.error("Error in uploadMediaService:", error);
+    logger.error("Error in uploadMediaService:", error);
     throw error;
   }
 };
@@ -156,7 +242,7 @@ export const listMediaAssetsService = async (tenantId, filters = {}, pagination 
       data: rows,
     };
   } catch (error) {
-    console.error("Error in listMediaAssetsService:", error);
+    logger.error("Error in listMediaAssetsService:", error);
     throw error;
   }
 };
@@ -170,11 +256,7 @@ export const listMediaAssetsService = async (tenantId, filters = {}, pagination 
 export const getMediaAssetService = async (assetId, tenantId) => {
   try {
     const mediaAsset = await db.MediaAsset.findOne({
-      where: {
-        media_asset_id: assetId,
-        tenant_id: tenantId,
-        is_deleted: false,
-      },
+      where: buildAssetLookupWhere(assetId, tenantId),
     });
 
     if (!mediaAsset) {
@@ -183,7 +265,7 @@ export const getMediaAssetService = async (assetId, tenantId) => {
 
     return mediaAsset;
   } catch (error) {
-    console.error("Error in getMediaAssetService:", error);
+    logger.error("Error in getMediaAssetService:", error);
     throw error;
   }
 };
@@ -197,35 +279,66 @@ export const getMediaAssetService = async (assetId, tenantId) => {
 export const deleteMediaAssetService = async (assetId, tenantId) => {
   try {
     const mediaAsset = await db.MediaAsset.findOne({
-      where: {
-        media_asset_id: assetId,
-        tenant_id: tenantId,
-        is_deleted: false,
-      },
+      where: buildAssetLookupWhere(assetId, tenantId),
     });
 
     if (!mediaAsset) {
       throw new Error("Media asset not found");
     }
 
-    // Check if media is approved (used in approved templates)
     if (mediaAsset.is_approved) {
-      throw new Error(
-        "Cannot delete media used in approved templates. Please delete or update the templates first.",
-      );
+      throw new Error("Cannot delete approved media asset");
+    }
+    const templateUsage = normalizeUsageArray(mediaAsset.templates_used).filter(Boolean);
+    const campaignUsage = normalizeUsageArray(mediaAsset.campaigns_used).filter(Boolean);
+
+    const { activeTemplateIds, activeCampaignIds } = await getActiveUsageIds(
+      tenantId,
+      templateUsage,
+      campaignUsage,
+    );
+
+    if (
+      activeTemplateIds.length !== templateUsage.length ||
+      activeCampaignIds.length !== campaignUsage.length
+    ) {
+      mediaAsset.templates_used = activeTemplateIds;
+      mediaAsset.campaigns_used = activeCampaignIds;
+      await mediaAsset.save();
     }
 
-    // Soft delete the record
+    if (activeTemplateIds.length > 0) {
+      throw new Error("Cannot delete - media is linked to an active template");
+    }
+
+    if (activeCampaignIds.length > 0) {
+      throw new Error("Cannot delete - media is used in an active campaign");
+    }
+
+    // Soft delete only — do NOT delete from R2 by default
+    // preview_url and media_handle are preserved for potential restore
+    // Set HARD_DELETE_STORAGE=true in .env to also purge from storage
     mediaAsset.is_deleted = true;
     mediaAsset.deleted_at = new Date();
     await mediaAsset.save();
+
+    if (String(process.env.HARD_DELETE_STORAGE).toLowerCase() === "true") {
+      try {
+        await deletePreviewFromStorage(mediaAsset.preview_url);
+      } catch (storageErr) {
+        logger.error(
+          "[GALLERY-DELETE] Storage deletion failed:",
+          storageErr.message,
+        );
+      }
+    }
 
     return {
       success: true,
       message: "Media asset deleted successfully",
     };
   } catch (error) {
-    console.error("Error in deleteMediaAssetService:", error);
+    logger.error("Error in deleteMediaAssetService:", error);
     throw error;
   }
 };
@@ -240,11 +353,7 @@ export const deleteMediaAssetService = async (assetId, tenantId) => {
 export const updateMediaTagsService = async (assetId, tenantId, tags) => {
   try {
     const mediaAsset = await db.MediaAsset.findOne({
-      where: {
-        media_asset_id: assetId,
-        tenant_id: tenantId,
-        is_deleted: false,
-      },
+      where: buildAssetLookupWhere(assetId, tenantId),
     });
 
     if (!mediaAsset) {
@@ -257,7 +366,7 @@ export const updateMediaTagsService = async (assetId, tenantId, tags) => {
 
     return mediaAsset;
   } catch (error) {
-    console.error("Error in updateMediaTagsService:", error);
+    logger.error("Error in updateMediaTagsService:", error);
     throw error;
   }
 };
@@ -285,7 +394,7 @@ export const markMediaAsApprovedService = async (assetId) => {
 
     return mediaAsset;
   } catch (error) {
-    console.error("Error in markMediaAsApprovedService:", error);
+    logger.error("Error in markMediaAsApprovedService:", error);
     throw error;
   }
 };
@@ -310,14 +419,52 @@ export const addTemplateUsageService = async (assetId, templateId) => {
     }
 
     // Add template ID if not already present
-    if (!mediaAsset.templates_used.includes(templateId)) {
-      mediaAsset.templates_used = [...mediaAsset.templates_used, templateId];
+    const existingTemplateUsage = normalizeUsageArray(mediaAsset.templates_used);
+    if (!existingTemplateUsage.includes(templateId)) {
+      mediaAsset.templates_used = [...existingTemplateUsage, templateId];
       await mediaAsset.save();
     }
 
     return mediaAsset;
   } catch (error) {
-    console.error("Error in addTemplateUsageService:", error);
+    logger.error("Error in addTemplateUsageService:", error);
+    throw error;
+  }
+};
+
+/**
+ * Restore a soft-deleted media asset
+ * @param {string} assetId - Media asset ID
+ * @param {string} tenantId - Tenant ID
+ * @returns {Promise<Object>} Restore result with asset details
+ */
+export const restoreMediaAssetService = async (assetId, tenantId) => {
+  try {
+    const mediaAsset = await db.MediaAsset.findOne({
+      where: {
+        ...buildAssetLookupWhere(assetId, tenantId, true),
+        is_deleted: true,
+      },
+    });
+
+    if (!mediaAsset) {
+      throw new Error("Asset not found or not deleted");
+    }
+
+    mediaAsset.is_deleted = false;
+    mediaAsset.deleted_at = null;
+    await mediaAsset.save();
+
+    return {
+      success: true,
+      asset_id: mediaAsset.media_asset_id,
+      file_name: mediaAsset.file_name,
+      preview_url: mediaAsset.preview_url,
+      media_handle: mediaAsset.media_handle,
+      message: "Media restored successfully",
+    };
+  } catch (error) {
+    logger.error("Error in restoreMediaAssetService:", error);
     throw error;
   }
 };
@@ -342,14 +489,17 @@ export const addCampaignUsageService = async (assetId, campaignId) => {
     }
 
     // Add campaign ID if not already present
-    if (!mediaAsset.campaigns_used.includes(campaignId)) {
-      mediaAsset.campaigns_used = [...mediaAsset.campaigns_used, campaignId];
+    const existingCampaignUsage = normalizeUsageArray(mediaAsset.campaigns_used);
+    if (!existingCampaignUsage.includes(campaignId)) {
+      mediaAsset.campaigns_used = [...existingCampaignUsage, campaignId];
       await mediaAsset.save();
     }
 
     return mediaAsset;
   } catch (error) {
-    console.error("Error in addCampaignUsageService:", error);
+    logger.error("Error in addCampaignUsageService:", error);
     throw error;
   }
 };
+
+

@@ -37,7 +37,7 @@ export const WhatsappCampaignTable = (sequelize, Sequelize) => {
             },
 
             status: {
-                type: Sequelize.ENUM("draft", "scheduled", "active", "completed", "failed", "paused"),
+                type: Sequelize.ENUM("draft", "scheduled", "active", "completed", "failed", "paused", "cancelled"),
                 defaultValue: "draft",
                 allowNull: false,
             },

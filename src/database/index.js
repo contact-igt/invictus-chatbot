@@ -21,6 +21,7 @@ import { WhatsappTemplateSyncLogTable } from "./tables/WhatsappTemplateSyncLogsT
 import { WhatsappAccountTable } from "./tables/WhatsappAccountTable/index.js";
 import { WhatsappCampaignTable } from "./tables/WhatsappCampaignTable/index.js";
 import { WhatsappCampaignRecipientTable } from "./tables/WhatsappCampaignRecipientTable/index.js";
+import { CampaignEventsTable } from "./tables/CampaignEventsTable/index.js";
 import { ContactGroupTable } from "./tables/ContactGroupTable/index.js";
 import { ContactGroupMemberTable } from "./tables/ContactGroupMemberTable/index.js";
 import { SequencesTable } from "./tables/SequencesTable/index.js";
@@ -29,7 +30,6 @@ import { DoctorsTable } from "./tables/DoctorsTable/index.js";
 import { DoctorAvailabilityTable } from "./tables/DoctorAvailabilityTable/index.js";
 import { SpecializationsTable } from "./tables/SpecializationsTable/index.js";
 import { DoctorSpecializationsTable } from "./tables/DoctorSpecializationsTable/index.js";
-import { AppointmentTable } from "./tables/AppointmentTable/index.js";
 import { PricingTable } from "./tables/PricingTableTable/index.js";
 import { MessageUsageTable } from "./tables/MessageUsageTable/index.js";
 import { BillingLedgerTable } from "./tables/BillingLedgerTable/index.js";
@@ -107,6 +107,7 @@ db.WhatsappCampaignRecipients = WhatsappCampaignRecipientTable(
   sequelize,
   Sequelize,
 );
+db.CampaignEvents = CampaignEventsTable(sequelize, Sequelize);
 
 db.Whatsappaccount = WhatsappAccountTable(sequelize, Sequelize);
 db.KnowledgeSources = KnowledgeSourcesTable(sequelize, Sequelize);
@@ -126,7 +127,6 @@ db.Doctors = DoctorsTable(sequelize, Sequelize);
 db.DoctorAvailability = DoctorAvailabilityTable(sequelize, Sequelize);
 db.Specializations = SpecializationsTable(sequelize, Sequelize);
 db.DoctorSpecializations = DoctorSpecializationsTable(sequelize, Sequelize);
-db.Appointments = AppointmentTable(sequelize, Sequelize);
 db.PricingTable = PricingTable(sequelize, Sequelize);
 db.MessageUsage = MessageUsageTable(sequelize, Sequelize);
 db.BillingLedger = BillingLedgerTable(sequelize, Sequelize);

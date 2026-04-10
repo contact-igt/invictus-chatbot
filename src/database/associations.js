@@ -75,13 +75,11 @@ export const defineAssociations = (db) => {
     foreignKey: "tenant_id",
     sourceKey: "tenant_id",
     as: "templates",
-    constraints: false,
   });
   db.WhatsappTemplates.belongsTo(db.Tenants, {
     foreignKey: "tenant_id",
     targetKey: "tenant_id",
     as: "tenant",
-    constraints: false,
   });
 
   // Tenant → KnowledgeSources (One-to-Many)
@@ -159,13 +157,11 @@ export const defineAssociations = (db) => {
     foreignKey: "tenant_id",
     sourceKey: "tenant_id",
     as: "campaigns",
-    constraints: false,
   });
   db.WhatsappCampaigns.belongsTo(db.Tenants, {
     foreignKey: "tenant_id",
     targetKey: "tenant_id",
     as: "tenant",
-    constraints: false,
   });
 
   // Tenant → ContactGroups (One-to-Many)
@@ -343,13 +339,11 @@ export const defineAssociations = (db) => {
     foreignKey: "campaign_id",
     sourceKey: "campaign_id",
     as: "recipients",
-    constraints: false,
   });
   db.WhatsappCampaignRecipients.belongsTo(db.WhatsappCampaigns, {
     foreignKey: "campaign_id",
     targetKey: "campaign_id",
     as: "campaign",
-    constraints: false,
   });
 
   // WhatsappCampaign → WhatsappTemplate (Belongs-to)
@@ -357,7 +351,27 @@ export const defineAssociations = (db) => {
     foreignKey: "template_id",
     targetKey: "template_id",
     as: "template",
-    constraints: false,
+  });
+
+  db.WhatsappCampaigns.hasMany(db.CampaignEvents, {
+    foreignKey: "campaign_id",
+    sourceKey: "campaign_id",
+    as: "events",
+  });
+  db.CampaignEvents.belongsTo(db.WhatsappCampaigns, {
+    foreignKey: "campaign_id",
+    targetKey: "campaign_id",
+    as: "campaign",
+  });
+  db.WhatsappCampaignRecipients.hasMany(db.CampaignEvents, {
+    foreignKey: "recipient_id",
+    sourceKey: "id",
+    as: "events",
+  });
+  db.CampaignEvents.belongsTo(db.WhatsappCampaignRecipients, {
+    foreignKey: "recipient_id",
+    targetKey: "id",
+    as: "recipient",
   });
 
   // ========================================
@@ -413,52 +427,6 @@ export const defineAssociations = (db) => {
     sourceKey: "specialization_id",
     targetKey: "doctor_id",
     as: "doctors",
-    constraints: false,
-  });
-
-  // ========================================
-  // APPOINTMENT MODULE RELATIONSHIPS
-  // ========================================
-
-  // Tenant → Appointments (One-to-Many)
-  db.Tenants.hasMany(db.Appointments, {
-    foreignKey: "tenant_id",
-    sourceKey: "tenant_id",
-    as: "appointments",
-    constraints: false,
-  });
-  db.Appointments.belongsTo(db.Tenants, {
-    foreignKey: "tenant_id",
-    targetKey: "tenant_id",
-    as: "tenant",
-    constraints: false,
-  });
-
-  // Doctor → Appointments (One-to-Many)
-  db.Doctors.hasMany(db.Appointments, {
-    foreignKey: "doctor_id",
-    sourceKey: "doctor_id",
-    as: "appointments",
-    constraints: false,
-  });
-  db.Appointments.belongsTo(db.Doctors, {
-    foreignKey: "doctor_id",
-    targetKey: "doctor_id",
-    as: "doctor",
-    constraints: false,
-  });
-
-  // Contact → Appointments (One-to-Many)
-  db.Contacts.hasMany(db.Appointments, {
-    foreignKey: "contact_id",
-    sourceKey: "contact_id",
-    as: "appointments",
-    constraints: false,
-  });
-  db.Appointments.belongsTo(db.Contacts, {
-    foreignKey: "contact_id",
-    targetKey: "contact_id",
-    as: "contact",
     constraints: false,
   });
 
@@ -557,13 +525,11 @@ export const defineAssociations = (db) => {
     foreignKey: "tenant_id",
     sourceKey: "tenant_id",
     as: "mediaAssets",
-    constraints: false,
   });
   db.MediaAsset.belongsTo(db.Tenants, {
     foreignKey: "tenant_id",
     targetKey: "tenant_id",
     as: "tenant",
-    constraints: false,
   });
 
   // TenantUser → MediaAsset (One-to-Many)
@@ -571,13 +537,11 @@ export const defineAssociations = (db) => {
     foreignKey: "uploaded_by",
     sourceKey: "tenant_user_id",
     as: "uploadedMedia",
-    constraints: false,
   });
   db.MediaAsset.belongsTo(db.TenantUsers, {
     foreignKey: "uploaded_by",
     targetKey: "tenant_user_id",
     as: "uploader",
-    constraints: false,
   });
 
   // WhatsappTemplate → MediaAsset (Belongs-to)

@@ -5,7 +5,10 @@ import { getWhatsappAccountByTenantService } from "../WhatsappAccountModel/whats
 import { generateReadableIdFromLast } from "../../utils/helpers/generateReadableIdFromLast.js";
 import { getTemplateCopywriterPrompt } from "../../utils/ai/prompts/template.js";
 import { AiService } from "../../utils/ai/coreAi.js";
-import { addTemplateUsageService } from "../GalleryModel/gallery.service.js";
+import {
+  addTemplateUsageService,
+  markMediaAsApprovedService,
+} from "../GalleryModel/gallery.service.js";
 
 const STATUS_MAP = {
   IN_REVIEW: "pending",
@@ -845,6 +848,18 @@ export const syncWhatsappTemplateStatusService = async ({
 
     await transaction.commit();
 
+    // Keep gallery media approval in sync with template sync flow (same as webhook behavior).
+    if (mappedStatus === "approved" && template.media_asset_id) {
+      try {
+        await markMediaAsApprovedService(template.media_asset_id);
+      } catch (mediaErr) {
+        console.error(
+          `[TEMPLATE-SYNC] Failed to auto-approve gallery media ${template.media_asset_id}:`,
+          mediaErr.message,
+        );
+      }
+    }
+
     return {
       status: mappedStatus,
       meta_status: metaStatus,
@@ -1306,6 +1321,7 @@ export const updateWhatsappTemplateService = async (
   language,
   components,
   variables,
+  updated_by,
 ) => {
   const transaction = await db.sequelize.transaction();
 
@@ -1372,11 +1388,13 @@ export const updateWhatsappTemplateService = async (
       throw new Error("Body cannot end with a variable");
     }
 
+    const nextStatus = template.status === "approved" ? "draft" : template.status;
+
     // Update main template
     await db.sequelize.query(
       `
       UPDATE ${tableNames.WHATSAPP_TEMPLATE}
-      SET template_name = ?, category = ?, template_type = ?, language = ?, media_asset_id = ?, media_handle = ?, updated_by = ?
+      SET template_name = ?, category = ?, template_type = ?, language = ?, media_asset_id = ?, media_handle = ?, updated_by = ?, status = ?
       WHERE template_id = ? AND is_deleted = false
       `,
       {
@@ -1387,7 +1405,8 @@ export const updateWhatsappTemplateService = async (
           language || template.language,
           headerMediaAssetId,
           headerMediaHandle,
-          template.updated_by,
+          updated_by,
+          nextStatus,
           template_id,
         ],
         transaction,
@@ -1570,7 +1589,7 @@ export const updateWhatsappTemplateService = async (
       template_name: template_name || template.template_name,
       category: category || template.category,
       language: language || template.language,
-      status: template.status,
+      status: nextStatus,
       message: "Template updated successfully",
     };
   } catch (err) {

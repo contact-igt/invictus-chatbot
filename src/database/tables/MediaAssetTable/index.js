@@ -48,6 +48,11 @@ export const MediaAssetTable = (sequelize, Sequelize) => {
         unique: true,
       },
 
+      preview_url: {
+        type: Sequelize.TEXT,
+        allowNull: true,
+      },
+
       tags: {
         type: Sequelize.JSON,
         allowNull: true,

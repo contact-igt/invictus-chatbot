@@ -162,7 +162,7 @@ export const authenticateAdmin = async (req, res, next) => {
       return res.status(403).json({ message: "Access denied" });
     }
 
-    if (decoded.role !== "super_admin") {
+    if (decoded.role !== "super_admin" && decoded.role !== "platform_admin") {
       return res.status(403).json({ message: "Permission denied" });
     }
 

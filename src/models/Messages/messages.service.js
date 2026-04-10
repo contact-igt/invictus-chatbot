@@ -11,7 +11,7 @@ import {
   getAdminSystemPrompt,
   getAdminSuggestedReplyPrompt,
   getAdminLeadSourcePrompt,
-  getAdminAppointmentHistoryPrompt,
+  // getAdminAppointmentHistoryPrompt,
 } from "../../utils/ai/prompts/index.js";
 
 export const createUserMessageService = async (
@@ -221,14 +221,6 @@ export const suggestReplyService = async (tenant_id, phone) => {
         if (lead && lead.source === "none") {
           leadSourcePrompt = getAdminLeadSourcePrompt();
         }
-
-        // 2. Appointment History Detection
-        const lastAppointment = await getLastAppointmentService(
-          tenant_id,
-          contact_id,
-        );
-        appointmentHistoryPrompt =
-          getAdminAppointmentHistoryPrompt(lastAppointment);
       }
     } catch (err) {
       console.error(

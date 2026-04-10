@@ -37,6 +37,10 @@ import {
   authorize,
   authenticateAdmin,
 } from "../../middlewares/auth/authMiddlewares.js";
+import {
+  billingQueryRateLimiter,
+  adminBillingRateLimiter,
+} from "../../middlewares/billing/billingRateLimiter.js";
 
 const router = express.Router();
 
@@ -108,59 +112,71 @@ router.get("/billing/invoices/:id", authenticate, getInvoiceDetailController);
 router.post("/billing/invoices/:id/pay", ...tenantAuth, payInvoiceController);
 
 // ADMIN BILLING OVERRIDES (require management + super_admin role)
+// Mutation endpoints have an extra rate limiter to limit damage from compromised admin accounts
 router.post(
   "/billing/admin/force-unlock",
   authenticateAdmin,
+  adminBillingRateLimiter,
   adminForceUnlockController,
 );
 router.post(
   "/billing/admin/manual-credit",
   authenticateAdmin,
+  adminBillingRateLimiter,
   adminManualCreditController,
 );
 router.post(
   "/billing/admin/invoice-close",
   authenticateAdmin,
+  adminBillingRateLimiter,
   adminInvoiceCloseController,
 );
 router.post(
   "/billing/admin/change-mode",
   authenticateAdmin,
+  adminBillingRateLimiter,
   adminChangeBillingModeController,
 );
 router.get(
   "/billing/admin/audit-log",
   authenticateAdmin,
+  billingQueryRateLimiter,
   adminGetAuditLogController,
 );
 router.get(
   "/billing/admin/health",
   authenticateAdmin,
+  billingQueryRateLimiter,
   adminGetHealthSummaryController,
 );
 router.get(
   "/billing/admin/tenants",
   authenticateAdmin,
+  billingQueryRateLimiter,
   adminGetTenantsController,
 );
 router.get(
   "/billing/admin/tenant-overview",
   authenticateAdmin,
+  billingQueryRateLimiter,
   adminGetTenantOverviewController,
 );
 router.post(
   "/billing/admin/health/:id/resolve",
   authenticateAdmin,
+  adminBillingRateLimiter,
   adminResolveHealthEventController,
 );
 router.get(
   "/billing/admin/health/unresolved",
   authenticateAdmin,
+  billingQueryRateLimiter,
   adminGetUnresolvedEventsController,
 );
 router.put(
   "/billing/admin/usage-limits",
   authenticateAdmin,
+  adminBillingRateLimiter,
   adminUpdateUsageLimitsController,
 );
 
