@@ -51,6 +51,61 @@ import {
   updateLiveChatTimestampService,
 } from "../LiveChatModel/livechat.service.js";
 
+const FIXED_MISSING_INFO_FALLBACK =
+  "Our team will get back to you shortly. Please feel free to ask any other questions in the meantime ?";
+
+const MISSING_INFO_TAGS = new Set([
+  "MISSING_KNOWLEDGE",
+  "MISSING_KNOWLEDGEBASE_HOOK",
+  "MISSING_INFO",
+]);
+
+const MISSING_INFO_REPLY_PATTERN =
+  /(i\s*do\s*not|i\s*don't|i\s*cannot|i\s*can't|unable\s+to|not\s+enough\s+information|outside\s+(my|our)\s+(scope|knowledge)|our team will get back to you shortly|let me check with the team)/i;
+
+const normalizeRequestedTopic = (text = "") =>
+  String(text || "")
+    .replace(/\s+/g, " ")
+    .replace(/"/g, "'")
+    .trim()
+    .slice(0, 120) || "your question";
+
+const resolveAiReplyEnvelope = (aiResult, userText) => {
+  const finalReply = aiResult?.message;
+  const requestedTopic = normalizeRequestedTopic(userText);
+
+  const detectedTag = aiResult?.tagDetected || null;
+  const isMissingInfoTag = detectedTag ? MISSING_INFO_TAGS.has(detectedTag) : false;
+  const looksLikeMissingInfoReply = MISSING_INFO_REPLY_PATTERN.test(
+    finalReply || "",
+  );
+  const isMissingInfoSignal = isMissingInfoTag || looksLikeMissingInfoReply;
+
+  const tagToExecute =
+    detectedTag || (isMissingInfoSignal ? "MISSING_KNOWLEDGEBASE_HOOK" : null);
+  const tagPayloadToExecute =
+    aiResult?.tagPayload || (isMissingInfoSignal ? requestedTopic : null);
+
+  const fallback = isMissingInfoSignal
+    ? FIXED_MISSING_INFO_FALLBACK
+    : aiResult?.tagDetected
+      ? ""
+      : "Our team will review your message and contact you shortly.";
+
+  const messageToSend = isMissingInfoSignal
+    ? FIXED_MISSING_INFO_FALLBACK
+    : finalReply && finalReply.trim()
+      ? finalReply.trim()
+      : fallback;
+
+  return {
+    messageToSend,
+    tagToExecute,
+    tagPayloadToExecute,
+    isMissingInfoSignal,
+  };
+};
+
 export const verifyWebhook = async (req, res) => {
   try {
     const { tenantId } = req.params;
@@ -636,43 +691,8 @@ export const receiveMessage = async (req, res) => {
           messagePreview: aiResult?.message?.substring(0, 200) || "N/A",
         });
 
-        const finalReply = aiResult?.message;
-        const requestedTopic =
-          (text || "")
-            .replace(/\s+/g, " ")
-            .replace(/"/g, "'")
-            .trim()
-            .slice(0, 120) || "your question";
-        const missingInfoFallback =
-          "Our team will get back to you shortly. Please feel free to ask any other questions in the meantime ?";
-        const isMissingInfoTag = [
-          "MISSING_KNOWLEDGE",
-          "MISSING_KNOWLEDGEBASE_HOOK",
-          "MISSING_INFO",
-        ].includes(aiResult?.tagDetected || "");
-        const looksLikeMissingInfoReply =
-          /(i\s*do\s*not|i\s*don't)\s+have\s+(that|the|enough)?\s*(information|details?)\s*(about|on)?|our team will get back to you shortly|let me check with the team/i.test(
-            finalReply || "",
-          );
-        const isMissingInfoSignal =
-          isMissingInfoTag || looksLikeMissingInfoReply;
-        const tagToExecute =
-          aiResult?.tagDetected ||
-          (isMissingInfoSignal ? "MISSING_KNOWLEDGEBASE_HOOK" : null);
-        const tagPayloadToExecute =
-          aiResult?.tagPayload || (isMissingInfoSignal ? requestedTopic : null);
-
-        const fallback = isMissingInfoSignal
-          ? missingInfoFallback
-          : aiResult?.tagDetected
-            ? ""
-            : "Our team will review your message and contact you shortly.";
-
-        const messageToSend = isMissingInfoSignal
-          ? missingInfoFallback
-          : finalReply && finalReply.trim()
-            ? finalReply.trim()
-            : fallback;
+        const { messageToSend, tagToExecute, tagPayloadToExecute } =
+          resolveAiReplyEnvelope(aiResult, text);
 
         // Send to WhatsApp FIRST — before saving the bot message.
         // This ensures that if the access token is invalid we do NOT create a
@@ -842,46 +862,11 @@ export const receiveMessage = async (req, res) => {
                   pending.contact_id,
                   phone_number_id,
                 );
-                const finalReply = aiResult?.message;
-                const queuedRequestedTopic =
-                  (pending.text || "")
-                    .replace(/\s+/g, " ")
-                    .replace(/"/g, "'")
-                    .trim()
-                    .slice(0, 120) || "your question";
-                const queuedMissingInfoFallback =
-                  "Our team will get back to you shortly. Please feel free to ask any other questions in the meantime ?";
-                const isQueuedMissingInfoTag = [
-                  "MISSING_KNOWLEDGE",
-                  "MISSING_KNOWLEDGEBASE_HOOK",
-                  "MISSING_INFO",
-                ].includes(aiResult?.tagDetected || "");
-                const queuedLooksLikeMissingInfoReply =
-                  /(i\s*do\s*not|i\s*don't)\s+have\s+(that|the|enough)?\s*(information|details?)\s*(about|on)?|our team will get back to you shortly|let me check with the team/i.test(
-                    finalReply || "",
-                  );
-                const isQueuedMissingInfoSignal =
-                  isQueuedMissingInfoTag || queuedLooksLikeMissingInfoReply;
-                const queuedTagToExecute =
-                  aiResult?.tagDetected ||
-                  (isQueuedMissingInfoSignal
-                    ? "MISSING_KNOWLEDGEBASE_HOOK"
-                    : null);
-                const queuedTagPayloadToExecute =
-                  aiResult?.tagPayload ||
-                  (isQueuedMissingInfoSignal ? queuedRequestedTopic : null);
-
-                const fallback = isQueuedMissingInfoSignal
-                  ? queuedMissingInfoFallback
-                  : aiResult?.tagDetected
-                    ? ""
-                    : "Our team will review your message and contact you shortly.";
-
-                const messageToSend = isQueuedMissingInfoSignal
-                  ? queuedMissingInfoFallback
-                  : finalReply && finalReply.trim()
-                    ? finalReply.trim()
-                    : fallback;
+                const {
+                  messageToSend,
+                  tagToExecute: queuedTagToExecute,
+                  tagPayloadToExecute: queuedTagPayloadToExecute,
+                } = resolveAiReplyEnvelope(aiResult, pending.text);
 
                 if (messageToSend) {
                   // Send to WhatsApp FIRST — abort if token error
