@@ -286,9 +286,6 @@ export const deleteMediaAssetService = async (assetId, tenantId) => {
       throw new Error("Media asset not found");
     }
 
-    if (mediaAsset.is_approved) {
-      throw new Error("Cannot delete approved media asset");
-    }
     const templateUsage = normalizeUsageArray(mediaAsset.templates_used).filter(Boolean);
     const campaignUsage = normalizeUsageArray(mediaAsset.campaigns_used).filter(Boolean);
 

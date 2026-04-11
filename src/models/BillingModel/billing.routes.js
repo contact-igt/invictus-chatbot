@@ -54,10 +54,10 @@ router.get(
   ...tenantAuth,
   getBillingSpendChartController,
 );
-router.get("/billing/wallet", ...tenantAuth, getWalletBalanceController);
+router.get("/billing/wallet", authenticate, getWalletBalanceController);
 router.get(
   "/billing/wallet/transactions",
-  ...tenantAuth,
+  authenticate,
   getWalletTransactionsController,
 );
 

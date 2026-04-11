@@ -49,6 +49,7 @@ import { MonthlyUsageSummaryTable } from "./tables/MonthlyUsageSummaryTable/inde
 import { CronExecutionLogTable } from "./tables/CronExecutionLogTable/index.js";
 import { defineAssociations } from "./associations.js";
 import { MediaAssetTable } from "./tables/MediaAssetTable/index.js";
+import { AppointmentTable } from "./tables/AppointmentTable/index.js";
 
 const dbconfig =
   ServerEnvironmentConfig?.server?.line === "production"
@@ -144,6 +145,7 @@ db.DailyUsageSummary = DailyUsageSummaryTable(sequelize, Sequelize);
 db.MonthlyUsageSummary = MonthlyUsageSummaryTable(sequelize, Sequelize);
 db.CronExecutionLog = CronExecutionLogTable(sequelize, Sequelize);
 db.MediaAsset = MediaAssetTable(sequelize , Sequelize);
+db.Appointments = AppointmentTable(sequelize, Sequelize);
 // db.BookingSession = BookingSessionTable(sequelize, Sequelize);
 
 

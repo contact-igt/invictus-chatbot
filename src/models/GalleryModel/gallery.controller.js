@@ -222,9 +222,6 @@ export const deleteMediaAssetController = async (req, res) => {
     if (error.message === "Media asset not found") {
       return res.status(404).json({ success: false, error_code: "NOT_FOUND", message: error.message });
     }
-    if (error.message.includes("approved")) {
-      return res.status(403).json({ success: false, error_code: "FORBIDDEN", message: "Cannot delete an approved media asset." });
-    }
     if (error.message.includes("linked") || error.message.includes("used in")) {
       return res.status(409).json({ success: false, error_code: "ASSET_IN_USE", message: error.message });
     }
