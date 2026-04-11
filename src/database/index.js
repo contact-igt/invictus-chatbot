@@ -47,6 +47,8 @@ import { BillingSystemHealthTable } from "./tables/BillingSystemHealthTable/inde
 import { DailyUsageSummaryTable } from "./tables/DailyUsageSummaryTable/index.js";
 import { MonthlyUsageSummaryTable } from "./tables/MonthlyUsageSummaryTable/index.js";
 import { CronExecutionLogTable } from "./tables/CronExecutionLogTable/index.js";
+import { FaqReviewsTable } from "./tables/FaqTable/index.js";
+import { FaqKnowledgeSourceTable } from "./tables/FaqKnowledgeSourceTable/index.js";
 import { defineAssociations } from "./associations.js";
 
 const dbconfig =
@@ -142,6 +144,8 @@ db.BillingSystemHealth = BillingSystemHealthTable(sequelize, Sequelize);
 db.DailyUsageSummary = DailyUsageSummaryTable(sequelize, Sequelize);
 db.MonthlyUsageSummary = MonthlyUsageSummaryTable(sequelize, Sequelize);
 db.CronExecutionLog = CronExecutionLogTable(sequelize, Sequelize);
+db.FaqReviews = FaqReviewsTable(sequelize, Sequelize);
+db.FaqKnowledgeSource = FaqKnowledgeSourceTable(sequelize, Sequelize);
 // db.BookingSession = BookingSessionTable(sequelize, Sequelize);
 
 // ========================================

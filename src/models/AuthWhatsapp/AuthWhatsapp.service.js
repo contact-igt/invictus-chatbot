@@ -561,11 +561,24 @@ export const getOpenAIReply = async (
     const chatHistory = buildChatHistory(memory);
 
     // ── Phase 1.5: Intent Classification — what data does this message need? ──
-    const intentResult = await classifyIntent(
+    let intentResult = await classifyIntent(
       cleanMessage,
       chatHistory,
       tenant_id,
     );
+
+    const factualQuestionPattern =
+      /\?|\b(what|when|where|which|who|price|cost|fees|timing|hours|policy|service|doctor|appointment|book|treatment|procedure)\b/i;
+    if (!intentResult.requires.knowledge && factualQuestionPattern.test(cleanMessage)) {
+      intentResult = {
+        ...intentResult,
+        requires: { ...intentResult.requires, knowledge: true },
+      };
+      console.log(
+        "[WHATSAPP-AI] Knowledge lookup forced by factual-question heuristic.",
+      );
+    }
+
     console.log(
       `[WHATSAPP-AI] Intent: ${intentResult.intent} | requires: K:${intentResult.requires.knowledge} D:${intentResult.requires.doctors} A:${intentResult.requires.appointments}`,
     );

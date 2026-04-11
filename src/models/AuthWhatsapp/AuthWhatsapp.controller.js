@@ -637,11 +637,42 @@ export const receiveMessage = async (req, res) => {
         });
 
         const finalReply = aiResult?.message;
-        const fallback = aiResult?.tagDetected
-          ? ""
-          : "Our team will review your message and contact you shortly.";
-        const messageToSend =
-          finalReply && finalReply.trim() ? finalReply.trim() : fallback;
+        const requestedTopic =
+          (text || "")
+            .replace(/\s+/g, " ")
+            .replace(/"/g, "'")
+            .trim()
+            .slice(0, 120) || "your question";
+        const missingInfoFallback =
+          "Our team will get back to you shortly. Please feel free to ask any other questions in the meantime ?";
+        const isMissingInfoTag = [
+          "MISSING_KNOWLEDGE",
+          "MISSING_KNOWLEDGEBASE_HOOK",
+          "MISSING_INFO",
+        ].includes(aiResult?.tagDetected || "");
+        const looksLikeMissingInfoReply =
+          /(i\s*do\s*not|i\s*don't)\s+have\s+(that|the|enough)?\s*(information|details?)\s*(about|on)?|our team will get back to you shortly|let me check with the team/i.test(
+            finalReply || "",
+          );
+        const isMissingInfoSignal =
+          isMissingInfoTag || looksLikeMissingInfoReply;
+        const tagToExecute =
+          aiResult?.tagDetected ||
+          (isMissingInfoSignal ? "MISSING_KNOWLEDGEBASE_HOOK" : null);
+        const tagPayloadToExecute =
+          aiResult?.tagPayload || (isMissingInfoSignal ? requestedTopic : null);
+
+        const fallback = isMissingInfoSignal
+          ? missingInfoFallback
+          : aiResult?.tagDetected
+            ? ""
+            : "Our team will review your message and contact you shortly.";
+
+        const messageToSend = isMissingInfoSignal
+          ? missingInfoFallback
+          : finalReply && finalReply.trim()
+            ? finalReply.trim()
+            : fallback;
 
         // Send to WhatsApp FIRST — before saving the bot message.
         // This ensures that if the access token is invalid we do NOT create a
@@ -739,22 +770,23 @@ export const receiveMessage = async (req, res) => {
 
         // Execute tag handler AFTER sending the AI reply
         // This ensures correct message ordering (e.g., "Let me check..." before slots list)
-        if (aiResult?.tagDetected) {
+        if (tagToExecute) {
           console.log(
-            `[WEBHOOK] Executing tag handler: ${aiResult.tagDetected}, payload: ${aiResult.tagPayload?.substring(0, 100)}`,
+            `[WEBHOOK] Executing tag handler: ${tagToExecute}, payload: ${String(tagPayloadToExecute || "").substring(0, 100)}`,
           );
           const { executeTagHandler } =
             await import("../../utils/ai/aiTagHandlers/index.js");
           await executeTagHandler(
-            aiResult.tagDetected,
-            aiResult.tagPayload,
+            tagToExecute,
+            tagPayloadToExecute,
             {
               tenant_id,
               contact_id: contactsaved?.contact_id,
               phone,
               phone_number_id,
+              userMessage: text,
             },
-            messageToSend,
+            text,
           );
         }
       } catch (err) {
@@ -811,11 +843,43 @@ export const receiveMessage = async (req, res) => {
                   phone_number_id,
                 );
                 const finalReply = aiResult?.message;
-                const fallback = aiResult?.tagDetected
-                  ? ""
-                  : "Our team will review your message and contact you shortly.";
-                const messageToSend =
-                  finalReply && finalReply.trim()
+                const queuedRequestedTopic =
+                  (pending.text || "")
+                    .replace(/\s+/g, " ")
+                    .replace(/"/g, "'")
+                    .trim()
+                    .slice(0, 120) || "your question";
+                const queuedMissingInfoFallback =
+                  "Our team will get back to you shortly. Please feel free to ask any other questions in the meantime ?";
+                const isQueuedMissingInfoTag = [
+                  "MISSING_KNOWLEDGE",
+                  "MISSING_KNOWLEDGEBASE_HOOK",
+                  "MISSING_INFO",
+                ].includes(aiResult?.tagDetected || "");
+                const queuedLooksLikeMissingInfoReply =
+                  /(i\s*do\s*not|i\s*don't)\s+have\s+(that|the|enough)?\s*(information|details?)\s*(about|on)?|our team will get back to you shortly|let me check with the team/i.test(
+                    finalReply || "",
+                  );
+                const isQueuedMissingInfoSignal =
+                  isQueuedMissingInfoTag || queuedLooksLikeMissingInfoReply;
+                const queuedTagToExecute =
+                  aiResult?.tagDetected ||
+                  (isQueuedMissingInfoSignal
+                    ? "MISSING_KNOWLEDGEBASE_HOOK"
+                    : null);
+                const queuedTagPayloadToExecute =
+                  aiResult?.tagPayload ||
+                  (isQueuedMissingInfoSignal ? queuedRequestedTopic : null);
+
+                const fallback = isQueuedMissingInfoSignal
+                  ? queuedMissingInfoFallback
+                  : aiResult?.tagDetected
+                    ? ""
+                    : "Our team will review your message and contact you shortly.";
+
+                const messageToSend = isQueuedMissingInfoSignal
+                  ? queuedMissingInfoFallback
+                  : finalReply && finalReply.trim()
                     ? finalReply.trim()
                     : fallback;
 
@@ -897,6 +961,23 @@ export const receiveMessage = async (req, res) => {
                         },
                       );
                     } catch (_) {}
+                  }
+
+                  if (queuedTagToExecute) {
+                    const { executeTagHandler } =
+                      await import("../../utils/ai/aiTagHandlers/index.js");
+                    await executeTagHandler(
+                      queuedTagToExecute,
+                      queuedTagPayloadToExecute,
+                      {
+                        tenant_id,
+                        contact_id: pending.contact_id,
+                        phone,
+                        phone_number_id,
+                        userMessage: pending.text,
+                      },
+                      pending.text,
+                    );
                   }
                 }
               } catch (qErr) {

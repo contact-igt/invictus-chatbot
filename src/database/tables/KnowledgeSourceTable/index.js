@@ -15,7 +15,7 @@ export const KnowledgeSourcesTable = (sequelize, Sequelize) => {
       },
 
       type: {
-        type: Sequelize.ENUM("file", "text", "url"),
+        type: Sequelize.ENUM("file", "text", "url", "faq"),
         allowNull: false,
       },
 

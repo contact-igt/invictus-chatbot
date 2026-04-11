@@ -1,6 +1,7 @@
 import db from "../../database/index.js";
 import { tableNames } from "../../database/tableName.js";
 import { cleanText } from "../../utils/text/cleanText.js";
+import { invalidateDomainSummary } from "../../utils/ai/domainContextHelper.js";
 
 export const processAiPromptUpload = async (tenant_id, name, prompt) => {
   const Query = `
@@ -111,6 +112,7 @@ export const updatePromptActiveService = async (id, tenant_id, is_active) => {
     );
 
     await transaction.commit();
+    invalidateDomainSummary(tenant_id);
     return true;
   } catch (err) {
     await transaction.rollback();

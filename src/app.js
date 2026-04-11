@@ -33,6 +33,7 @@ import BillingRouter from "./models/BillingModel/billing.routes.js";
 import WhatsappOtpRouter from "./models/OtpVerificationModel/otpverification.routes.js";
 import PaymentRouter from "./models/PaymentModel/payment.routes.js";
 import SuperAdminDashboardRouter from "./models/SuperAdminDashboardModel/superAdminDashboard.routes.js";
+import FaqRouter from "./models/Faq/faq.routes.js";
 import { runBillingCycleCron } from "./models/BillingModel/billingCycle.service.js";
 import { checkHealthAlerts } from "./utils/billing/billingHealthMonitor.js";
 import { runDailyReconciliation } from "./utils/billing/paymentReconciler.js";
@@ -100,6 +101,7 @@ app.use(
   BillingRouter,
   WhatsappOtpRouter,
   PaymentRouter,
+  FaqRouter,
 );
 
 app.get("/", (req, res) => {
