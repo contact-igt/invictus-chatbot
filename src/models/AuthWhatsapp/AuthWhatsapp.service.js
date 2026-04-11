@@ -618,14 +618,15 @@ export const getOpenAIReply = async (
       tenant_id,
     );
 
-    const factualKnowledgeNeeded = isLikelyFactualQuestion(cleanMessage);
-    if (!intentResult.requires.knowledge && factualKnowledgeNeeded) {
+    const factualQuestionPattern =
+      /\?|\b(what|when|where|which|who|price|cost|fees|timing|hours|policy|service|doctor|appointment|book|treatment|procedure)\b/i;
+    if (!intentResult.requires.knowledge && factualQuestionPattern.test(cleanMessage)) {
       intentResult = {
         ...intentResult,
         requires: { ...intentResult.requires, knowledge: true },
       };
       console.log(
-        "[WHATSAPP-AI] Knowledge lookup forced by strict factual-question heuristic.",
+        "[WHATSAPP-AI] Knowledge lookup forced by factual-question heuristic.",
       );
     }
 

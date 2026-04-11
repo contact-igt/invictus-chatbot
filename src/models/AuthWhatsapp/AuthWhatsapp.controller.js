@@ -791,8 +791,43 @@ export const receiveMessage = async (req, res) => {
           messagePreview: aiResult?.message?.substring(0, 200) || "N/A",
         });
 
-        const { messageToSend, tagToExecute, tagPayloadToExecute } =
-          resolveAiReplyEnvelope(aiResult, text);
+        const finalReply = aiResult?.message;
+        const requestedTopic =
+          (text || "")
+            .replace(/\s+/g, " ")
+            .replace(/"/g, "'")
+            .trim()
+            .slice(0, 120) || "your question";
+        const missingInfoFallback =
+          "Our team will get back to you shortly. Please feel free to ask any other questions in the meantime ?";
+        const isMissingInfoTag = [
+          "MISSING_KNOWLEDGE",
+          "MISSING_KNOWLEDGEBASE_HOOK",
+          "MISSING_INFO",
+        ].includes(aiResult?.tagDetected || "");
+        const looksLikeMissingInfoReply =
+          /(i\s*do\s*not|i\s*don't)\s+have\s+(that|the|enough)?\s*(information|details?)\s*(about|on)?|our team will get back to you shortly|let me check with the team/i.test(
+            finalReply || "",
+          );
+        const isMissingInfoSignal =
+          isMissingInfoTag || looksLikeMissingInfoReply;
+        const tagToExecute =
+          aiResult?.tagDetected ||
+          (isMissingInfoSignal ? "MISSING_KNOWLEDGEBASE_HOOK" : null);
+        const tagPayloadToExecute =
+          aiResult?.tagPayload || (isMissingInfoSignal ? requestedTopic : null);
+
+        const fallback = isMissingInfoSignal
+          ? missingInfoFallback
+          : aiResult?.tagDetected
+            ? ""
+            : "Our team will review your message and contact you shortly.";
+
+        const messageToSend = isMissingInfoSignal
+          ? missingInfoFallback
+          : finalReply && finalReply.trim()
+            ? finalReply.trim()
+            : fallback;
 
         // Send to WhatsApp FIRST — before saving the bot message.
         // This ensures that if the access token is invalid we do NOT create a
@@ -955,11 +990,43 @@ export const receiveMessage = async (req, res) => {
                 console.log("AI started for:", phone);
 
                 const finalReply = aiResult?.message;
-                const fallback = aiResult?.tagDetected
-                  ? ""
-                  : "Our team will review your message and contact you shortly.";
-                const messageToSend =
-                  finalReply && finalReply.trim()
+                const queuedRequestedTopic =
+                  (pending.text || "")
+                    .replace(/\s+/g, " ")
+                    .replace(/"/g, "'")
+                    .trim()
+                    .slice(0, 120) || "your question";
+                const queuedMissingInfoFallback =
+                  "Our team will get back to you shortly. Please feel free to ask any other questions in the meantime ?";
+                const isQueuedMissingInfoTag = [
+                  "MISSING_KNOWLEDGE",
+                  "MISSING_KNOWLEDGEBASE_HOOK",
+                  "MISSING_INFO",
+                ].includes(aiResult?.tagDetected || "");
+                const queuedLooksLikeMissingInfoReply =
+                  /(i\s*do\s*not|i\s*don't)\s+have\s+(that|the|enough)?\s*(information|details?)\s*(about|on)?|our team will get back to you shortly|let me check with the team/i.test(
+                    finalReply || "",
+                  );
+                const isQueuedMissingInfoSignal =
+                  isQueuedMissingInfoTag || queuedLooksLikeMissingInfoReply;
+                const queuedTagToExecute =
+                  aiResult?.tagDetected ||
+                  (isQueuedMissingInfoSignal
+                    ? "MISSING_KNOWLEDGEBASE_HOOK"
+                    : null);
+                const queuedTagPayloadToExecute =
+                  aiResult?.tagPayload ||
+                  (isQueuedMissingInfoSignal ? queuedRequestedTopic : null);
+
+                const fallback = isQueuedMissingInfoSignal
+                  ? queuedMissingInfoFallback
+                  : aiResult?.tagDetected
+                    ? ""
+                    : "Our team will review your message and contact you shortly.";
+
+                const messageToSend = isQueuedMissingInfoSignal
+                  ? queuedMissingInfoFallback
+                  : finalReply && finalReply.trim()
                     ? finalReply.trim()
                     : fallback;
 
@@ -1035,6 +1102,23 @@ export const receiveMessage = async (req, res) => {
                     sender: "bot",
                     created_at: new Date(),
                   });
+
+                  if (queuedTagToExecute) {
+                    const { executeTagHandler } =
+                      await import("../../utils/ai/aiTagHandlers/index.js");
+                    await executeTagHandler(
+                      queuedTagToExecute,
+                      queuedTagPayloadToExecute,
+                      {
+                        tenant_id,
+                        contact_id: pending.contact_id,
+                        phone,
+                        phone_number_id,
+                        userMessage: pending.text,
+                      },
+                      pending.text,
+                    );
+                  }
 
                   if (queuedTagToExecute) {
                     const { executeTagHandler } =

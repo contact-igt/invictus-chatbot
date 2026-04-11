@@ -173,9 +173,7 @@ export const publishFaqService = async (
   reviewed_by,
   payload = {},
 ) => {
-  let masterSourceId = null;
-
-  const result = await db.sequelize.transaction(async (transaction) => {
+  return db.sequelize.transaction(async (transaction) => {
     const [rows] = await db.sequelize.query(
       `SELECT id, status, doctor_answer, question FROM ${tableNames.FAQ_REVIEWS}
        WHERE id = ? AND tenant_id = ? AND status != 'deleted'
@@ -226,14 +224,9 @@ export const publishFaqService = async (
       throw new Error("FAQ master source is unavailable");
     }
 
-    // Guard: if an admin explicitly disabled the master source, refuse to re-enable it
-    if (masterSource.status === "inactive") {
-      throw new Error("FAQ_MASTER_DISABLED");
-    }
-
     await db.sequelize.query(
       `UPDATE ${tableNames.KNOWLEDGESOURCE}
-       SET is_deleted = false, deleted_at = NULL, updated_at = NOW()
+       SET status = 'active', is_deleted = false, deleted_at = NULL, updated_at = NOW()
        WHERE id = ? AND tenant_id = ?`,
       { replacements: [masterSource.id, tenant_id], transaction },
     );
@@ -287,7 +280,7 @@ export const publishFaqService = async (
       );
     }
 
-    masterSourceId = masterSource.id;
+    await syncFaqKnowledgeChunks(tenant_id, masterSource.id, transaction);
 
     const [updated] = await db.sequelize.query(
       `SELECT * FROM ${tableNames.FAQ_REVIEWS} WHERE id = ? AND tenant_id = ? LIMIT 1`,
@@ -295,13 +288,6 @@ export const publishFaqService = async (
     );
     return updated[0] || null;
   });
-
-  // Phase 2: regenerate embeddings outside the transaction (no lock held during AI call)
-  if (result && masterSourceId) {
-    await syncFaqKnowledgeChunks(tenant_id, masterSourceId);
-  }
-
-  return result;
 };
 
 // ─── Create FAQ (Admin Direct Add) ───────────────────────────────────────
@@ -315,12 +301,10 @@ export const createFaqService = async (
     throw new Error("Question and answer are required");
   }
 
-  let masterSourceId = null;
-
-  const result = await db.sequelize.transaction(async (transaction) => {
+  return db.sequelize.transaction(async (transaction) => {
     const normalizedQuestion = question.trim().toLowerCase();
 
-    const [insertResult] = await db.sequelize.query(
+    const [result] = await db.sequelize.query(
       `INSERT INTO ${tableNames.FAQ_REVIEWS}
          (tenant_id, question, normalized_question, doctor_answer,
           status, add_to_kb, is_active, reviewed_by, answered_at, created_at, updated_at)
@@ -338,7 +322,7 @@ export const createFaqService = async (
     );
 
     const faqReviewId =
-      typeof insertResult === "number" ? insertResult : insertResult?.insertId || null;
+      typeof result === "number" ? result : result?.insertId || null;
     if (!faqReviewId) {
       throw new Error("Failed to create FAQ review record");
     }
@@ -382,7 +366,7 @@ export const createFaqService = async (
       },
     );
 
-    masterSourceId = masterSource.id;
+    await syncFaqKnowledgeChunks(tenant_id, masterSource.id, transaction);
 
     const [created] = await db.sequelize.query(
       `SELECT * FROM ${tableNames.FAQ_REVIEWS} WHERE id = ? AND tenant_id = ? LIMIT 1`,
@@ -390,21 +374,11 @@ export const createFaqService = async (
     );
     return created[0] || null;
   });
-
-  // Phase 2: regenerate embeddings outside the transaction (no lock held during AI call)
-  if (result && masterSourceId) {
-    await syncFaqKnowledgeChunks(tenant_id, masterSourceId);
-  }
-
-  return result;
 };
 
 // ─── Toggle is_active ─────────────────────────────────────────────────────
-// desiredActive: explicit boolean from caller, or undefined to flip current value
-export const toggleFaqActiveService = async (id, tenant_id, desiredActive) => {
-  let sourceIdForSync = null;
-
-  const result = await db.sequelize.transaction(async (transaction) => {
+export const toggleFaqActiveService = async (id, tenant_id) => {
+  return db.sequelize.transaction(async (transaction) => {
     const [rows] = await db.sequelize.query(
       `SELECT fr.id, fr.status, fr.is_active, fk.source_id
        FROM ${tableNames.FAQ_REVIEWS} fr
@@ -418,9 +392,7 @@ export const toggleFaqActiveService = async (id, tenant_id, desiredActive) => {
 
     if (!rows.length) return null;
 
-    // Use the caller's explicit desired value; fall back to flip if not provided
-    const newActive =
-      desiredActive !== undefined ? Boolean(desiredActive) : !rows[0].is_active;
+    const newActive = !rows[0].is_active;
 
     await db.sequelize.query(
       `UPDATE ${tableNames.FAQ_REVIEWS}
@@ -436,7 +408,9 @@ export const toggleFaqActiveService = async (id, tenant_id, desiredActive) => {
       { replacements: [newActive, id, tenant_id], transaction },
     );
 
-    sourceIdForSync = rows[0].source_id || null;
+    if (rows[0].source_id) {
+      await syncFaqKnowledgeChunks(tenant_id, rows[0].source_id, transaction);
+    }
 
     const [updated] = await db.sequelize.query(
       `SELECT * FROM ${tableNames.FAQ_REVIEWS} WHERE id = ? AND tenant_id = ? LIMIT 1`,
@@ -444,20 +418,11 @@ export const toggleFaqActiveService = async (id, tenant_id, desiredActive) => {
     );
     return updated[0] || null;
   });
-
-  // Phase 2: regenerate embeddings outside the transaction (no lock held during AI call)
-  if (result && sourceIdForSync) {
-    await syncFaqKnowledgeChunks(tenant_id, sourceIdForSync);
-  }
-
-  return result;
 };
 
 // ─── Soft Delete ──────────────────────────────────────────────────────────
 export const softDeleteFaqService = async (id, tenant_id) => {
-  let sourceIdForSync = null;
-
-  const deleted = await db.sequelize.transaction(async (transaction) => {
+  return db.sequelize.transaction(async (transaction) => {
     const [rows] = await db.sequelize.query(
       `SELECT fr.id, fk.source_id
        FROM ${tableNames.FAQ_REVIEWS} fr
@@ -486,16 +451,12 @@ export const softDeleteFaqService = async (id, tenant_id) => {
       { replacements: [id, tenant_id], transaction },
     );
 
-    sourceIdForSync = rows[0].source_id || null;
+    if (rows[0].source_id) {
+      await syncFaqKnowledgeChunks(tenant_id, rows[0].source_id, transaction);
+    }
+
     return true;
   });
-
-  // Phase 2: regenerate embeddings outside the transaction (no lock held during AI call)
-  if (deleted && sourceIdForSync) {
-    await syncFaqKnowledgeChunks(tenant_id, sourceIdForSync);
-  }
-
-  return deleted;
 };
 
 // ─── List Published FAQ Knowledge Entries (child records) ────────────────
@@ -545,9 +506,7 @@ export const editFaqKnowledgeEntryService = async (
   tenant_id,
   { question, answer, updated_by },
 ) => {
-  let sourceIdForSync = null;
-
-  const result = await db.sequelize.transaction(async (transaction) => {
+  return db.sequelize.transaction(async (transaction) => {
     const [rows] = await db.sequelize.query(
       `SELECT id, faq_review_id, source_id, faq_payload
        FROM ${tableNames.FAQ_KNOWLEDGE_SOURCE}
@@ -621,7 +580,9 @@ export const editFaqKnowledgeEntryService = async (
       );
     }
 
-    sourceIdForSync = rows[0].source_id || null;
+    if (rows[0].source_id) {
+      await syncFaqKnowledgeChunks(tenant_id, rows[0].source_id, transaction);
+    }
 
     const [updated] = await db.sequelize.query(
       `SELECT id, faq_review_id,
@@ -635,20 +596,11 @@ export const editFaqKnowledgeEntryService = async (
     );
     return updated[0] || null;
   });
-
-  // Phase 2: regenerate embeddings outside the transaction (no lock held during AI call)
-  if (result && sourceIdForSync) {
-    await syncFaqKnowledgeChunks(tenant_id, sourceIdForSync);
-  }
-
-  return result;
 };
 
 // ─── Remove FAQ Knowledge Entry (soft — deactivates AI retrieval) ─────────
 export const removeFaqKnowledgeEntryService = async (id, tenant_id) => {
-  let sourceIdForSync = null;
-
-  const removed = await db.sequelize.transaction(async (transaction) => {
+  return db.sequelize.transaction(async (transaction) => {
     const [rows] = await db.sequelize.query(
       `SELECT id, source_id, faq_review_id
        FROM ${tableNames.FAQ_KNOWLEDGE_SOURCE}
@@ -674,14 +626,10 @@ export const removeFaqKnowledgeEntryService = async (id, tenant_id) => {
       { replacements: [rows[0].faq_review_id, tenant_id], transaction },
     );
 
-    sourceIdForSync = rows[0].source_id || null;
+    if (rows[0].source_id) {
+      await syncFaqKnowledgeChunks(tenant_id, rows[0].source_id, transaction);
+    }
+
     return true;
   });
-
-  // Phase 2: regenerate embeddings outside the transaction (no lock held during AI call)
-  if (removed && sourceIdForSync) {
-    await syncFaqKnowledgeChunks(tenant_id, sourceIdForSync);
-  }
-
-  return removed;
 };

@@ -101,7 +101,7 @@ export const syncFaqKnowledgeChunksIfStale = async (
 
   const [[chunkMeta]] = await db.sequelize.query(
     `SELECT COUNT(*) AS chunk_count,
-            MAX(created_at) AS latest_chunk_update
+            MAX(updated_at) AS latest_chunk_update
      FROM ${tableNames.KNOWLEDGECHUNKS}
      WHERE tenant_id = ? AND source_id = ?`,
     { replacements: [tenant_id, source_id], transaction },
