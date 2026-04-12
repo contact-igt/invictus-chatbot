@@ -1,0 +1,97 @@
+# config:
+#   target: "http://localhost:8000"
+#   phases:
+#     - duration: 60
+#       arrivalRate: 10
+
+# scenarios:
+#   - flow:
+#       - post:
+#           url: "/api/whatsapp/webhook/TT001"
+#           # json:
+#           #   message: "Hello"
+#           json : {
+#             user_id : "123",
+#             message : "Hello world"
+#           }
+
+
+# config:
+#   target: "http://localhost:8000"
+
+#   phases:
+#     - duration: 60
+#       arrivalRate: 25   # 10 messages per second
+
+#   defaults:
+#     headers:
+#       Content-Type: "application/json"
+
+# scenarios:
+#   - name: "Single user chatbot test"
+
+#     flow:
+#       - post:
+#           url: "/api/whatsapp/webhook/TT001"
+
+#           json:
+#             entry:
+#               - id: "test_waba"
+#                 changes:
+#                   - field: "messages"
+#                     value:
+#                       metadata:
+#                         phone_number_id: "1234567890"
+
+#                       contacts:
+#                         - profile:
+#                             name: "Test User"
+
+#                       messages:
+#                         - from: "91{{ $randomNumber(1000000000, 9999999999) }}"
+#                           id: "wamid.TEST12345"
+#                           timestamp: "1710000000"
+#                           type: "text"
+#                           text:
+#                             body: "Hello world"
+
+
+
+config:
+  target: "http://localhost:8000"
+
+  phases:
+    - duration: 60
+      arrivalRate: 10
+
+  defaults:
+    headers:
+      Content-Type: "application/json"
+
+scenarios:
+  - name: "AI chatbot execution test"
+
+    flow:
+      - post:
+          url: "/api/whatsapp/webhook/TT001"
+
+          json:
+            entry:
+              - id: "test"
+                changes:
+                  - field: "messages"
+                    value:
+                      metadata:
+                        phone_number_id: "1234567890"
+
+                      contacts:
+                        - profile:
+                            name: "Test User"
+
+                      messages:
+                        - from: "919999999999"
+                          id: "wamid.TEST{{$randomNumber(1000,9999)}}"
+                          timestamp: "1710000000"
+                          type: "text"
+                          text:
+                            body: "Hello AI"

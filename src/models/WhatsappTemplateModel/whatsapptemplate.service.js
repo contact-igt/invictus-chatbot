@@ -5,6 +5,10 @@ import { getWhatsappAccountByTenantService } from "../WhatsappAccountModel/whats
 import { generateReadableIdFromLast } from "../../utils/helpers/generateReadableIdFromLast.js";
 import { getTemplateCopywriterPrompt } from "../../utils/ai/prompts/template.js";
 import { AiService } from "../../utils/ai/coreAi.js";
+import {
+  addTemplateUsageService,
+  markMediaAsApprovedService,
+} from "../GalleryModel/gallery.service.js";
 
 const STATUS_MAP = {
   IN_REVIEW: "pending",
@@ -17,77 +21,7 @@ const STATUS_MAP = {
 
 // Valid Meta WhatsApp language codes
 const VALID_META_LANGUAGE_CODES = new Set([
-  "af",
-  "sq",
-  "ar",
-  "az",
-  "bn",
-  "bg",
-  "ca",
-  "zh_CN",
-  "zh_HK",
-  "zh_TW",
-  "hr",
-  "cs",
-  "da",
-  "nl",
-  "en",
-  "en_GB",
-  "en_US",
-  "et",
-  "fil",
-  "fi",
-  "fr",
-  "ka",
-  "de",
-  "el",
-  "gu",
-  "ha",
-  "he",
-  "hi",
-  "hu",
-  "id",
-  "ga",
-  "it",
-  "ja",
-  "kn",
-  "kk",
-  "rw_RW",
-  "ko",
-  "ky_KG",
-  "lo",
-  "lv",
-  "lt",
-  "mk",
-  "ms",
-  "ml",
-  "mr",
-  "nb",
-  "fa",
-  "pl",
-  "pt_BR",
-  "pt_PT",
-  "pa",
-  "ro",
-  "ru",
-  "sr",
-  "sk",
-  "sl",
-  "es",
-  "es_AR",
-  "es_ES",
-  "es_MX",
-  "sw",
-  "sv",
-  "ta",
-  "te",
-  "th",
-  "tr",
-  "uk",
-  "ur",
-  "uz",
-  "vi",
-  "zu",
+  "af", "sq", "ar", "az", "bn", "bg", "ca", "zh_CN", "zh_HK", "zh_TW", "hr", "cs", "da", "nl", "en", "en_GB", "en_US", "et", "fil", "fi", "fr", "ka", "de", "el", "gu", "ha", "he", "hi", "hu", "id", "ga", "it", "ja", "kn", "kk", "rw_RW", "ko", "ky_KG", "lo", "lv", "lt", "mk", "ms", "ml", "mr", "nb", "fa", "pl", "pt_BR", "pt_PT", "pa", "ro", "ru", "sr", "sk", "sl", "es", "es_AR", "es_ES", "es_MX", "sw", "sv", "ta", "te", "th", "tr", "uk", "ur", "uz", "vi", "zu",
 ]);
 
 export const checkTemplateNameExistsOnMetaService = async (
@@ -140,6 +74,9 @@ export const createWhatsappTemplateService = async (
   const transaction = await db.sequelize.transaction();
 
   try {
+    const headerMediaAssetId = components?.header?.media_asset_id || null;
+    const headerMediaHandle = components?.header?.media_handle || null;
+
     // Validate language code
     if (!language || !VALID_META_LANGUAGE_CODES.has(language)) {
       throw new Error(
@@ -160,8 +97,8 @@ export const createWhatsappTemplateService = async (
     await db.sequelize.query(
       `
       INSERT INTO ${tableNames.WHATSAPP_TEMPLATE}
-      (template_id, tenant_id, template_name, category, template_type, language, created_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      (template_id, tenant_id, template_name, category, template_type, language, media_asset_id, media_handle, created_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       {
         replacements: [
@@ -171,6 +108,8 @@ export const createWhatsappTemplateService = async (
           category,
           template_type,
           language,
+          headerMediaAssetId,
+          headerMediaHandle,
           created_by,
         ],
         transaction,
@@ -190,7 +129,7 @@ export const createWhatsappTemplateService = async (
     );
 
     if (components.header) {
-      const { type, format, text, media_url } = components.header;
+      const { type, format, text, media_url, media_asset_id, media_handle } = components.header;
       const headerFormat = (format || type || "text").toLowerCase();
 
       if (!type) {
@@ -200,8 +139,8 @@ export const createWhatsappTemplateService = async (
       await db.sequelize.query(
         `
     INSERT INTO ${tableNames.WHATSAPP_TEMPLATE_COMPONENTS}
-    (template_id, component_type, header_format, text_content, media_url)
-    VALUES (?, 'header', ?, ?, ?)
+    (template_id, component_type, header_format, text_content, media_url, media_asset_id, media_handle)
+    VALUES (?, 'header', ?, ?, ?, ?, ?)
     `,
         {
           replacements: [
@@ -209,6 +148,8 @@ export const createWhatsappTemplateService = async (
             headerFormat, // header_format
             text ? text : null, // header text (only if type=text)
             media_url ? media_url : null, // media only for image/video/doc
+            media_asset_id || null,
+            media_handle || null,
           ],
           transaction,
         },
@@ -293,6 +234,14 @@ export const createWhatsappTemplateService = async (
     }
 
     await transaction.commit();
+
+    // Track usage of gallery asset if used in header
+    if (headerMediaAssetId) {
+      addTemplateUsageService(headerMediaAssetId, template_id).catch(err => 
+        console.error("[TEMPLATE-CREATE] Failed to log gallery asset usage:", err.message)
+      );
+    }
+
     return true;
   } catch (err) {
     await transaction.rollback();
@@ -366,7 +315,7 @@ export const submitWhatsappTemplateService = async ({
       let authResponse;
       try {
         authResponse = await axios.post(
-          `https://graph.facebook.com/v24.0/${whatsappAccount.waba_id}/message_templates`,
+          `https://graph.facebook.com/v23.0/${whatsappAccount.waba_id}/message_templates`,
           authPayload,
           {
             headers: {
@@ -474,28 +423,32 @@ export const submitWhatsappTemplateService = async ({
         }
       } else if (["IMAGE", "VIDEO", "DOCUMENT"].includes(format)) {
         // Media header - requires example (header_handle)
-        // Use a generic sample URL as fallback if media_url is missing
-        const defaultSamples = {
-          IMAGE: "https://www.facebook.com/images/fb_icon_325x325.png",
-          VIDEO: "https://www.w3schools.com/html/mov_bbb.mp4",
-          DOCUMENT:
-            "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
-        };
-        const sampleUrl = header.media_url || defaultSamples[format];
-        if (sampleUrl) {
-          try {
-            const { uploadMediaToMetaForTemplate } =
-              await import("../../utils/whatsapp/metaMediaUpload.js");
-            const headerHandle = await uploadMediaToMetaForTemplate(
-              whatsappAccount.tenant_id,
-              sampleUrl,
-              format,
-            );
-            headerObj.example = { header_handle: [headerHandle] };
-          } catch (uploadError) {
-            throw new Error(
-              `Failed to upload media sample to Meta: ${uploadError.message}`,
-            );
+        if (header.media_handle) {
+          headerObj.example = { header_handle: [header.media_handle] };
+        } else {
+          // Use a generic sample URL as fallback if media_url is missing
+          const defaultSamples = {
+            IMAGE: "https://www.facebook.com/images/fb_icon_325x325.png",
+            VIDEO: "https://www.w3schools.com/html/mov_bbb.mp4",
+            DOCUMENT:
+              "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
+          };
+          const sampleUrl = header.media_url || defaultSamples[format];
+          if (sampleUrl) {
+            try {
+              const { uploadMediaToMetaForTemplate } =
+                await import("../../utils/whatsapp/metaMediaUpload.js");
+              const headerHandle = await uploadMediaToMetaForTemplate(
+                whatsappAccount.tenant_id,
+                sampleUrl,
+                format,
+              );
+              headerObj.example = { header_handle: [headerHandle] };
+            } catch (uploadError) {
+              throw new Error(
+                `Failed to upload media sample to Meta: ${uploadError.message}`,
+              );
+            }
           }
         }
       }
@@ -759,7 +712,7 @@ export const submitWhatsappTemplateService = async ({
       });
 
       response = await axios.post(
-        `https://graph.facebook.com/v24.0/${whatsappAccount.waba_id}/message_templates`,
+        `https://graph.facebook.com/v23.0/${whatsappAccount.waba_id}/message_templates`,
         payload,
         {
           headers: {
@@ -895,6 +848,18 @@ export const syncWhatsappTemplateStatusService = async ({
 
     await transaction.commit();
 
+    // Keep gallery media approval in sync with template sync flow (same as webhook behavior).
+    if (mappedStatus === "approved" && template.media_asset_id) {
+      try {
+        await markMediaAsApprovedService(template.media_asset_id);
+      } catch (mediaErr) {
+        console.error(
+          `[TEMPLATE-SYNC] Failed to auto-approve gallery media ${template.media_asset_id}:`,
+          mediaErr.message,
+        );
+      }
+    }
+
     return {
       status: mappedStatus,
       meta_status: metaStatus,
@@ -953,7 +918,6 @@ export const syncAllPendingTemplatesService = async (
     throw err;
   }
 };
-// ... existing code ...
 
 export const getTemplateListService = async (tenant_id) => {
   const dataQuery = `
@@ -1357,10 +1321,14 @@ export const updateWhatsappTemplateService = async (
   language,
   components,
   variables,
+  updated_by,
 ) => {
   const transaction = await db.sequelize.transaction();
 
   try {
+    const headerMediaAssetId = components?.header?.media_asset_id || null;
+    const headerMediaHandle = components?.header?.media_handle || null;
+
     // Fetch current template
     const [[template]] = await db.sequelize.query(
       `SELECT * FROM ${tableNames.WHATSAPP_TEMPLATE} WHERE template_id = ? AND tenant_id = ? AND is_deleted = false`,
@@ -1420,11 +1388,13 @@ export const updateWhatsappTemplateService = async (
       throw new Error("Body cannot end with a variable");
     }
 
+    const nextStatus = template.status === "approved" ? "draft" : template.status;
+
     // Update main template
     await db.sequelize.query(
       `
       UPDATE ${tableNames.WHATSAPP_TEMPLATE}
-      SET template_name = ?, category = ?, template_type = ?, language = ?, updated_by = ?
+      SET template_name = ?, category = ?, template_type = ?, language = ?, media_asset_id = ?, media_handle = ?, updated_by = ?, status = ?
       WHERE template_id = ? AND is_deleted = false
       `,
       {
@@ -1433,7 +1403,10 @@ export const updateWhatsappTemplateService = async (
           category || template.category,
           template_type || template.template_type,
           language || template.language,
-          template.updated_by,
+          headerMediaAssetId,
+          headerMediaHandle,
+          updated_by,
+          nextStatus,
           template_id,
         ],
         transaction,
@@ -1461,8 +1434,8 @@ export const updateWhatsappTemplateService = async (
       await db.sequelize.query(
         `
         INSERT INTO ${tableNames.WHATSAPP_TEMPLATE_COMPONENTS}
-        (template_id, component_type, header_format, text_content, media_url)
-        VALUES (?, 'header', ?, ?, ?)
+        (template_id, component_type, header_format, text_content, media_url, media_asset_id, media_handle)
+        VALUES (?, 'header', ?, ?, ?, ?, ?)
         `,
         {
           replacements: [
@@ -1474,6 +1447,8 @@ export const updateWhatsappTemplateService = async (
             ).toLowerCase(),
             components.header.text || null,
             components.header.media_url || null,
+            components.header.media_asset_id || null,
+            components.header.media_handle || null,
           ],
           transaction,
         },
@@ -1602,12 +1577,19 @@ export const updateWhatsappTemplateService = async (
 
     await transaction.commit();
 
+    // Track usage of gallery asset if used in header
+    if (headerMediaAssetId) {
+      addTemplateUsageService(headerMediaAssetId, template_id).catch(err => 
+        console.error("[TEMPLATE-UPDATE] Failed to log gallery asset usage:", err.message)
+      );
+    }
+
     return {
       template_id,
       template_name: template_name || template.template_name,
       category: category || template.category,
       language: language || template.language,
-      status: template.status,
+      status: nextStatus,
       message: "Template updated successfully",
     };
   } catch (err) {

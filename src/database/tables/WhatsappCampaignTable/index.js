@@ -37,7 +37,7 @@ export const WhatsappCampaignTable = (sequelize, Sequelize) => {
             },
 
             status: {
-                type: Sequelize.ENUM("draft", "scheduled", "active", "completed", "failed", "paused"),
+                type: Sequelize.ENUM("draft", "scheduled", "active", "completed", "failed", "paused", "cancelled"),
                 defaultValue: "draft",
                 allowNull: false,
             },
@@ -84,6 +84,16 @@ export const WhatsappCampaignTable = (sequelize, Sequelize) => {
 
             card_media_urls: {
                 type: Sequelize.JSON,
+                allowNull: true,
+            },
+
+            media_asset_id: {
+                type: Sequelize.STRING,
+                allowNull: true,
+            },
+
+            media_handle: {
+                type: Sequelize.TEXT,
                 allowNull: true,
             },
 

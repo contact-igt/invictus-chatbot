@@ -9,6 +9,7 @@ const ServerEnvironmentConfig = {
     live: process.env.INVICTUS_SERVER_START_LIVE,
     development: process.env.INVICTUS_SERVER_START_DEVELOPMENT,
     local: process.env.INVICTUS_SERVER_START_LOCAL,
+    stage: process.env.INVICTUS_SERVER_STAGE,
   },
   service: process.env.EMAIL_SERVICE,
   auth: {
@@ -18,4 +19,3 @@ const ServerEnvironmentConfig = {
 };
 
 export default ServerEnvironmentConfig;
-

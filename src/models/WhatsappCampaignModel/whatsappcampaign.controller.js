@@ -7,11 +7,15 @@ import {
   permanentDeleteCampaignService,
   getDeletedCampaignListService,
   restoreCampaignService,
+  updateCampaignStatusService,
+  recordCampaignEventService,
+  getCampaignStatsService,
 } from "./whatsappcampaign.service.js";
 import { missingFieldsChecker } from "../../utils/helpers/missingFields.js";
-import { uploadToCloudinary } from "../../middlewares/cloudinary/cloudinaryUpload.js";
 import { checkBillingAccess } from "../../middlewares/billing/billingAccessGuard.js";
 import { estimateMetaCost } from "../../utils/billing/costEstimator.js";
+import { uploadMediaService } from "../GalleryModel/gallery.service.js";
+import { getWhatsappAccountByTenantService } from "../WhatsappAccountModel/whatsappAccount.service.js";
 
 /**
  * GET /whatsapp-campaign/estimate-cost
@@ -153,6 +157,7 @@ export const createCampaignController = async (req, res) => {
           message: "Scheduled time must be at least 1 minute in the future",
         });
       }
+      req.body.scheduled_at = scheduledTime.toISOString();
     }
 
     // Billing check: wallet must cover the estimated total cost for ALL campaign types,
@@ -243,6 +248,92 @@ export const createCampaignController = async (req, res) => {
   }
 };
 
+export const updateCampaignStatusController = async (req, res) => {
+  const { campaign_id } = req.params;
+  const tenant_id = req.user.tenant_id;
+  const { status } = req.body;
+
+  if (!status) {
+    return res.status(400).json({
+      success: false,
+      error_code: "MISSING_STATUS",
+      message: "status is required",
+    });
+  }
+
+  try {
+    const result = await updateCampaignStatusService(campaign_id, tenant_id, status);
+    return res.status(200).json({
+      success: true,
+      message: "Campaign status updated",
+      data: result,
+    });
+  } catch (err) {
+    if (err.message === "Campaign not found") {
+      return res.status(404).json({
+        success: false,
+        error_code: "CAMPAIGN_NOT_FOUND",
+        message: err.message,
+      });
+    }
+    if (err.message.includes("Invalid status transition")) {
+      return res.status(422).json({
+        success: false,
+        error_code: "INVALID_STATUS_TRANSITION",
+        message: err.message,
+      });
+    }
+    return res.status(500).json({
+      success: false,
+      error_code: "CAMPAIGN_STATUS_UPDATE_FAILED",
+      message: err.message,
+    });
+  }
+};
+
+export const campaignEventWebhookController = async (req, res) => {
+  try {
+    const result = await recordCampaignEventService(req.body || {});
+    return res.status(200).json({
+      success: true,
+      message: "Event recorded",
+      data: result,
+    });
+  } catch (err) {
+    return res.status(400).json({
+      success: false,
+      error_code: "INVALID_CAMPAIGN_EVENT",
+      message: err.message,
+    });
+  }
+};
+
+export const getCampaignStatsController = async (req, res) => {
+  const { campaign_id } = req.params;
+  const tenant_id = req.user.tenant_id;
+  try {
+    const stats = await getCampaignStatsService(campaign_id, tenant_id);
+    return res.status(200).json({
+      success: true,
+      message: "Campaign stats fetched",
+      data: stats,
+    });
+  } catch (err) {
+    if (err.message === "Campaign not found") {
+      return res.status(404).json({
+        success: false,
+        error_code: "CAMPAIGN_NOT_FOUND",
+        message: err.message,
+      });
+    }
+    return res.status(500).json({
+      success: false,
+      error_code: "CAMPAIGN_STATS_FETCH_FAILED",
+      message: err.message,
+    });
+  }
+};
+
 export const getCampaignListController = async (req, res) => {
   const tenant_id = req.user.tenant_id;
   try {
@@ -322,32 +413,37 @@ export const permanentDeleteCampaignController = async (req, res) => {
 };
 
 export const uploadCampaignMediaController = async (req, res) => {
+  const tenant_id = req.user?.tenant_id;
+  const userId = req.user?.unique_id || req.user?.tenant_user_id || req.user?.id;
   try {
+    if (!tenant_id) {
+      return res.status(400).json({ message: "Invalid tenant context" });
+    }
     if (!req.files || !req.files.media) {
-      return res.status(400).send({ message: "No media file uploaded" });
+      return res.status(400).json({ message: "No media file uploaded" });
     }
 
-    const file = req.files.media;
-    const type = req.body.type || "image"; // image, video, document
+    const whatsappAccount = await getWhatsappAccountByTenantService(tenant_id);
+    if (!whatsappAccount || whatsappAccount.status !== "active") {
+      return res.status(400).json({ message: "WhatsApp account not active" });
+    }
 
-    // Resource type for Cloudinary
-    let resourceType = "image";
-    if (type === "video") resourceType = "video";
-    if (type === "document") resourceType = "raw";
-
-    const imageUrl = await uploadToCloudinary(
-      file,
-      resourceType,
-      "public",
-      "campaigns",
+    const media = await uploadMediaService(
+      req.files.media,
+      tenant_id,
+      userId,
+      whatsappAccount.access_token,
+      whatsappAccount.app_id || process.env.META_APP_ID,
+      { folder: "campaign-header", tags: ["campaign"] },
     );
 
-    return res.status(200).send({
+    return res.status(200).json({
       message: "Media uploaded successfully",
-      url: imageUrl,
+      url: media.preview_url,
+      media_handle: media.media_handle,
+      media_asset_id: media.media_asset_id,
     });
   } catch (err) {
-    console.error("Upload error:", err);
-    return res.status(500).send({ message: err.message });
+    return res.status(500).json({ message: err.message });
   }
 };

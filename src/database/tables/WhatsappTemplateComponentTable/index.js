@@ -36,6 +36,16 @@ export const WhatsappTemplateComponentTable = (sequelize, Sequelize) => {
         allowNull: true, // ❗ header media only
       },
 
+      media_asset_id: {
+        type: Sequelize.STRING,
+        allowNull: true,
+      },
+
+      media_handle: {
+        type: Sequelize.TEXT,
+        allowNull: true,
+      },
+
       createdAt: {
         type: Sequelize.DATE,
         allowNull: false,

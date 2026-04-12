@@ -7,7 +7,7 @@ import FormData from "form-data";
  * This is the ONLY supported method for uploading media headers for WhatsApp Templates in recent API versions.
  * 
  * Flow:
- * 1. Fetch Cloudinary media buffer and sanitize MIME type.
+ * 1. Fetch media buffer from URL and sanitize MIME type.
  * 2. Fetch the target App ID dynamically using debug_token.
  * 3. Create an upload session -> /{app-id}/uploads
  * 4. Stream the buffer to the session -> /{session-id}

@@ -34,6 +34,7 @@ export const WhatsappCampaignRecipientTable = (sequelize, Sequelize) => {
           "read",
           "replied",
           "failed",
+          "permanently_failed",
         ),
         defaultValue: "pending",
         allowNull: false,
@@ -54,6 +55,32 @@ export const WhatsappCampaignRecipientTable = (sequelize, Sequelize) => {
         allowNull: true,
         comment:
           "Array of variable values for template placeholders, e.g., ['John', '10:00 AM']",
+      },
+
+      retry_count: {
+        type: Sequelize.INTEGER,
+        allowNull: false,
+        defaultValue: 0,
+      },
+
+      next_retry_at: {
+        type: Sequelize.DATE,
+        allowNull: true,
+      },
+
+      last_error: {
+        type: Sequelize.TEXT,
+        allowNull: true,
+      },
+
+      opened_at: {
+        type: Sequelize.DATE,
+        allowNull: true,
+      },
+
+      clicked_at: {
+        type: Sequelize.DATE,
+        allowNull: true,
       },
 
       is_deleted: {
@@ -92,6 +119,10 @@ export const WhatsappCampaignRecipientTable = (sequelize, Sequelize) => {
         {
           name: "idx_recipient_status",
           fields: ["status"],
+        },
+        {
+          name: "idx_recipient_retry",
+          fields: ["status", "retry_count", "next_retry_at"],
         },
         {
           name: "idx_recipient_meta_id",

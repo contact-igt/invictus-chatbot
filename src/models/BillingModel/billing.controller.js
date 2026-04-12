@@ -93,7 +93,18 @@ export const getBillingSpendChartController = async (req, res) => {
 
 export const getWalletBalanceController = async (req, res) => {
   try {
-    const { tenant_id } = req.user;
+    const isManagement = req.user.user_type === "management";
+    const tenant_id = isManagement
+      ? req.query.tenant_id || null
+      : req.user.tenant_id;
+
+    if (!tenant_id) {
+      return res.status(400).json({
+        success: false,
+        message: "tenant_id is required",
+      });
+    }
+
     const balanceData = await getWalletBalanceService(tenant_id);
 
     return res.status(200).json({
@@ -112,7 +123,18 @@ export const getWalletBalanceController = async (req, res) => {
 
 export const getWalletTransactionsController = async (req, res) => {
   try {
-    const { tenant_id } = req.user;
+    const isManagement = req.user.user_type === "management";
+    const tenant_id = isManagement
+      ? req.query.tenant_id || null
+      : req.user.tenant_id;
+
+    if (!tenant_id) {
+      return res.status(400).json({
+        success: false,
+        message: "tenant_id is required",
+      });
+    }
+
     const { page, limit, startDate, endDate } = req.query;
     const data = await getWalletTransactionsService(
       tenant_id,

@@ -13,8 +13,11 @@ import {
   permanentDeleteCampaignController,
   getDeletedCampaignListController,
   restoreCampaignController,
-  uploadCampaignMediaController,
   estimateCampaignCostController,
+  updateCampaignStatusController,
+  campaignEventWebhookController,
+  getCampaignStatsController,
+  uploadCampaignMediaController,
 } from "./whatsappcampaign.controller.js";
 
 const router = express.Router();
@@ -35,6 +38,13 @@ router.post(
   estimateCampaignCostController,
 );
 
+router.get(
+  "/whatsapp-campaign/list",
+  authenticate,
+  authorize({ user_type: "tenant", roles: tenantRoles }),
+  getCampaignListController,
+);
+
 router.post(
   "/whatsapp-campaign/upload-media",
   authenticate,
@@ -43,7 +53,7 @@ router.post(
 );
 
 router.get(
-  "/whatsapp-campaign/list",
+  "/whatsapp-campaign",
   authenticate,
   authorize({ user_type: "tenant", roles: tenantRoles }),
   getCampaignListController,
@@ -78,6 +88,35 @@ router.post(
   restoreCampaignController,
 );
 
+router.patch(
+  "/whatsapp-campaign/:campaign_id/status",
+  authenticate,
+  authorize({ user_type: "tenant", roles: tenantRoles }),
+  updateCampaignStatusController,
+);
+router.patch(
+  "/whatsapp-campaign/:id/status",
+  authenticate,
+  authorize({ user_type: "tenant", roles: tenantRoles }),
+  (req, _res, next) => {
+    req.params.campaign_id = req.params.id;
+    next();
+  },
+  updateCampaignStatusController,
+);
+
+router.post(
+  "/whatsapp-campaign/event",
+  campaignEventWebhookController,
+);
+
+router.get(
+  "/whatsapp-campaign/:campaign_id/stats",
+  authenticate,
+  authorize({ user_type: "tenant", roles: tenantRoles }),
+  getCampaignStatsController,
+);
+
 router.delete(
   "/whatsapp-campaign/:campaign_id/soft",
   authenticate,
@@ -90,6 +129,38 @@ router.delete(
   authenticate,
   authorize({ user_type: "tenant", roles: ["tenant_admin"] }),
   permanentDeleteCampaignController,
+);
+
+// REST aliases (v1 contract friendly)
+router.post(
+  "/campaigns",
+  authenticate,
+  authorize({ user_type: "tenant", roles: tenantRoles }),
+  createCampaignController,
+);
+router.get(
+  "/campaigns",
+  authenticate,
+  authorize({ user_type: "tenant", roles: tenantRoles }),
+  getCampaignListController,
+);
+router.get(
+  "/campaigns/:campaign_id",
+  authenticate,
+  authorize({ user_type: "tenant", roles: tenantRoles }),
+  getCampaignByIdController,
+);
+router.patch(
+  "/campaigns/:campaign_id/status",
+  authenticate,
+  authorize({ user_type: "tenant", roles: tenantRoles }),
+  updateCampaignStatusController,
+);
+router.delete(
+  "/campaigns/:campaign_id",
+  authenticate,
+  authorize({ user_type: "tenant", roles: tenantRoles }),
+  softDeleteCampaignController,
 );
 
 export default router;

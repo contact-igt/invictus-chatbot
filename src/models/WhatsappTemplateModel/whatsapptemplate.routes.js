@@ -18,7 +18,7 @@ import {
   generateAiTemplateController,
   getDeletedTemplateListController,
   restoreTemplateController,
-  uploadWhatsappTemplateMediaController,
+  uploadTemplateMediaController,
 } from "./whatsapptemplate.controller.js";
 
 const router = express.Router();
@@ -109,7 +109,7 @@ router.post(
   "/whatsapp-template/upload-media",
   authenticate,
   authorize({ user_type: "tenant", roles: tenantRoles }),
-  uploadWhatsappTemplateMediaController,
+  uploadTemplateMediaController,
 );
 
 router.delete(
@@ -131,6 +131,38 @@ router.post(
   authenticate,
   authorize({ user_type: "tenant", roles: ["tenant_admin"] }),
   restoreTemplateController,
+);
+
+// REST aliases (v1 contract friendly)
+router.post(
+  "/templates",
+  authenticate,
+  authorize({ user_type: "tenant", roles: tenantRoles }),
+  createWhatsappTemplateController,
+);
+router.get(
+  "/templates",
+  authenticate,
+  authorize({ user_type: "tenant", roles: tenantRoles }),
+  getTemplateListController,
+);
+router.get(
+  "/templates/:template_id",
+  authenticate,
+  authorize({ user_type: "tenant", roles: tenantRoles }),
+  getTemplateByIdController,
+);
+router.put(
+  "/templates/:template_id",
+  authenticate,
+  authorize({ user_type: "tenant", roles: tenantRoles }),
+  updateWhatsappTemplateController,
+);
+router.delete(
+  "/templates/:template_id",
+  authenticate,
+  authorize({ user_type: "tenant", roles: tenantRoles }),
+  softDeleteTemplateController,
 );
 
 export default router;
