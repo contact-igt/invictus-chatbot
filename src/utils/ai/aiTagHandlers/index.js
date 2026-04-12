@@ -1,9 +1,13 @@
 import * as leadSource from "./leadSource.js";
 import * as emailCapture from "./emailCapture.js";
+import * as missingKnowledge from "./missingKnowledge.js";
 
 const handlers = {
   LEAD_SOURCE: leadSource,
   EMAIL_CAPTURE: emailCapture,
+  MISSING_KNOWLEDGE: missingKnowledge,
+  MISSING_KNOWLEDGEBASE_HOOK: missingKnowledge,
+  MISSING_INFO: missingKnowledge,
 };
 
 // Extract tag payload by finding the matching closing bracket,
@@ -92,7 +96,8 @@ export const processResponse = async (fullResponse, context) => {
   }
 
   if (!tagDetected) {
-    const plainRegex = /(.*?)\s+(missing_knowledge|out_of_scope)\s*$/is;
+    const plainRegex =
+      /(.*?)\s+(missing_knowledgebase_hook|missing_knowledge|missing_info|out_of_scope)\s*$/is;
     const plainMatch = cleanMessage.match(plainRegex);
 
     if (plainMatch) {

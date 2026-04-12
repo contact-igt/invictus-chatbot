@@ -46,4 +46,6 @@ export const tableNames = {
   DAILY_USAGE_SUMMARY: "daily_usage_summary",
   MONTHLY_USAGE_SUMMARY: "monthly_usage_summary",
   CRON_EXECUTION_LOG: "cron_execution_log",
+  FAQ_REVIEWS: "faq_reviews",
+  FAQ_KNOWLEDGE_SOURCE: "faq_knowledge_source",
 };

@@ -53,6 +53,61 @@ import {
 import { markMediaAsApprovedService } from "../GalleryModel/gallery.service.js";
 import { tableNames } from "../../database/tableName.js";
 
+const FIXED_MISSING_INFO_FALLBACK =
+  "Our team will get back to you shortly. Please feel free to ask any other questions in the meantime ?";
+
+const MISSING_INFO_TAGS = new Set([
+  "MISSING_KNOWLEDGE",
+  "MISSING_KNOWLEDGEBASE_HOOK",
+  "MISSING_INFO",
+]);
+
+const MISSING_INFO_REPLY_PATTERN =
+  /(i\s*do\s*not|i\s*don't|i\s*cannot|i\s*can't|unable\s+to|not\s+enough\s+information|outside\s+(my|our)\s+(scope|knowledge)|our team will get back to you shortly|let me check with the team)/i;
+
+const normalizeRequestedTopic = (text = "") =>
+  String(text || "")
+    .replace(/\s+/g, " ")
+    .replace(/"/g, "'")
+    .trim()
+    .slice(0, 120) || "your question";
+
+const resolveAiReplyEnvelope = (aiResult, userText) => {
+  const finalReply = aiResult?.message;
+  const requestedTopic = normalizeRequestedTopic(userText);
+
+  const detectedTag = aiResult?.tagDetected || null;
+  const isMissingInfoTag = detectedTag ? MISSING_INFO_TAGS.has(detectedTag) : false;
+  const looksLikeMissingInfoReply = MISSING_INFO_REPLY_PATTERN.test(
+    finalReply || "",
+  );
+  const isMissingInfoSignal = isMissingInfoTag || looksLikeMissingInfoReply;
+
+  const tagToExecute =
+    detectedTag || (isMissingInfoSignal ? "MISSING_KNOWLEDGEBASE_HOOK" : null);
+  const tagPayloadToExecute =
+    aiResult?.tagPayload || (isMissingInfoSignal ? requestedTopic : null);
+
+  const fallback = isMissingInfoSignal
+    ? FIXED_MISSING_INFO_FALLBACK
+    : aiResult?.tagDetected
+      ? ""
+      : "Our team will review your message and contact you shortly.";
+
+  const messageToSend = isMissingInfoSignal
+    ? FIXED_MISSING_INFO_FALLBACK
+    : finalReply && finalReply.trim()
+      ? finalReply.trim()
+      : fallback;
+
+  return {
+    messageToSend,
+    tagToExecute,
+    tagPayloadToExecute,
+    isMissingInfoSignal,
+  };
+};
+
 export const verifyWebhook = async (req, res) => {
   try {
     const { tenantId } = req.params;
@@ -693,12 +748,8 @@ export const receiveMessage = async (req, res) => {
           messagePreview: aiResult?.message?.substring(0, 200) || "N/A",
         });
 
-        const finalReply = aiResult?.message;
-        const fallback = aiResult?.tagDetected
-          ? ""
-          : "Our team will review your message and contact you shortly.";
-        const messageToSend =
-          finalReply && finalReply.trim() ? finalReply.trim() : fallback;
+        const { messageToSend, tagToExecute, tagPayloadToExecute } =
+          resolveAiReplyEnvelope(aiResult, text);
 
         // Send to WhatsApp FIRST — before saving the bot message.
         // This ensures that if the access token is invalid we do NOT create a
@@ -796,22 +847,23 @@ export const receiveMessage = async (req, res) => {
 
         // Execute tag handler AFTER sending the AI reply
         // This ensures correct message ordering (e.g., "Let me check..." before slots list)
-        if (aiResult?.tagDetected) {
+        if (tagToExecute) {
           console.log(
-            `[WEBHOOK] Executing tag handler: ${aiResult.tagDetected}, payload: ${aiResult.tagPayload?.substring(0, 100)}`,
+            `[WEBHOOK] Executing tag handler: ${tagToExecute}, payload: ${String(tagPayloadToExecute || "").substring(0, 100)}`,
           );
           const { executeTagHandler } =
             await import("../../utils/ai/aiTagHandlers/index.js");
           await executeTagHandler(
-            aiResult.tagDetected,
-            aiResult.tagPayload,
+            tagToExecute,
+            tagPayloadToExecute,
             {
               tenant_id,
               contact_id: contactsaved?.contact_id,
               phone,
               phone_number_id,
+              userMessage: text,
             },
-            messageToSend,
+            text,
           );
         }
       } catch (err) {
@@ -960,6 +1012,23 @@ export const receiveMessage = async (req, res) => {
                         },
                       );
                     } catch (_) {}
+                  }
+
+                  if (queuedTagToExecute) {
+                    const { executeTagHandler } =
+                      await import("../../utils/ai/aiTagHandlers/index.js");
+                    await executeTagHandler(
+                      queuedTagToExecute,
+                      queuedTagPayloadToExecute,
+                      {
+                        tenant_id,
+                        contact_id: pending.contact_id,
+                        phone,
+                        phone_number_id,
+                        userMessage: pending.text,
+                      },
+                      pending.text,
+                    );
                   }
                 }
               } catch (qErr) {

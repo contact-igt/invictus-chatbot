@@ -112,6 +112,20 @@ export const defineAssociations = (db) => {
     constraints: false,
   });
 
+  // Tenant → FaqReviews (One-to-Many)
+  db.Tenants.hasMany(db.FaqReviews, {
+    foreignKey: "tenant_id",
+    sourceKey: "tenant_id",
+    as: "faqReviews",
+    constraints: false,
+  });
+  db.FaqReviews.belongsTo(db.Tenants, {
+    foreignKey: "tenant_id",
+    targetKey: "tenant_id",
+    as: "tenant",
+    constraints: false,
+  });
+
   // Tenant → Leads (One-to-Many)
   db.Tenants.hasMany(db.Leads, {
     foreignKey: "tenant_id",

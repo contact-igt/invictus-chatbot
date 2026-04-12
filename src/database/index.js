@@ -47,6 +47,8 @@ import { BillingSystemHealthTable } from "./tables/BillingSystemHealthTable/inde
 import { DailyUsageSummaryTable } from "./tables/DailyUsageSummaryTable/index.js";
 import { MonthlyUsageSummaryTable } from "./tables/MonthlyUsageSummaryTable/index.js";
 import { CronExecutionLogTable } from "./tables/CronExecutionLogTable/index.js";
+import { FaqReviewsTable } from "./tables/FaqTable/index.js";
+import { FaqKnowledgeSourceTable } from "./tables/FaqKnowledgeSourceTable/index.js";
 import { defineAssociations } from "./associations.js";
 import { MediaAssetTable } from "./tables/MediaAssetTable/index.js";
 import { AppointmentTable } from "./tables/AppointmentTable/index.js";
@@ -144,8 +146,6 @@ db.BillingSystemHealth = BillingSystemHealthTable(sequelize, Sequelize);
 db.DailyUsageSummary = DailyUsageSummaryTable(sequelize, Sequelize);
 db.MonthlyUsageSummary = MonthlyUsageSummaryTable(sequelize, Sequelize);
 db.CronExecutionLog = CronExecutionLogTable(sequelize, Sequelize);
-db.MediaAsset = MediaAssetTable(sequelize , Sequelize);
-db.Appointments = AppointmentTable(sequelize, Sequelize);
 // db.BookingSession = BookingSessionTable(sequelize, Sequelize);
 
 

@@ -2,6 +2,8 @@ import db from "../../database/index.js";
 import { tableNames } from "../../database/tableName.js";
 import { chunkText } from "../../utils/text/chunkText.js";
 import { cleanText } from "../../utils/text/cleanText.js";
+import { invalidateDomainSummary } from "../../utils/ai/domainContextHelper.js";
+import { generateTextEmbedding } from "../../utils/ai/embedding.js";
 
 export const processKnowledgeUpload = async (
   tenant_id,
@@ -30,8 +32,14 @@ export const processKnowledgeUpload = async (
     const chunks = chunkText(text);
 
     for (const chunk of chunks) {
+      const embedding = await generateTextEmbedding(chunk, tenant_id);
       await db.sequelize.query(Query2, {
-        replacements: [tenant_id, sourceId, chunk, JSON.stringify([])],
+        replacements: [
+          tenant_id,
+          sourceId,
+          chunk,
+          JSON.stringify(embedding || []),
+        ],
       });
     }
   } catch (err) {
@@ -103,13 +111,21 @@ export const updateKnowledgeService = async (id, tenant_id, title, text) => {
       const chunks = chunkText(cleaned);
 
       for (const chunk of chunks) {
+        const embedding = await generateTextEmbedding(chunk, tenant_id);
         await db.sequelize.query(
           `
         INSERT INTO ${tableNames.KNOWLEDGECHUNKS}
         (tenant_id , source_id, chunk_text, embedding)
         VALUES (?, ?, ? , ?)
         `,
-          { replacements: [tenant_id, id, chunk, JSON.stringify([])] },
+          {
+            replacements: [
+              tenant_id,
+              id,
+              chunk,
+              JSON.stringify(embedding || []),
+            ],
+          },
         );
       }
     } else {
@@ -186,6 +202,7 @@ export const updateKnowledgeStatusService = async (status, id, tenant_id) => {
 
     const [result] = await db.sequelize.query(Query, { replacements: values });
 
+    invalidateDomainSummary(tenant_id);
     return result;
   } catch (err) {
     throw err;

@@ -109,6 +109,7 @@ app.use(
   BillingRouter,
   WhatsappOtpRouter,
   PaymentRouter,
+  FaqRouter,
 );
 
 app.use(

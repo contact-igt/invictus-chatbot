@@ -3,21 +3,143 @@
  * Falls back to synchronous processing if Redis is unavailable.
  */
 
+import net from "net";
+
 let Queue;
 let billingQueue = null;
 let queueAvailable = false;
+let queueDisableLogged = false;
+let queueDisabling = false;
+
+const DEFAULT_REDIS_URL = "redis://127.0.0.1:6379";
+const REDIS_CONNECT_TIMEOUT_MS = Number(
+  process.env.BILLING_QUEUE_CONNECT_TIMEOUT_MS || 1200,
+);
+
+const logQueueDisabledOnce = (message, detail) => {
+  if (queueDisableLogged) return;
+  queueDisableLogged = true;
+  if (detail) {
+    console.warn(message, detail);
+    return;
+  }
+  console.warn(message);
+};
+
+const isRedisConnectionError = (error) => {
+  const code = String(error?.code || "").toUpperCase();
+  const message = String(error?.message || error || "").toUpperCase();
+
+  return (
+    code === "ECONNREFUSED" ||
+    code === "ECONNRESET" ||
+    code === "ETIMEDOUT" ||
+    code === "EHOSTUNREACH" ||
+    code === "ENOTFOUND" ||
+    message.includes("ECONNREFUSED") ||
+    message.includes("ECONNRESET") ||
+    message.includes("ETIMEDOUT") ||
+    message.includes("EHOSTUNREACH") ||
+    message.includes("ENOTFOUND")
+  );
+};
+
+const parseRedisEndpoint = (redisUrl) => {
+  try {
+    const parsedUrl = new URL(redisUrl);
+    return {
+      host: parsedUrl.hostname || "127.0.0.1",
+      port: parsedUrl.port ? Number(parsedUrl.port) : 6379,
+    };
+  } catch {
+    return null;
+  }
+};
+
+const checkRedisReachability = async (
+  redisUrl,
+  timeoutMs = REDIS_CONNECT_TIMEOUT_MS,
+) => {
+  const endpoint = parseRedisEndpoint(redisUrl);
+  if (!endpoint) {
+    return { ok: false, reason: `Invalid REDIS_URL: ${redisUrl}` };
+  }
+
+  return new Promise((resolve) => {
+    let resolved = false;
+    const socket = net.createConnection(endpoint);
+
+    const done = (result) => {
+      if (resolved) return;
+      resolved = true;
+      socket.destroy();
+      resolve(result);
+    };
+
+    socket.setTimeout(timeoutMs);
+    socket.once("connect", () => done({ ok: true }));
+    socket.once("timeout", () =>
+      done({ ok: false, reason: `timeout after ${timeoutMs}ms` }),
+    );
+    socket.once("error", (error) =>
+      done({ ok: false, reason: error.message || "connection error" }),
+    );
+  });
+};
+
+const disableQueue = async (message, error) => {
+  if (queueDisabling) return;
+  queueDisabling = true;
+
+  const queueToClose = billingQueue;
+  billingQueue = null;
+  queueAvailable = false;
+
+  logQueueDisabledOnce(
+    message,
+    error?.message || (typeof error === "string" ? error : undefined),
+  );
+
+  if (!queueToClose) {
+    queueDisabling = false;
+    return;
+  }
+
+  try {
+    await queueToClose.close();
+  } catch (closeErr) {
+    console.warn(
+      "[BILLING-QUEUE] Failed to close queue after disabling:",
+      closeErr.message,
+    );
+  } finally {
+    queueDisabling = false;
+  }
+};
 
 /**
  * Initialize the billing queue.
  * Call once at app startup. Safe to call even if Redis is down.
  */
 export const initBillingQueue = async () => {
+  queueDisableLogged = false;
+  queueDisabling = false;
+
   try {
+    const redisUrl = process.env.REDIS_URL || DEFAULT_REDIS_URL;
+
+    const redisStatus = await checkRedisReachability(redisUrl);
+    if (!redisStatus.ok) {
+      await disableQueue(
+        "[BILLING-QUEUE] Redis not reachable — queue disabled, using sync processing.",
+        redisStatus.reason,
+      );
+      return;
+    }
+
     // Dynamic import — Bull is an optional dependency
     const BullModule = await import("bull");
     Queue = BullModule.default || BullModule;
-
-    const redisUrl = process.env.REDIS_URL || "redis://127.0.0.1:6379";
 
     billingQueue = new Queue("billing-processing", redisUrl, {
       defaultJobOptions: {
@@ -52,13 +174,23 @@ export const initBillingQueue = async () => {
     });
 
     billingQueue.on("error", (error) => {
+      if (queueDisabling || !queueAvailable || !billingQueue) {
+        return;
+      }
+
+      if (isRedisConnectionError(error)) {
+        void disableQueue(
+          "[BILLING-QUEUE] Redis connection lost — queue disabled, using sync processing.",
+          error,
+        );
+        return;
+      }
       console.error("[BILLING-QUEUE] Queue error:", error.message);
     });
   } catch (err) {
-    queueAvailable = false;
-    console.warn(
+    await disableQueue(
       "[BILLING-QUEUE] Redis not available — queue disabled, using sync processing.",
-      err.message,
+      err,
     );
   }
 };
@@ -125,7 +257,10 @@ export const getQueueStats = async () => {
  */
 export const closeBillingQueue = async () => {
   if (billingQueue) {
-    await billingQueue.close();
+    const queueToClose = billingQueue;
+    billingQueue = null;
+    queueAvailable = false;
+    await queueToClose.close();
     console.log("[BILLING-QUEUE] Closed gracefully");
   }
 };

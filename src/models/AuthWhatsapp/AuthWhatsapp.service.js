@@ -18,6 +18,57 @@ const httpsAgent = new https.Agent({
   keepAlive: true,
 });
 
+const FIXED_MISSING_INFO_FALLBACK =
+  "Our team will get back to you shortly. Please feel free to ask any other questions in the meantime ?";
+
+const FACTUAL_KEYWORD_PATTERN =
+  /\b(price|cost|fee|fees|timing|timings|hours|open|close|policy|policies|service|services|treatment|treatments|procedure|procedures|operation|surgery|medication|medicine|diet|drink|drinks|food|before|after|insurance|package|offer|facility|facilities|address|location|contact|refund|payment|emi|warranty|guarantee|side effects?)\b/i;
+const FACTUAL_INTENT_PATTERN =
+  /\b(what|when|where|which|who|how\s+much|how\s+many|how\s+long)\b/i;
+const SMALLTALK_PATTERN =
+  /^(hi|hello|hey|thanks|thank you|ok|okay|bye|good morning|good afternoon|good evening|how are you)\b/i;
+
+const normalizeMissingKnowledgeTopic = (message = "") =>
+  String(message)
+    .replace(/\s+/g, " ")
+    .replace(/"/g, "'")
+    .trim()
+    .slice(0, 120) || "your question";
+
+const hasGroundingChunks = (knowledgeResult) =>
+  Array.isArray(knowledgeResult?.chunks) && knowledgeResult.chunks.length > 0;
+
+const isLikelyFactualQuestion = (message = "") => {
+  const text = String(message || "").trim();
+  if (!text) return false;
+
+  if (FACTUAL_KEYWORD_PATTERN.test(text)) return true;
+
+  // Ignore pure small-talk even if a question mark is present (e.g., "how are you?")
+  if (SMALLTALK_PATTERN.test(text) && text.split(/\s+/).length <= 8) {
+    return false;
+  }
+
+  return text.includes("?") && FACTUAL_INTENT_PATTERN.test(text);
+};
+
+const shouldEnforceStrictGrounding = (message = "", intentResult = null) => {
+  if (!isLikelyFactualQuestion(message)) return false;
+
+  // Keep booking/appointment and doctor-flow logic unchanged.
+  if (intentResult?.intent === "APPOINTMENT_ACTION") return false;
+  if (intentResult?.requires?.appointments) return false;
+  if (intentResult?.requires?.doctors) return false;
+
+  return true;
+};
+
+const buildForcedMissingKnowledgeResult = (message = "") => ({
+  message: FIXED_MISSING_INFO_FALLBACK,
+  tagDetected: "MISSING_KNOWLEDGEBASE_HOOK",
+  tagPayload: normalizeMissingKnowledgeTopic(message),
+});
+
 export const sendWhatsAppMessage = async (tenant_id, to, message) => {
   try {
     if (!message || !message.trim()) return;
@@ -561,11 +612,23 @@ export const getOpenAIReply = async (
     const chatHistory = buildChatHistory(memory);
 
     // ── Phase 1.5: Intent Classification — what data does this message need? ──
-    const intentResult = await classifyIntent(
+    let intentResult = await classifyIntent(
       cleanMessage,
       chatHistory,
       tenant_id,
     );
+
+    const factualKnowledgeNeeded = isLikelyFactualQuestion(cleanMessage);
+    if (!intentResult.requires.knowledge && factualKnowledgeNeeded) {
+      intentResult = {
+        ...intentResult,
+        requires: { ...intentResult.requires, knowledge: true },
+      };
+      console.log(
+        "[WHATSAPP-AI] Knowledge lookup forced by strict factual-question heuristic.",
+      );
+    }
+
     console.log(
       `[WHATSAPP-AI] Intent: ${intentResult.intent} | requires: K:${intentResult.requires.knowledge} D:${intentResult.requires.doctors} A:${intentResult.requires.appointments}`,
     );
@@ -580,6 +643,30 @@ export const getOpenAIReply = async (
         console.error("[WHATSAPP-AI] Knowledge search failed:", knErr.message);
         return { chunks: [], resolvedLogs: [], sources: [] };
       });
+    }
+
+    const strictGroundingRequired = shouldEnforceStrictGrounding(
+      cleanMessage,
+      intentResult,
+    );
+    const hasKnowledgeGrounding = hasGroundingChunks(knowledgeResult);
+    const groundingChunkCount = Array.isArray(knowledgeResult?.chunks)
+      ? knowledgeResult.chunks.length
+      : 0;
+
+    console.log(
+      `[WHATSAPP-AI] Grounding precheck | strict:${strictGroundingRequired} | chunks:${groundingChunkCount}`,
+    );
+
+    if (strictGroundingRequired && !hasKnowledgeGrounding) {
+      const forcedMissing = buildForcedMissingKnowledgeResult(cleanMessage);
+      console.warn(
+        `[WHATSAPP-AI] Forced missing-knowledge before AI generation. topic:${forcedMissing.tagPayload}`,
+      );
+      return {
+        ...forcedMissing,
+        intent: intentResult.intent,
+      };
     }
 
     // ── Phase 2: Build system prompt (mostly local assembly, data pre-fetched) ──
@@ -660,6 +747,13 @@ export const getOpenAIReply = async (
     } catch (procErr) {
       console.error("[WHATSAPP-AI] processResponse failed:", procErr.message);
       processed = { message: rawReply, tagDetected: null, tagPayload: null };
+    }
+
+    if (strictGroundingRequired && !hasKnowledgeGrounding) {
+      processed = buildForcedMissingKnowledgeResult(cleanMessage);
+      console.warn(
+        `[WHATSAPP-AI] Forced missing-knowledge after AI generation safety override. topic:${processed.tagPayload}`,
+      );
     }
 
     const finalReply = processed.message;
