@@ -1,6 +1,7 @@
 import db from "../../database/index.js";
 import { getIO } from "../../middlewares/socket/socket.js";
 import { initBillingCycle, closeBillingCycle } from "./billingCycle.service.js";
+import { logger } from "../../utils/logger.js";
 
 /**
  * Force unlock access for a tenant.
@@ -54,7 +55,7 @@ export const forceUnlockAccess = async (admin_id, tenant_id, reason) => {
     io.to(`tenant-${tenant_id}`).emit("access-restored", { tenant_id });
   } catch (_) {}
 
-  console.log(
+  logger.info(
     `[ADMIN-BILLING] force_unlock by ${admin_id} for tenant ${tenant_id}: ${reason}`,
   );
 
@@ -129,7 +130,7 @@ export const manualWalletCredit = async (
     });
   } catch (_) {}
 
-  console.log(
+  logger.info(
     `[ADMIN-BILLING] manual_credit by ${admin_id}: ₹${amountInRupees.toFixed(2)} to tenant ${tenant_id}. Reason: ${reason}`,
   );
 
@@ -167,7 +168,7 @@ export const manualInvoiceClose = async (admin_id, invoice_id, reason) => {
     reason,
   });
 
-  console.log(
+  logger.info(
     `[ADMIN-BILLING] manual_invoice_close by ${admin_id}: ${invoice.invoice_number}. Reason: ${reason}`,
   );
 
@@ -267,7 +268,7 @@ export const changeBillingMode = async (
     });
   } catch (_) {}
 
-  console.log(
+  logger.info(
     `[ADMIN-BILLING] billing_mode_change by ${admin_id}: ${old_mode} → ${new_mode} for tenant ${tenant_id}. Reason: ${reason}`,
   );
 
@@ -329,7 +330,7 @@ export const updateUsageLimits = async (admin_id, tenant_id, limits) => {
     });
   } catch (_) {}
 
-  console.log(
+  logger.info(
     `[ADMIN-BILLING] update_usage_limits by ${admin_id} for tenant ${tenant_id}:`,
     updateData,
   );

@@ -52,6 +52,8 @@ import { FaqKnowledgeSourceTable } from "./tables/FaqKnowledgeSourceTable/index.
 import { defineAssociations } from "./associations.js";
 import { MediaAssetTable } from "./tables/MediaAssetTable/index.js";
 import { AppointmentTable } from "./tables/AppointmentTable/index.js";
+import { SavedPaymentMethodTable } from "./tables/SavedPaymentMethod/SavedPaymentMethod.js";
+import { TaxSettingsTable } from "./tables/TaxSettingsTable/index.js";
 
 const dbconfig =
   ServerEnvironmentConfig?.server?.line === "production"
@@ -146,12 +148,13 @@ db.BillingSystemHealth = BillingSystemHealthTable(sequelize, Sequelize);
 db.DailyUsageSummary = DailyUsageSummaryTable(sequelize, Sequelize);
 db.MonthlyUsageSummary = MonthlyUsageSummaryTable(sequelize, Sequelize);
 db.CronExecutionLog = CronExecutionLogTable(sequelize, Sequelize);
-// db.BookingSession = BookingSessionTable(sequelize, Sequelize);
+db.FaqReviews = FaqReviewsTable(sequelize, Sequelize);
+db.FaqKnowledgeSource = FaqKnowledgeSourceTable(sequelize, Sequelize);
+db.MediaAsset = MediaAssetTable(sequelize, Sequelize);
+db.Appointments = AppointmentTable(sequelize, Sequelize);
+db.SavedPaymentMethod = SavedPaymentMethodTable(sequelize, Sequelize);
+db.TaxSettings = TaxSettingsTable(sequelize, Sequelize);
 
-
-// ========================================
-// IMPORT AND DEFINE ASSOCIATIONS
-// ========================================
 defineAssociations(db);
 
 export default db;

@@ -4,6 +4,7 @@
  */
 
 import net from "net";
+import { logger } from "../logger.js";
 
 let Queue;
 let billingQueue = null;
@@ -20,10 +21,10 @@ const logQueueDisabledOnce = (message, detail) => {
   if (queueDisableLogged) return;
   queueDisableLogged = true;
   if (detail) {
-    console.warn(message, detail);
+    logger.warn(message, detail);
     return;
   }
-  console.warn(message);
+  logger.warn(message);
 };
 
 const isRedisConnectionError = (error) => {
@@ -108,9 +109,8 @@ const disableQueue = async (message, error) => {
   try {
     await queueToClose.close();
   } catch (closeErr) {
-    console.warn(
-      "[BILLING-QUEUE] Failed to close queue after disabling:",
-      closeErr.message,
+    logger.warn(
+      `[BILLING-QUEUE] Failed to close queue after disabling: ${closeErr.message}`,
     );
   } finally {
     queueDisabling = false;
@@ -154,7 +154,7 @@ export const initBillingQueue = async () => {
     await billingQueue.isReady();
     queueAvailable = true;
 
-    console.log("[BILLING-QUEUE] Initialized successfully with Redis");
+    logger.info("[BILLING-QUEUE] Initialized successfully with Redis");
 
     // Set up worker
     billingQueue.process(5, async (job) => {
@@ -167,9 +167,8 @@ export const initBillingQueue = async () => {
     });
 
     billingQueue.on("failed", (job, err) => {
-      console.error(
-        `[BILLING-QUEUE] Job ${job.id} failed (attempt ${job.attemptsMade}):`,
-        err.message,
+      logger.error(
+        `[BILLING-QUEUE] Job ${job.id} failed (attempt ${job.attemptsMade}): ${err.message}`,
       );
     });
 
@@ -185,7 +184,7 @@ export const initBillingQueue = async () => {
         );
         return;
       }
-      console.error("[BILLING-QUEUE] Queue error:", error.message);
+      logger.error(`[BILLING-QUEUE] Queue error: ${error.message}`);
     });
   } catch (err) {
     await disableQueue(
@@ -211,9 +210,8 @@ export const enqueueBillingJob = async (tenant_id, statusUpdate) => {
       );
       return true;
     } catch (err) {
-      console.error(
-        "[BILLING-QUEUE] Enqueue failed, falling back to sync:",
-        err.message,
+      logger.error(
+        `[BILLING-QUEUE] Enqueue failed, falling back to sync: ${err.message}`,
       );
     }
   }
@@ -261,6 +259,6 @@ export const closeBillingQueue = async () => {
     billingQueue = null;
     queueAvailable = false;
     await queueToClose.close();
-    console.log("[BILLING-QUEUE] Closed gracefully");
+    logger.info("[BILLING-QUEUE] Closed gracefully");
   }
 };

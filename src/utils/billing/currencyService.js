@@ -1,5 +1,6 @@
 import db from "../../database/index.js";
 import { DEFAULT_USD_TO_INR } from "../../config/billing.config.js";
+import { logger } from "../logger.js";
 
 // In-memory cache for currency rates
 let rateCache = new Map();
@@ -47,16 +48,15 @@ export const getConversionRate = async (from = "USD", to = "INR") => {
       return entry;
     }
   } catch (err) {
-    console.error(
-      `[CURRENCY] DB lookup failed for ${from}→${to}:`,
-      err.message,
+    logger.error(
+      `[CURRENCY] DB lookup failed for ${from}→${to}: ${err.message}`,
     );
   }
 
   // 3. Return last known cached value if DB failed
   if (rateCache.has(cacheKey)) {
     const cached = rateCache.get(cacheKey);
-    console.warn(
+    logger.warn(
       `[CURRENCY] Using stale cache for ${from}→${to}: ${cached.rate}`,
     );
     return {
@@ -68,14 +68,14 @@ export const getConversionRate = async (from = "USD", to = "INR") => {
 
   // 4. Ultimate fallback to config default
   if (from === "USD" && to === "INR") {
-    console.warn(
+    logger.warn(
       `[CURRENCY] No rate found for USD→INR, using default: ${DEFAULT_USD_TO_INR}`,
     );
     return { rate: DEFAULT_USD_TO_INR, source: "default", updatedAt: null };
   }
 
   // Unknown pair — return 1:1 with warning
-  console.error(
+  logger.error(
     `[CURRENCY] No conversion rate for ${from}→${to}. Returning 1.`,
   );
   return { rate: 1, source: "fallback", updatedAt: null };
@@ -114,7 +114,7 @@ export const updateConversionRate = async (
   const cacheKey = `${from}_${to}`;
   rateCache.delete(cacheKey);
 
-  console.log(`[CURRENCY] Updated ${from}→${to}: ${rate} (source: ${source})`);
+  logger.info(`[CURRENCY] Updated ${from}→${to}: ${rate} (source: ${source})`);
   return record;
 };
 

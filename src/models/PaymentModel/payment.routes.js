@@ -4,19 +4,32 @@ import {
   paymentRateLimiter,
   invoicePaymentRateLimiter,
 } from "../../middlewares/billing/billingRateLimiter.js";
+
 import {
   createRazorpayOrderController,
   verifyRazorpayPaymentController,
   getPaymentHistoryController,
   razorpayWebhookController,
+  getSavedPaymentMethod,
+  removeSavedPaymentMethod,
 } from "./payment.controller.js";
+import { billingQueryRateLimiter } from "../../middlewares/billing/billingRateLimiter.js";
 
 const router = express.Router();
 
-/**
- * Razorpay webhook — NO JWT auth, but uses HMAC signature verification.
- * Must use express.raw() so the raw body Buffer is available for signature check.
- */
+router.get(
+  "/payment/saved-method",
+  authenticate,
+  billingQueryRateLimiter,
+  getSavedPaymentMethod,
+);
+router.delete(
+  "/payment/saved-method",
+  authenticate,
+  billingQueryRateLimiter,
+  removeSavedPaymentMethod,
+);
+
 router.post(
   "/payment/razorpay-webhook",
   express.raw({ type: "application/json" }),
@@ -41,6 +54,7 @@ router.post(
   paymentRateLimiter,
   verifyRazorpayPaymentController,
 );
+
 router.get("/payment/history", authenticate, getPaymentHistoryController);
 
 export default router;

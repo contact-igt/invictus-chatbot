@@ -28,7 +28,7 @@ export const MediaAssetTable = (sequelize, Sequelize) => {
       },
 
       file_type: {
-        type: Sequelize.ENUM("image", "video", "document", "audio"),
+        type: Sequelize.ENUM("image", "video", "document"),
         allowNull: false,
       },
 

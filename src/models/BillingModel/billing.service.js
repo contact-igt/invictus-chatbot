@@ -13,6 +13,7 @@ import {
   invalidateUsageCache,
 } from "../../utils/billing/usageLimiter.js";
 import { recordHealthEvent } from "../../utils/billing/billingHealthMonitor.js";
+import { logger } from "../../utils/logger.js";
 
 const phoneUtil = libphonenumber.PhoneNumberUtil.getInstance();
 
@@ -32,13 +33,13 @@ export const processBillingFromWebhook = async (tenant_id, statusUpdate) => {
         { replacements: [tenant_id] },
       );
       if (acctRows[0]?.status === "token_error") {
-        console.log(
+        logger.info(
           `[BILLING] Skipping Meta billing for tenant ${tenant_id} — account has token_error status`,
         );
         return;
       }
     } catch (checkErr) {
-      console.error("[BILLING] Token status check failed:", checkErr.message);
+      logger.error("[BILLING] Token status check failed:", checkErr.message);
     }
 
     // We only create entries when Meta provides the pricing object on the "sent" status of a new conversation window.
@@ -102,7 +103,7 @@ export const processBillingFromWebhook = async (tenant_id, statusUpdate) => {
           country = regionCode;
         }
       } catch (phoneErr) {
-        console.warn(
+        logger.warn(
           `[BILLING] Failed to parse recipient_id ${recipient_id} for country detection:`,
           phoneErr.message,
         );
@@ -161,7 +162,7 @@ export const processBillingFromWebhook = async (tenant_id, statusUpdate) => {
         }
       }
     } catch (err) {
-      console.error("[BILLING] Error fetching message/campaign metadata:", err);
+      logger.error("[BILLING] Error fetching message/campaign metadata:", err);
     }
 
     // 4. Fetch tenant billing mode
@@ -175,7 +176,7 @@ export const processBillingFromWebhook = async (tenant_id, statusUpdate) => {
     // 5. Check usage limits before billing
     const usageCheck = await checkUsageLimit(tenant_id, "message");
     if (!usageCheck.allowed) {
-      console.warn(
+      logger.warn(
         `[BILLING] Usage limit hit for tenant ${tenant_id}: ${usageCheck.reason}`,
       );
       try {
@@ -199,7 +200,7 @@ export const processBillingFromWebhook = async (tenant_id, statusUpdate) => {
         transaction: t,
       });
       if (existingLedger) {
-        console.log(
+        logger.info(
           `[BILLING] Skipping duplicate billing for message_usage_id ${usageRecord.id}`,
         );
         return;
@@ -216,7 +217,7 @@ export const processBillingFromWebhook = async (tenant_id, statusUpdate) => {
         );
 
         if (!deductResult.success) {
-          console.warn(
+          logger.warn(
             `[BILLING] Prepaid deduction failed for tenant ${tenant_id}: ${deductResult.error}`,
           );
           try {
@@ -284,7 +285,7 @@ export const processBillingFromWebhook = async (tenant_id, statusUpdate) => {
             },
             { transaction: t },
           );
-          console.log(
+          logger.info(
             `[BILLING] Auto-created billing cycle for postpaid tenant ${tenant_id}`,
           );
         }
@@ -304,9 +305,9 @@ export const processBillingFromWebhook = async (tenant_id, statusUpdate) => {
             { transaction: t },
           );
 
-          // Check credit limit thresholds
-          const updatedTotal =
-            parseFloat(activeCycle.total_cost_inr) + totalCostInr;
+          // Reload to get the true post-increment total (prevents stale-read warnings)
+          await activeCycle.reload({ transaction: t });
+          const updatedTotal = parseFloat(activeCycle.total_cost_inr);
           const creditLimit = parseFloat(tenant?.postpaid_credit_limit) || 5000;
 
           if (updatedTotal >= creditLimit) {
@@ -385,7 +386,7 @@ export const processBillingFromWebhook = async (tenant_id, statusUpdate) => {
           { where: { tenant_id, summary_month: month }, transaction: t },
         );
       } catch (summaryErr) {
-        console.error("[BILLING] Summary update error:", summaryErr.message);
+        logger.error("[BILLING] Summary update error:", summaryErr.message);
       }
     });
 
@@ -400,7 +401,7 @@ export const processBillingFromWebhook = async (tenant_id, statusUpdate) => {
       if (wallet) currentBalance = parseFloat(wallet.balance);
     } catch (e) {}
 
-    console.log(
+    logger.info(
       `[BILLING] ${billing_mode.toUpperCase()} billed ${category} for tenant ${tenant_id}: ₹${totalCostInr.toFixed(4)} ($${totalCostUsd.toFixed(4)} × ${usdToInrRate}). Balance: ₹${currentBalance.toFixed(4)}`,
     );
 
@@ -437,7 +438,7 @@ export const processBillingFromWebhook = async (tenant_id, statusUpdate) => {
         currentBalance < parseFloat(wallet.auto_recharge_threshold)
       ) {
         const rechargeAmount = parseFloat(wallet.auto_recharge_amount);
-        console.log(
+        logger.info(
           `[AUTO-RECHARGE] Balance ₹${currentBalance.toFixed(2)} below threshold. Triggering auto-recharge of ₹${rechargeAmount.toFixed(2)} for tenant ${tenant_id}`,
         );
         io.to(`tenant-${tenant_id}`).emit("auto-recharge-trigger", {
@@ -448,13 +449,13 @@ export const processBillingFromWebhook = async (tenant_id, statusUpdate) => {
         });
       }
     } catch (socketErr) {
-      console.error(
+      logger.error(
         "[BILLING SOCKET ERROR] Failed to emit billing update:",
         socketErr.message,
       );
     }
   } catch (error) {
-    console.error(
+    logger.error(
       `[BILLING ERROR] processing message ${statusUpdate?.id}:`,
       error,
     );
@@ -623,31 +624,41 @@ export const getBillingLedgerService = async (
             },
           ],
         },
+        {
+          model: db.AiTokenUsage,
+          as: "aiTokenUsage",
+          attributes: ["model", "source", "prompt_tokens", "completion_tokens", "total_tokens", "billed"],
+        },
       ],
     });
 
-    const records = rows.map((ledger) => ({
-      id: ledger.id,
-      date: ledger.createdAt,
-      category: ledger.category,
-      template: ledger.template_name || "—",
-      campaign: ledger.campaign_name || "—",
-      messages: 1,
-      recipient: ledger.messageUsage?.messageDetails?.phone || "—",
-      recipientName: ledger.messageUsage?.messageDetails?.name || null,
-      country: ledger.country,
-      rate: ledger.rate,
-      metaCost: ledger.meta_cost,
-      platformFee: ledger.platform_fee,
-      markupPercent: ledger.markup_percent,
-      total: ledger.total_cost,
-      usdToInrRate: ledger.usd_to_inr_rate || DEFAULT_USD_TO_INR,
-      totalInr:
-        ledger.total_cost_inr ||
-        parseFloat(ledger.total_cost) *
-          (parseFloat(ledger.usd_to_inr_rate) || DEFAULT_USD_TO_INR),
-      status: ledger.messageUsage?.status || "Unknown",
-    }));
+    const records = rows.map((ledger) => {
+      const isAi = ledger.entry_type === "ai";
+      return {
+        id: ledger.id,
+        date: ledger.createdAt,
+        entryType: ledger.entry_type,
+        category: ledger.category,
+        template: isAi ? ledger.aiTokenUsage?.model || "—" : ledger.template_name || "—",
+        campaign: ledger.campaign_name || "—",
+        messages: isAi ? null : 1,
+        tokens: isAi ? ledger.aiTokenUsage?.total_tokens : null,
+        recipient: isAi ? ledger.aiTokenUsage?.source || "—" : ledger.messageUsage?.messageDetails?.phone || "—",
+        recipientName: isAi ? "AI Platform" : ledger.messageUsage?.messageDetails?.name || null,
+        country: ledger.country || "Global",
+        rate: isAi ? "AI Usage" : ledger.rate,
+        metaCost: isAi ? null : ledger.meta_cost,
+        platformFee: isAi ? null : ledger.platform_fee,
+        markupPercent: ledger.markup_percent,
+        total: ledger.total_cost,
+        usdToInrRate: ledger.usd_to_inr_rate || DEFAULT_USD_TO_INR,
+        totalInr:
+          ledger.total_cost_inr ||
+          parseFloat(ledger.total_cost) *
+            (parseFloat(ledger.usd_to_inr_rate) || DEFAULT_USD_TO_INR),
+        status: isAi ? (ledger.aiTokenUsage?.billed ? "billed" : "unbilled") : ledger.messageUsage?.status || "Unknown",
+      };
+    });
 
     return {
       records,
@@ -951,7 +962,7 @@ export const getBillingCampaignStatsService = async (
           deliveryRate = `${rate}%`;
         }
       } catch (e) {
-        console.warn(
+        logger.warn(
           `[BILLING] Failed to calculate delivery rate for campaign ${campaignName}:`,
           e.message,
         );
@@ -1319,10 +1330,10 @@ export const addManualCreditService = async (
         });
       }
     } catch (err) {
-      console.error("[BILLING] Socket emit error:", err.message);
+      logger.error("[BILLING] Socket emit error:", err.message);
     }
 
-    console.log(
+    logger.info(
       `[BILLING] Admin ${admin_id} credited ₹${amountInRupees.toFixed(2)} to tenant ${tenant_id}. Reason: ${reason}. New balance: ₹${newBalance.toFixed(2)}`,
     );
 

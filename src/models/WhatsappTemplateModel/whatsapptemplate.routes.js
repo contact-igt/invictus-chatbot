@@ -8,18 +8,20 @@ import {
   createWhatsappTemplateController,
   getTemplateByIdController,
   getTemplateListController,
-  permanentDeleteTemplateController,
-  softDeleteTemplateController,
   submitWhatsappTemplateController,
   syncAllWhatsappTemplatesController,
   syncWhatsappTemplateStatusController,
   updateWhatsappTemplateController,
   resubmitWhatsappTemplateController,
   generateAiTemplateController,
-  getDeletedTemplateListController,
-  restoreTemplateController,
   uploadTemplateMediaController,
 } from "./whatsapptemplate.controller.js";
+import {
+  softDeleteTemplateController,
+  hardDeleteTemplateController,
+  restoreTemplateController,
+  getDeletedTemplatesController,
+} from "./whatsapptemplate.lifecycle.js";
 
 const router = express.Router();
 
@@ -36,7 +38,7 @@ router.get(
   "/whatsapp-templates/deleted/list",
   authenticate,
   authorize({ user_type: "tenant", roles: tenantRoles }),
-  getDeletedTemplateListController,
+  getDeletedTemplatesController,
 );
 
 router.post(
@@ -123,7 +125,7 @@ router.delete(
   "/whatsapp-template/:template_id/permanent",
   authenticate,
   authorize({ user_type: "tenant", roles: ["tenant_admin"] }),
-  permanentDeleteTemplateController,
+  hardDeleteTemplateController,
 );
 
 router.post(

@@ -47,18 +47,25 @@ const getFaqSourceCandidates = async (tenantId, transaction = null) => {
 };
 
 const createFaqMasterSource = async (tenantId, transaction = null) => {
-  await db.sequelize.query(
-    `INSERT INTO ${tableNames.KNOWLEDGESOURCE}
-       (tenant_id, title, type, raw_text, status, is_deleted, created_at, updated_at)
-     VALUES (?, ?, ?, '', 'active', false, NOW(), NOW())`,
-    { replacements: [tenantId, FAQ_MASTER_TITLE, FAQ_MASTER_TYPE], transaction },
-  );
+  try {
+    await db.sequelize.query(
+      `INSERT INTO ${tableNames.KNOWLEDGESOURCE}
+         (tenant_id, title, type, raw_text, status, is_deleted, created_at, updated_at)
+       VALUES (?, ?, ?, '', 'active', false, NOW(), NOW())`,
+      { replacements: [tenantId, FAQ_MASTER_TITLE, FAQ_MASTER_TYPE], transaction },
+    );
+  } catch (err) {
+    // ER_DUP_ENTRY (1062) — a concurrent request already created the row; fall through to SELECT
+    const isDupe = err.original?.errno === 1062 || err.parent?.errno === 1062 ||
+                   (err.message || "").includes("ER_DUP_ENTRY");
+    if (!isDupe) throw err;
+  }
 
   const [rows] = await db.sequelize.query(
     `SELECT *
      FROM ${tableNames.KNOWLEDGESOURCE}
-     WHERE tenant_id = ? AND type = ? AND is_deleted = false
-     ORDER BY id DESC
+     WHERE tenant_id = ? AND type = ?
+     ORDER BY id ASC
      LIMIT 1`,
     { replacements: [tenantId, FAQ_MASTER_TYPE], transaction },
   );
@@ -142,31 +149,21 @@ const mergeDuplicateFaqSources = async (
 /**
  * Returns the existing FAQ master source, or creates it if missing.
  * Safe to call on every publish — idempotent.
+ * The UNIQUE KEY uq_ks_tenant_type on (tenant_id, type) guarantees at most
+ * one row per tenant; createFaqMasterSource handles concurrent inserts via
+ * ER_DUP_ENTRY fallback, so no duplicate-merge logic is needed here.
  */
 export const ensureFaqMasterSource = async (tenantId) => {
   const transaction = await db.sequelize.transaction();
 
   try {
-    let candidates = await getFaqSourceCandidates(tenantId, transaction);
-    let canonical = candidates[0] || null;
+    let canonical = (await getFaqSourceCandidates(tenantId, transaction))[0] || null;
 
     if (!canonical) {
       canonical = await createFaqMasterSource(tenantId, transaction);
     }
 
     canonical = await normalizeFaqSourceRow(canonical, tenantId, transaction);
-
-    candidates = await getFaqSourceCandidates(tenantId, transaction);
-    const duplicateIds = candidates
-      .filter((row) => Number(row.id) !== Number(canonical.id))
-      .map((row) => Number(row.id));
-
-    await mergeDuplicateFaqSources(
-      tenantId,
-      canonical.id,
-      duplicateIds,
-      transaction,
-    );
 
     await transaction.commit();
     return canonical;
@@ -182,26 +179,13 @@ export const ensureFaqMasterSourceInTransaction = async (
 ) => {
   if (!transaction) return ensureFaqMasterSource(tenantId);
 
-  let candidates = await getFaqSourceCandidates(tenantId, transaction);
-  let canonical = candidates[0] || null;
+  let canonical = (await getFaqSourceCandidates(tenantId, transaction))[0] || null;
 
   if (!canonical) {
     canonical = await createFaqMasterSource(tenantId, transaction);
   }
 
   canonical = await normalizeFaqSourceRow(canonical, tenantId, transaction);
-
-  candidates = await getFaqSourceCandidates(tenantId, transaction);
-  const duplicateIds = candidates
-    .filter((row) => Number(row.id) !== Number(canonical.id))
-    .map((row) => Number(row.id));
-
-  await mergeDuplicateFaqSources(
-    tenantId,
-    canonical.id,
-    duplicateIds,
-    transaction,
-  );
 
   return canonical;
 };

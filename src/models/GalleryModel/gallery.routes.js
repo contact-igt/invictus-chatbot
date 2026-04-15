@@ -14,8 +14,13 @@ import {
   getMediaAssetController,
   deleteMediaAssetController,
   updateMediaTagsController,
-  restoreMediaAssetController,
+  getMediaStatsController,
 } from "./gallery.controller.js";
+import {
+  restoreMediaAssetController,
+  hardDeleteMediaAssetController,
+  getDeletedMediaAssetsController,
+} from "./gallery.lifecycle.js";
 
 const router = express.Router();
 const tenantRoles = ["tenant_admin", "doctor", "staff", "agent"];
@@ -34,6 +39,22 @@ router.get(
   authenticate,
   authorize({ user_type: "tenant", roles: tenantRoles }),
   listMediaAssetsController,
+);
+
+// Media stats — must be before /gallery/:asset_id so "stats" is not treated as an asset_id
+router.get(
+  "/gallery/stats",
+  authenticate,
+  authorize({ user_type: "tenant", roles: tenantRoles }),
+  getMediaStatsController,
+);
+
+// Deleted media assets (trash list)
+router.get(
+  "/gallery/deleted/list",
+  authenticate,
+  authorize({ user_type: "tenant", roles: tenantRoles }),
+  getDeletedMediaAssetsController,
 );
 
 // Get single media asset
@@ -60,12 +81,20 @@ router.patch(
   updateMediaTagsController,
 );
 
-// Restore soft-deleted media asset
+// Restore soft-deleted media asset (30-day window enforced)
 router.post(
   "/gallery/:asset_id/restore",
   authenticate,
   authorize({ user_type: "tenant", roles: tenantRoles }),
   restoreMediaAssetController,
+);
+
+// Permanently delete media asset + purge R2 file (admin only)
+router.delete(
+  "/gallery/:asset_id/permanent",
+  authenticate,
+  authorize({ user_type: "tenant", roles: ["tenant_admin"] }),
+  hardDeleteMediaAssetController,
 );
 
 // REST aliases (v1 contract friendly)

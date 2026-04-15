@@ -92,6 +92,12 @@ export const publishFaqController = async (req, res) => {
     if (err.message.includes("without a doctor answer")) {
       return res.status(400).json({ message: err.message });
     }
+    if (err.message === "FAQ_MASTER_DISABLED") {
+      return res.status(409).json({
+        message: "FAQ knowledge base is disabled. Re-enable it before publishing.",
+        master_source_disabled: true,
+      });
+    }
     return res.status(500).json({ message: err.message });
   }
 };
@@ -124,12 +130,20 @@ export const toggleFaqActiveController = async (req, res) => {
   const tenant_id = req.user.tenant_id;
   const { id } = req.params;
 
+  // Parse desired state from query param; if absent, service falls back to flip
+  const rawIsActive = req.query.is_active;
+  const desiredActive =
+    rawIsActive === "true"  ? true  :
+    rawIsActive === "false" ? false :
+    undefined;
+
   try {
-    const data = await toggleFaqActiveService(id, tenant_id);
+    const data = await toggleFaqActiveService(id, tenant_id, desiredActive);
     if (!data) {
       return res.status(404).json({ message: "Published FAQ not found" });
     }
-    return res.status(200).json({ message: "FAQ active status toggled", data });
+    const action = data.is_active ? "activated" : "deactivated";
+    return res.status(200).json({ message: `FAQ ${action} successfully`, data });
   } catch (err) {
     return res.status(500).json({ message: err.message });
   }

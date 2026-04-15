@@ -2,6 +2,7 @@ import db from "../../database/index.js";
 import { Op } from "sequelize";
 import { recordHealthEvent } from "./billingHealthMonitor.js";
 import { runFullWalletReconciliation } from "./walletReconciler.js";
+import { logger } from "../logger.js";
 
 /**
  * Run daily reconciliation:
@@ -144,21 +145,20 @@ export const runDailyReconciliation = async () => {
     );
 
     if (hasIssues) {
-      console.warn(
-        "[RECONCILER] Issues found:",
-        JSON.stringify({
+      logger.warn(
+        `[RECONCILER] Issues found: ${JSON.stringify({
           wallet_mismatches: report.wallet_mismatches.length,
           payment_mismatches: report.payment_mismatches.length,
           duplicates: report.duplicates.length,
-        }),
+        })}`,
       );
     } else {
-      console.log(
+      logger.info(
         "[RECONCILER] Daily reconciliation passed — no issues found.",
       );
     }
   } catch (err) {
-    console.error("[RECONCILER] Daily reconciliation failed:", err.message);
+    logger.error(`[RECONCILER] Daily reconciliation failed: ${err.message}`);
     await recordHealthEvent("reconciliation_mismatch", null, err.message, {
       stack: err.stack,
     });

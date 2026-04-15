@@ -22,8 +22,6 @@ import { classifyForFaq } from "../questionUnderstandingAgent.js";
  *   context.contact_id     (optional)
  */
 
-// How recently (in hours) the same question must have been asked to skip insert
-const DEDUPE_WINDOW_HOURS = 24;
 
 export const execute = async (tagPayload, context, cleanMessage) => {
   const tenantId = context?.tenant_id;
@@ -64,9 +62,8 @@ export const execute = async (tagPayload, context, cleanMessage) => {
        WHERE tenant_id = ?
          AND normalized_question = ?
          AND status = 'pending_review'
-         AND created_at > DATE_SUB(NOW(), INTERVAL ? HOUR)
        LIMIT 1`,
-      { replacements: [tenantId, normalizedQ, DEDUPE_WINDOW_HOURS] },
+      { replacements: [tenantId, normalizedQ] },
     );
 
     if (existing.length > 0) {

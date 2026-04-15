@@ -7,12 +7,52 @@ import db from "../../database/index.js";
 import { Op } from "sequelize";
 import { tableNames } from "../../database/tableName.js";
 import { uploadMediaToMeta } from "../../services/mediaUploadService.js";
-import { validateMediaFile, getFileTypeFromMimeType } from "../../utils/mediaValidation.js";
+import {
+  validateMediaFile,
+  getFileTypeFromMimeType,
+} from "../../utils/mediaValidation.js";
 import {
   uploadPreviewToStorage,
   deletePreviewFromStorage,
 } from "../../services/storageService.js";
 import { logger } from "../../utils/logger.js";
+
+/**
+ * Aggregate media stats for a tenant using a single SQL query.
+ * Much more efficient than fetching thousands of rows to count client-side.
+ * @param {string} tenantId
+ * @returns {Promise<Object>} { total, images, videos, documents, approved, pending, totalSize }
+ */
+export const getMediaStatsService = async (tenantId) => {
+  try {
+    const [rows] = await db.sequelize.query(
+      `SELECT
+         COUNT(*)                                                        AS total,
+         SUM(CASE WHEN file_type = 'image'    THEN 1 ELSE 0 END)        AS images,
+         SUM(CASE WHEN file_type = 'video'    THEN 1 ELSE 0 END)        AS videos,
+         SUM(CASE WHEN file_type = 'document' THEN 1 ELSE 0 END)        AS documents,
+         SUM(CASE WHEN is_approved = 1        THEN 1 ELSE 0 END)        AS approved,
+         SUM(CASE WHEN is_approved = 0        THEN 1 ELSE 0 END)        AS pending,
+         COALESCE(SUM(file_size), 0)                                     AS totalSize
+       FROM ${tableNames.MEDIA_ASSETS}
+       WHERE tenant_id = ? AND is_deleted = 0`,
+      { replacements: [tenantId] },
+    );
+    const row = rows[0] || {};
+    return {
+      total: Number(row.total || 0),
+      images: Number(row.images || 0),
+      videos: Number(row.videos || 0),
+      documents: Number(row.documents || 0),
+      approved: Number(row.approved || 0),
+      pending: Number(row.pending || 0),
+      totalSize: Number(row.totalSize || 0),
+    };
+  } catch (error) {
+    logger.error("Error in getMediaStatsService:", error);
+    throw error;
+  }
+};
 
 const normalizeUsageArray = (value) => {
   if (Array.isArray(value)) return value;
@@ -25,6 +65,17 @@ const normalizeUsageArray = (value) => {
     }
   }
   return [];
+};
+
+/**
+ * Allowlist of permitted sort columns.
+ * Keys are the values callers send; values are the actual DB column names.
+ * NEVER interpolate user input directly — always resolve through this map (BUG 12).
+ */
+const SORT_FIELD_ALLOWLIST = {
+  date: "created_at",
+  name: "file_name",
+  size: "file_size",
 };
 
 const buildAssetLookupWhere = (assetId, tenantId, includeDeleted = false) => {
@@ -43,7 +94,11 @@ const buildAssetLookupWhere = (assetId, tenantId, includeDeleted = false) => {
   return where;
 };
 
-const getActiveUsageIds = async (tenantId, templateIds = [], campaignIds = []) => {
+const getActiveUsageIds = async (
+  tenantId,
+  templateIds = [],
+  campaignIds = [],
+) => {
   const activeTemplateIds = [];
   const activeCampaignIds = [];
 
@@ -158,6 +213,7 @@ export const uploadMediaService = async (
       campaigns_used: [],
       uploaded_by: userId,
       is_deleted: false,
+      handle_expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
     });
 
     return mediaAsset;
@@ -174,7 +230,11 @@ export const uploadMediaService = async (
  * @param {Object} pagination - Pagination options
  * @returns {Promise<Object>} Paginated media assets
  */
-export const listMediaAssetsService = async (tenantId, filters = {}, pagination = {}) => {
+export const listMediaAssetsService = async (
+  tenantId,
+  filters = {},
+  pagination = {},
+) => {
   try {
     const {
       type,
@@ -183,20 +243,23 @@ export const listMediaAssetsService = async (tenantId, filters = {}, pagination 
       folder,
       approved_only,
       pending_only,
+      show_deleted,
+      sort_field,
+      sort_dir,
     } = filters;
 
-    const {
-      page = 1,
-      limit = 20,
-    } = pagination;
-    
+    const { page = 1, limit = 20 } = pagination;
 
     const offset = (page - 1) * limit;
+
+    // Resolve safe ORDER BY values via allowlist (BUG 10 + BUG 12 — never interpolate raw user input)
+    const orderColumn = SORT_FIELD_ALLOWLIST[sort_field] || "created_at";
+    const orderDir = sort_dir === "asc" ? "ASC" : "DESC";
 
     // Build where clause
     const whereClause = {
       tenant_id: tenantId,
-      is_deleted: false,
+      is_deleted: show_deleted === "true" || show_deleted === true,
     };
 
     // Filter by file type
@@ -231,7 +294,7 @@ export const listMediaAssetsService = async (tenantId, filters = {}, pagination 
       where: whereClause,
       limit: parseInt(limit),
       offset: parseInt(offset),
-      order: [["created_at", "DESC"]],
+      order: [[orderColumn, orderDir]],
     });
 
     return {
@@ -286,8 +349,12 @@ export const deleteMediaAssetService = async (assetId, tenantId) => {
       throw new Error("Media asset not found");
     }
 
-    const templateUsage = normalizeUsageArray(mediaAsset.templates_used).filter(Boolean);
-    const campaignUsage = normalizeUsageArray(mediaAsset.campaigns_used).filter(Boolean);
+    const templateUsage = normalizeUsageArray(mediaAsset.templates_used).filter(
+      Boolean,
+    );
+    const campaignUsage = normalizeUsageArray(mediaAsset.campaigns_used).filter(
+      Boolean,
+    );
 
     const { activeTemplateIds, activeCampaignIds } = await getActiveUsageIds(
       tenantId,
@@ -316,6 +383,7 @@ export const deleteMediaAssetService = async (assetId, tenantId) => {
     // preview_url and media_handle are preserved for potential restore
     // Set HARD_DELETE_STORAGE=true in .env to also purge from storage
     mediaAsset.is_deleted = true;
+    mediaAsset.is_active = false; // ADD THIS
     mediaAsset.deleted_at = new Date();
     await mediaAsset.save();
 
@@ -416,7 +484,9 @@ export const addTemplateUsageService = async (assetId, templateId) => {
     }
 
     // Add template ID if not already present
-    const existingTemplateUsage = normalizeUsageArray(mediaAsset.templates_used);
+    const existingTemplateUsage = normalizeUsageArray(
+      mediaAsset.templates_used,
+    );
     if (!existingTemplateUsage.includes(templateId)) {
       mediaAsset.templates_used = [...existingTemplateUsage, templateId];
       await mediaAsset.save();
@@ -486,7 +556,9 @@ export const addCampaignUsageService = async (assetId, campaignId) => {
     }
 
     // Add campaign ID if not already present
-    const existingCampaignUsage = normalizeUsageArray(mediaAsset.campaigns_used);
+    const existingCampaignUsage = normalizeUsageArray(
+      mediaAsset.campaigns_used,
+    );
     if (!existingCampaignUsage.includes(campaignId)) {
       mediaAsset.campaigns_used = [...existingCampaignUsage, campaignId];
       await mediaAsset.save();
@@ -498,5 +570,3 @@ export const addCampaignUsageService = async (assetId, campaignId) => {
     throw error;
   }
 };
-
-

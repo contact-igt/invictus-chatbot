@@ -4,7 +4,12 @@ import {
   getPaymentHistoryService,
   handleRazorpayWebhookService,
 } from "./payment.service.js";
+
 import { logger } from "../../utils/logger.js";
+import {
+  getSavedMethod,
+  removeSavedMethod,
+} from "../../services/savedPayment.service.js";
 
 export const createRazorpayOrderController = async (req, res) => {
   try {
@@ -82,25 +87,21 @@ export const getPaymentHistoryController = async (req, res) => {
   }
 };
 
-/**
- * Razorpay webhook handler — NO auth middleware.
- * Signature verification is done inside handleRazorpayWebhookService using
- * the raw request body.
- *
- * IMPORTANT: This route must receive the raw body (Buffer), not JSON-parsed.
- * The route is registered BEFORE express.json() is applied to it.
- */
 export const razorpayWebhookController = async (req, res) => {
   try {
     const signature = req.headers["x-razorpay-signature"];
     if (!signature) {
-      return res.status(400).json({ success: false, message: "Missing signature header" });
+      return res
+        .status(400)
+        .json({ success: false, message: "Missing signature header" });
     }
 
     // rawBody is populated by the express.raw() middleware applied only on this route
     const rawBody = req.rawBody;
     if (!rawBody) {
-      return res.status(400).json({ success: false, message: "Empty webhook body" });
+      return res
+        .status(400)
+        .json({ success: false, message: "Empty webhook body" });
     }
 
     const result = await handleRazorpayWebhookService(rawBody, signature);
@@ -116,6 +117,28 @@ export const razorpayWebhookController = async (req, res) => {
     }
     logger.error("[PAYMENT-WEBHOOK] Error:", error.message);
     // Return 500 so Razorpay retries
-    return res.status(500).json({ success: false, message: "Webhook processing failed" });
+    return res
+      .status(500)
+      .json({ success: false, message: "Webhook processing failed" });
+  }
+};
+
+export const getSavedPaymentMethod = async (req, res, next) => {
+  try {
+    const tenantId = req.user.tenant_id;
+    const method = await getSavedMethod(tenantId);
+    res.json({ success: true, method });
+  } catch (err) {
+    next(err);
+  }
+};
+
+export const removeSavedPaymentMethod = async (req, res, next) => {
+  try {
+    const tenantId = req.user.tenant_id;
+    await removeSavedMethod(tenantId);
+    res.json({ success: true });
+  } catch (err) {
+    next(err);
   }
 };

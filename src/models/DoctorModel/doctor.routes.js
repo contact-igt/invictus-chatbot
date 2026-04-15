@@ -4,11 +4,13 @@ import {
   getDoctorListController,
   getDoctorByIdController,
   updateDoctorController,
-  softDeleteDoctorController,
-  permanentDeleteDoctorController,
-  restoreDoctorController,
-  getDeletedDoctorListController,
 } from "./doctor.controller.js";
+import {
+  softDeleteDoctorController,
+  hardDeleteDoctorController,
+  restoreDoctorController,
+  getDeletedDoctorsController,
+} from "./doctor.lifecycle.js";
 import {
   authenticate,
   authorize,
@@ -40,7 +42,7 @@ Router.get(
   "/doctors/deleted/list",
   authenticate,
   authorize({ user_type: "tenant", roles: managerRoles }),
-  getDeletedDoctorListController,
+  getDeletedDoctorsController,
 );
 
 // Get doctor by ID
@@ -72,7 +74,7 @@ Router.delete(
   "/doctor/:doctor_id/permanent",
   authenticate,
   authorize({ user_type: "tenant", roles: ["tenant_admin"] }),
-  permanentDeleteDoctorController,
+  hardDeleteDoctorController,
 );
 
 // Restore

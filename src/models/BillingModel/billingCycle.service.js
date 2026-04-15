@@ -2,6 +2,25 @@ import db from "../../database/index.js";
 import { Op } from "sequelize";
 import { getIO } from "../../middlewares/socket/socket.js";
 import { recordHealthEvent } from "../../utils/billing/billingHealthMonitor.js";
+import { addGstOnTop } from "../../utils/gstCalculator.js";
+import { getActiveGSTRate } from "../../services/taxSettings.service.js";
+import { logger } from "../../utils/logger.js";
+
+function getTenantBillingSettings(aiSettings) {
+  if (!aiSettings) {
+    return {};
+  }
+
+  if (typeof aiSettings === "string") {
+    try {
+      return JSON.parse(aiSettings);
+    } catch {
+      return {};
+    }
+  }
+
+  return aiSettings;
+}
 
 /**
  * Initialize the first billing cycle for a tenant.
@@ -59,8 +78,8 @@ export const initBillingCycle = async (
       { where: { tenant_id }, transaction: t },
     );
 
-    console.log(
-      `[BILLING-CYCLE] Initialized cycle #1 for tenant ${tenant_id}: ${now.toISOString()} → ${endDate.toISOString()}`,
+    logger.info(
+      `[BILLING-CYCLE] Initialized cycle #${nextCycleNumber} for tenant ${tenant_id}: ${now.toISOString()} → ${endDate.toISOString()}`,
     );
     return cycle;
   };
@@ -95,7 +114,7 @@ export const getActiveBillingCycle = async (tenant_id) => {
         where: { tenant_id, status: "active" },
       });
     } catch (err) {
-      console.error(
+      logger.error(
         `[BILLING-CYCLE] On-the-fly cycle close failed for tenant ${tenant_id}:`,
         err.message,
       );
@@ -126,14 +145,14 @@ export const closeBillingCycle = async (
     });
 
     if (!cycle || cycle.status !== "active") {
-      console.log(
+      logger.info(
         `[BILLING-CYCLE] Cycle ${cycle_id} already closed or not found.`,
       );
       return null;
     }
 
     if (cycle.is_locked) {
-      console.log(`[BILLING-CYCLE] Cycle ${cycle_id} is locked, skipping.`);
+      logger.info(`[BILLING-CYCLE] Cycle ${cycle_id} is locked, skipping.`);
       return null;
     }
 
@@ -204,7 +223,7 @@ export const closeBillingCycle = async (
           t,
         );
       } else {
-        console.log(
+        logger.info(
           `[BILLING-CYCLE] Skipping invoice for zero-usage cycle #${cycle.cycle_number}, tenant ${tenant_id}`,
         );
       }
@@ -235,7 +254,7 @@ export const closeBillingCycle = async (
         { where: { tenant_id }, transaction: t },
       );
 
-      console.log(
+      logger.info(
         `[BILLING-CYCLE] Closed cycle #${cycle.cycle_number} for tenant ${tenant_id}: ₹${totalCost.toFixed(4)}. Next cycle: ${nextStart.toISOString()} → ${nextEnd.toISOString()}`,
       );
 
@@ -253,8 +272,39 @@ export const closeBillingCycle = async (
 };
 
 /**
+ * Generate a unique invoice number with collision retry.
+ * Format: INV-YYYYMMDD-XXXXXXX (7-char base-36 suffix gives ~78B combinations/day).
+ * Falls back to timestamp-based suffix after 5 failed attempts.
+ *
+ * @param {object|null} transaction - Sequelize transaction to use for existence check
+ * @returns {Promise<string>}
+ */
+async function generateUniqueInvoiceNumber(transaction = null) {
+  const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+  const opts = transaction ? { transaction } : {};
+
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const suffix = Math.random().toString(36).substring(2, 9).toUpperCase();
+    const candidate = `INV-${dateStr}-${suffix}`;
+    const exists = await db.MonthlyInvoices.findOne({
+      where: { invoice_number: candidate },
+      ...opts,
+    });
+    if (!exists) return candidate;
+    logger.warn(
+      `[BILLING-CYCLE] Invoice number collision on ${candidate}, retrying (attempt ${attempt + 1})`,
+    );
+  }
+
+  // Last resort: timestamp-based to guarantee uniqueness
+  const tsSuffix = Date.now().toString(36).toUpperCase();
+  return `INV-${dateStr}-${tsSuffix}`;
+}
+
+/**
  * Generate a monthly invoice for a completed billing cycle.
  * Idempotent — uses findOrCreate on (tenant_id, billing_cycle_id).
+ * Includes GST calculation for postpaid invoices.
  */
 export const generateMonthlyInvoice = async (
   tenant_id,
@@ -268,10 +318,33 @@ export const generateMonthlyInvoice = async (
   const dueDate = new Date(cycleEndDate);
   dueDate.setDate(dueDate.getDate() + 15);
 
-  // Generate invoice number
-  const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
-  const randomSuffix = Math.random().toString(36).substring(2, 7).toUpperCase();
-  const invoiceNumber = `INV-${dateStr}-${randomSuffix}`;
+  // Generate a collision-safe invoice number with up to 5 retries
+  const invoiceNumber = await generateUniqueInvoiceNumber(transaction);
+
+  // Fetch tenant state for GST calculation
+  const tenant = await db.Tenants.findOne({
+    where: { tenant_id },
+    attributes: ["state", "ai_settings"],
+    raw: true,
+  });
+  const tenantBillingSettings = getTenantBillingSettings(tenant?.ai_settings);
+  const tenantState = tenant?.state?.trim()?.toUpperCase?.() || "";
+  const tenantGstin = tenantBillingSettings.gstin || null;
+  const companyState =
+    process.env.COMPANY_STATE?.trim()?.toUpperCase?.() || "TN";
+
+  // For postpaid invoices: GST is exclusive — added on top of the usage cost.
+  // Fetch the currently active GST rate from the DB (60s cached) so rate changes
+  // propagate without a deploy. The rate is also stored on the invoice row.
+  const activeGstRate = await getActiveGSTRate();
+  const gstResult = addGstOnTop(totalCost, tenantState, companyState, activeGstRate);
+  const base_amount   = parseFloat(gstResult.base_amount);
+  const gstOnBase     = parseFloat(gstResult.gst_amount);
+  const total_amount  = parseFloat(gstResult.gross_amount);
+  const is_intra_state = gstResult.is_intra_state;
+  const cgst_amount   = parseFloat(gstResult.cgst_amount);
+  const sgst_amount   = parseFloat(gstResult.sgst_amount);
+  const igst_amount   = parseFloat(gstResult.igst_amount);
 
   const opts = transaction ? { transaction } : {};
 
@@ -281,14 +354,33 @@ export const generateMonthlyInvoice = async (
       tenant_id,
       billing_cycle_id: cycle_id,
       invoice_number: invoiceNumber,
-      amount: totalCost,
+      amount: total_amount, // Total including GST
+      total_message_cost_inr: totalMessageCost,
+      total_ai_cost_inr: totalAiCost,
+      base_amount: base_amount,
+      gst_amount: gstOnBase,
+      total_amount: total_amount,
+      cgst_amount: cgst_amount,
+      sgst_amount: sgst_amount,
+      igst_amount: igst_amount,
+      gst_rate: activeGstRate,  // snapshot — immutable after generation
+      tenant_state: tenantState,
+      company_state: companyState,
+      hsn_sac_code: process.env.HSN_SAC_CODE || "998314",
+      tenant_gstin: tenantGstin,
       due_date: dueDate,
       status: "unpaid",
       retry_count: 0,
       breakdown: {
         messages: totalMessageCost,
         ai: totalAiCost,
-        total: totalCost,
+        subtotal: totalCost,
+        gst: gstOnBase,
+        total: total_amount,
+        is_intra_state,
+        cgst: cgst_amount,
+        sgst: sgst_amount,
+        igst: igst_amount,
       },
     },
     ...opts,
@@ -300,16 +392,18 @@ export const generateMonthlyInvoice = async (
       const io = getIO();
       io.to(`tenant-${tenant_id}`).emit("invoice-generated", {
         invoice_number: invoice.invoice_number,
-        amount: totalCost,
+        base_amount: base_amount,
+        gst_amount: gstOnBase,
+        total_amount: total_amount,
         due_date: dueDate.toISOString(),
       });
     } catch (_) {}
 
-    console.log(
-      `[BILLING-CYCLE] Invoice ${invoice.invoice_number} generated for tenant ${tenant_id}: ₹${totalCost.toFixed(4)}`,
+    logger.info(
+      `[BILLING-CYCLE] Invoice ${invoice.invoice_number} generated for tenant ${tenant_id}: ₹${base_amount.toFixed(2)} + ₹${gstOnBase.toFixed(2)} GST = ₹${total_amount.toFixed(2)}`,
     );
   } else {
-    console.log(
+    logger.info(
       `[BILLING-CYCLE] Invoice already exists for tenant ${tenant_id}, cycle ${cycle_id}. Skipping.`,
     );
   }
@@ -462,9 +556,7 @@ export const runAutoRechargeCron = async () => {
     const walletsToRecharge = await db.Wallets.findAll({
       where: {
         auto_recharge_enabled: true,
-        [Op.and]: db.sequelize.literal(
-          "balance < auto_recharge_threshold",
-        ),
+        [Op.and]: db.sequelize.literal("balance < auto_recharge_threshold"),
       },
       raw: true,
     });
@@ -536,12 +628,12 @@ export const runAutoRechargeCron = async () => {
         } catch (_) {}
 
         stats.triggered++;
-        console.log(
+        logger.info(
           `[AUTO-RECHARGE-CRON] Triggered ₹${rechargeAmount} recharge for tenant ${tenant_id} (balance: ₹${parseFloat(balance).toFixed(2)})`,
         );
       } catch (err) {
         stats.errors++;
-        console.error(
+        logger.error(
           `[AUTO-RECHARGE-CRON] Error for tenant ${tenant_id}:`,
           err.message,
         );
@@ -562,12 +654,12 @@ export const runAutoRechargeCron = async () => {
     });
 
     if (stats.triggered > 0) {
-      console.log(
+      logger.info(
         `[AUTO-RECHARGE-CRON] Completed: ${stats.triggered}/${stats.checked} wallets triggered (${stats.errors} errors)`,
       );
     }
   } catch (error) {
-    console.error("[AUTO-RECHARGE-CRON] Failed:", error.message);
+    logger.error("[AUTO-RECHARGE-CRON] Failed:", error.message);
     if (lockId) {
       await releaseCronLock(lockId, "failed", { error_message: error.message });
     }
@@ -592,9 +684,8 @@ export const runInvoiceRetryCron = async () => {
     lockId = await acquireCronLock("invoice_retry_cron");
     if (!lockId) return;
 
-    const { MAX_INVOICE_RETRIES, RETRY_INTERVAL_HOURS } = await import(
-      "../../config/billing.config.js"
-    );
+    const { MAX_INVOICE_RETRIES, RETRY_INTERVAL_HOURS } =
+      await import("../../config/billing.config.js");
     const retryWindowMs = RETRY_INTERVAL_HOURS * 60 * 60 * 1000;
     const cutoff = new Date(Date.now() - retryWindowMs);
 
@@ -618,35 +709,38 @@ export const runInvoiceRetryCron = async () => {
         // Emit payment reminder to tenant
         try {
           const io = getIO();
-          io.to(`tenant-${invoice.tenant_id}`).emit("invoice-payment-reminder", {
-            invoice_number: invoice.invoice_number,
-            amount: parseFloat(invoice.amount),
-            due_date: invoice.due_date,
-            retry_count: invoice.retry_count + 1,
-            max_retries: MAX_INVOICE_RETRIES,
-            message: `Your invoice ${invoice.invoice_number} of ₹${parseFloat(invoice.amount).toFixed(2)} is overdue. Please pay to restore services.`,
-          });
+          io.to(`tenant-${invoice.tenant_id}`).emit(
+            "invoice-payment-reminder",
+            {
+              invoice_number: invoice.invoice_number,
+              amount: parseFloat(invoice.amount),
+              due_date: invoice.due_date,
+              retry_count: invoice.retry_count + 1,
+              max_retries: MAX_INVOICE_RETRIES,
+              message: `Your invoice ${invoice.invoice_number} of ₹${parseFloat(invoice.amount).toFixed(2)} is overdue. Please pay to restore services.`,
+            },
+          );
         } catch (_) {}
 
         retried++;
 
-        // On final retry, escalate to admin socket room
+        // On final retry, escalate to management room only (not all sockets — data leak)
         if (invoice.retry_count + 1 >= MAX_INVOICE_RETRIES) {
           try {
             const io = getIO();
-            io.emit("admin-invoice-escalation", {
+            io.to("management-room").emit("admin-invoice-escalation", {
               tenant_id: invoice.tenant_id,
               invoice_number: invoice.invoice_number,
               amount: parseFloat(invoice.amount),
               retry_count: invoice.retry_count + 1,
             });
           } catch (_) {}
-          console.warn(
+          logger.warn(
             `[INVOICE-RETRY-CRON] Max retries reached for invoice ${invoice.invoice_number}, tenant ${invoice.tenant_id}`,
           );
         }
       } catch (err) {
-        console.error(
+        logger.error(
           `[INVOICE-RETRY-CRON] Error retrying invoice ${invoice.id}:`,
           err.message,
         );
@@ -660,12 +754,12 @@ export const runInvoiceRetryCron = async () => {
     });
 
     if (retried > 0) {
-      console.log(
+      logger.info(
         `[INVOICE-RETRY-CRON] Completed: ${retried} invoices retried`,
       );
     }
   } catch (error) {
-    console.error("[INVOICE-RETRY-CRON] Failed:", error.message);
+    logger.error("[INVOICE-RETRY-CRON] Failed:", error.message);
     if (lockId) {
       await releaseCronLock(lockId, "failed", { error_message: error.message });
     }
@@ -719,18 +813,19 @@ const acquireCronLock = async (job_name) => {
   });
 
   if (active) {
-    console.log(
+    logger.info(
       `[BILLING-CRON] Lock held for ${job_name} (id: ${active.id}). Skipping.`,
     );
     return null;
   }
 
-  // Acquire lock atomically using findOrCreate to prevent TOCTOU race
+  // Acquire lock atomically using findOrCreate.
+  // WHERE uses only job_name + status so two concurrent nodes with different
+  // start times cannot both "win" the lock (the time range caused that bug).
   const [lock, created] = await db.CronExecutionLog.findOrCreate({
     where: {
       job_name,
       status: "running",
-      started_at: { [Op.gte]: oneHourAgo },
     },
     defaults: {
       job_name,
@@ -740,7 +835,7 @@ const acquireCronLock = async (job_name) => {
   });
 
   if (!created) {
-    console.log(
+    logger.info(
       `[BILLING-CRON] Lock race lost for ${job_name} (id: ${lock.id}). Skipping.`,
     );
     return null;
@@ -800,7 +895,7 @@ export const runBillingCycleCron = async () => {
           if (result.invoice) stats.invoices_generated++;
         }
       } catch (err) {
-        console.error(
+        logger.error(
           `[BILLING-CRON] Error closing cycle ${cycle.id}:`,
           err.message,
         );
@@ -828,14 +923,15 @@ export const runBillingCycleCron = async () => {
     );
     stats.overdue_marked = overdueCount;
 
-    // Emit overdue alerts only for newly marked invoices
+    // Emit overdue alerts only for newly marked invoices (capped at 100 to prevent OOM)
     if (overdueCount > 0) {
       const newlyOverdueInvoices = await db.MonthlyInvoices.findAll({
         where: {
           status: "overdue",
-          updatedAt: { [Op.gte]: new Date(now.getTime() - 60000) }, // Updated within the last minute
+          updatedAt: { [Op.gte]: new Date(now.getTime() - 60000) },
         },
         attributes: ["tenant_id", "invoice_number", "amount", "due_date"],
+        limit: 100,
         raw: true,
       });
 
@@ -857,11 +953,11 @@ export const runBillingCycleCron = async () => {
 
     await releaseCronLock(lockId, "completed", stats);
 
-    console.log(
+    logger.info(
       `[BILLING-CRON] Completed: ${stats.cycles_closed} cycles closed, ${stats.invoices_generated} invoices generated, ${stats.overdue_marked} marked overdue.`,
     );
   } catch (error) {
-    console.error("[BILLING-CRON] Failed:", error.message);
+    logger.error("[BILLING-CRON] Failed:", error.message);
     if (lockId) {
       await releaseCronLock(lockId, "failed", { error_message: error.message });
     }
@@ -872,7 +968,7 @@ export const runBillingCycleCron = async () => {
     // One automatic retry after 5 minutes
     setTimeout(
       () => {
-        console.log("[BILLING-CRON] Retrying after failure...");
+        logger.info("[BILLING-CRON] Retrying after failure...");
         runBillingCycleCron();
       },
       5 * 60 * 1000,

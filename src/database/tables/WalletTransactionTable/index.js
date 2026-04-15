@@ -24,6 +24,32 @@ export const WalletTransactionTable = (sequelize, Sequelize) => {
       amount: {
         type: Sequelize.DECIMAL(15, 4),
         allowNull: false,
+        comment: "Wallet credit/debit amount (base_amount for recharges, cost for deductions)",
+      },
+
+      gross_amount: {
+        type: Sequelize.DECIMAL(15, 4),
+        allowNull: true,
+        comment: "Total amount the tenant paid incl. GST (only set for recharge credits)",
+      },
+
+      base_amount: {
+        type: Sequelize.DECIMAL(15, 4),
+        allowNull: true,
+        comment: "Taxable value credited to wallet (gross / 1.18) — same as amount for credits",
+      },
+
+      gst_amount: {
+        type: Sequelize.DECIMAL(15, 4),
+        allowNull: true,
+        comment: "GST component (gross - base) — only set for recharge credits",
+      },
+
+      gst_rate: {
+        type: Sequelize.DECIMAL(5, 2),
+        allowNull: true,
+        defaultValue: 18.00,
+        comment: "GST rate applied (18.00 for India)",
       },
 
       reference_id: {

@@ -19,8 +19,8 @@ export const AdminAuditLogTable = (sequelize, Sequelize) => {
 
       tenant_id: {
         type: Sequelize.STRING,
-        allowNull: false,
-        comment: "Target tenant",
+        allowNull: true,
+        comment: "Target tenant, or null for global admin actions",
       },
 
       action_type: {
@@ -33,6 +33,9 @@ export const AdminAuditLogTable = (sequelize, Sequelize) => {
           "currency_rate_update",
           "tenant_limit_change",
           "credit_limit_change",
+          "gst_rate_change",
+          "gst_rate_deactivate",
+          "gst_rate_delete",
         ),
         allowNull: false,
       },

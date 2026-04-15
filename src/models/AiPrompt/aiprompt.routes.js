@@ -1,17 +1,19 @@
 import express from "express";
 import {
-  deleteAiPrompt,
-  permanentDeleteAiPrompt,
   getActivePromptController,
   getAiPromptById,
   listAiPrompt,
   updateAiPrompt,
   updatePromptActive,
   uploadAiPrompt,
-  getDeletedAiPromptListController,
-  restoreAiPromptController,
   generateAiCompletionController,
 } from "./aiprompt.controller.js";
+import {
+  softDeleteAiPromptController,
+  hardDeleteAiPromptController,
+  restoreAiPromptController,
+  getDeletedAiPromptsController,
+} from "./aiprompt.lifecycle.js";
 import {
   authenticate,
   authorize,
@@ -32,7 +34,7 @@ router.post("/prompt", authenticate, uploadAiPrompt);
 router.get(
   "/prompts/deleted/list",
   authenticate,
-  getDeletedAiPromptListController,
+  getDeletedAiPromptsController,
 );
 router.get("/prompts", authenticate, listAiPrompt);
 router.get("/prompt/:id", authenticate, getAiPromptById);
@@ -55,12 +57,12 @@ router.post(
   authorize({ user_type: "tenant", roles: ["tenant_admin"] }),
   restoreAiPromptController,
 );
-router.delete("/prompt/:id/soft", authenticate, deleteAiPrompt);
+router.delete("/prompt/:id/soft", authenticate, softDeleteAiPromptController);
 router.delete(
   "/prompt/:id/permanent",
   authenticate,
   authorize({ user_type: "tenant", roles: ["tenant_admin"] }),
-  permanentDeleteAiPrompt,
+  hardDeleteAiPromptController,
 );
 
 export default router;

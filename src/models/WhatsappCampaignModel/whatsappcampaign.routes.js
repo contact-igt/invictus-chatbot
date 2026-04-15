@@ -9,16 +9,18 @@ import {
   getCampaignListController,
   getCampaignByIdController,
   triggerCampaignExecutionController,
-  softDeleteCampaignController,
-  permanentDeleteCampaignController,
-  getDeletedCampaignListController,
-  restoreCampaignController,
   estimateCampaignCostController,
   updateCampaignStatusController,
   campaignEventWebhookController,
   getCampaignStatsController,
   uploadCampaignMediaController,
 } from "./whatsappcampaign.controller.js";
+import {
+  softDeleteCampaignController,
+  hardDeleteCampaignController,
+  restoreCampaignController,
+  getDeletedCampaignsController,
+} from "./whatsappcampaign.lifecycle.js";
 
 const router = express.Router();
 
@@ -63,7 +65,7 @@ router.get(
   "/whatsapp-campaign/deleted/list",
   authenticate,
   authorize({ user_type: "tenant", roles: tenantRoles }),
-  getDeletedCampaignListController,
+  getDeletedCampaignsController,
 );
 
 router.get(
@@ -128,7 +130,7 @@ router.delete(
   "/whatsapp-campaign/:campaign_id/permanent",
   authenticate,
   authorize({ user_type: "tenant", roles: ["tenant_admin"] }),
-  permanentDeleteCampaignController,
+  hardDeleteCampaignController,
 );
 
 // REST aliases (v1 contract friendly)

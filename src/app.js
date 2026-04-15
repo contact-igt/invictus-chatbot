@@ -37,12 +37,15 @@ import {
   runAutoRechargeCron,
   runInvoiceRetryCron,
 } from "./models/BillingModel/billingCycle.service.js";
+import FaqRouter from "./models/Faq/faq.routes.js";
 import { checkHealthAlerts } from "./utils/billing/billingHealthMonitor.js";
 import { runDailyReconciliation } from "./utils/billing/paymentReconciler.js";
 import { initBillingQueue } from "./utils/billing/billingQueue.js";
 import { validateRazorpayConfig } from "./models/PaymentModel/payment.service.js";
 import { logger } from "./utils/logger.js";
 import cron from "node-cron";
+import { tableNames } from "./database/tableName.js";
+import { runHardDeleteCron } from "./utils/lifecycle/hardDeleteCron.js";
 
 dns.setDefaultResultOrder("ipv4first");
 
@@ -160,6 +163,29 @@ cron.schedule("0 2 * * *", () => {
   logger.debug("[CRON] Running daily reconciliation...");
   runDailyReconciliation();
 }); // Daily at 02:00 UTC
+
+// Master lifecycle hard-delete cron — runs at 04:00 UTC daily
+// Processes ALL Tier 1 tables (campaigns, templates, knowledge, contacts, doctors, etc.)
+cron.schedule("0 4 * * *", async () => {
+  await runHardDeleteCron();
+}); // Daily at 04:00 UTC
+
+// FAQ: purge hard-deleted knowledge chunks older than 30 days
+cron.schedule("0 3 * * *", async () => {
+  try {
+    const [, meta] = await db.sequelize.query(
+      `DELETE FROM ${tableNames.KNOWLEDGECHUNKS}
+       WHERE is_deleted = true
+         AND deleted_at < DATE_SUB(NOW(), INTERVAL 30 DAY)`,
+    );
+    const removed = meta?.affectedRows ?? 0;
+    if (removed > 0) {
+      logger.info(`[CRON] Purged ${removed} soft-deleted knowledge chunk(s)`);
+    }
+  } catch (err) {
+    logger.error("[CRON] knowledge-chunk cleanup error:", err.message);
+  }
+}); // Daily at 03:00 UTC
 
 // Initialize billing queue (optional — requires Redis)
 initBillingQueue();

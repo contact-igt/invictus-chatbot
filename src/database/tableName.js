@@ -48,4 +48,6 @@ export const tableNames = {
   CRON_EXECUTION_LOG: "cron_execution_log",
   FAQ_REVIEWS: "faq_reviews",
   FAQ_KNOWLEDGE_SOURCE: "faq_knowledge_source",
+  SAVE_PAYMENT_METHOD: "saved_payment_methods",
+  TAX_SETTINGS: "tax_settings",
 };

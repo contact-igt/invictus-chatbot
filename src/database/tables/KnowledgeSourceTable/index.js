@@ -70,6 +70,11 @@ export const KnowledgeSourcesTable = (sequelize, Sequelize) => {
       underscored: true,
       indexes: [
         {
+          name: "uq_ks_tenant_type",
+          unique: true,
+          fields: ["tenant_id", "type"],
+        },
+        {
           name: "idx_ks_status",
           fields: ["tenant_id", "status", "is_deleted"],
         },

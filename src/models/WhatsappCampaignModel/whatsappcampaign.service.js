@@ -41,8 +41,8 @@ export const createCampaignService = async (tenant_id, data, created_by) => {
       header_file_name,
       location_params,
       card_media_urls,
-      media_asset_id,  // Gallery asset ID (optional)
-      media_handle,    // Meta media handle from gallery (optional)
+      media_asset_id, // Gallery asset ID (optional)
+      media_handle, // Meta media handle from gallery (optional)
     } = data;
     const scheduledAtUtc =
       campaign_type === "scheduled" && scheduled_at
@@ -69,7 +69,34 @@ export const createCampaignService = async (tenant_id, data, created_by) => {
       throw new Error("Template not found");
     }
     if (String(template.status || "").toLowerCase() !== "approved") {
-      throw new Error("Only approved templates can be used to create campaigns");
+      throw new Error(
+        "Only approved templates can be used to create campaigns",
+      );
+    }
+
+    // Block campaign send if media is soft-deleted or handle expired
+    if (media_asset_id) {
+      const mediaAsset = await db.MediaAsset.findOne({
+        where: { media_asset_id, tenant_id },
+      });
+      if (!mediaAsset) {
+        throw new Error("The media attached to this template does not exist.");
+      }
+      if (mediaAsset.is_deleted) {
+        const err = new Error(
+          "The media attached to this template has been deleted. Please update the template with active media before sending.",
+        );
+        err.error_code = "MEDIA_DELETED";
+        throw err;
+      }
+      if (
+        mediaAsset.handle_expires_at &&
+        new Date(mediaAsset.handle_expires_at) < new Date()
+      ) {
+        throw new Error(
+          "Media handle has expired. Please re-upload the file and update the template.",
+        );
+      }
     }
 
     // 1. Generate Campaign ID
@@ -251,7 +278,10 @@ export const createCampaignService = async (tenant_id, data, created_by) => {
     // 5. Track gallery asset usage (fire and forget, after commit)
     if (media_asset_id) {
       addCampaignUsageService(media_asset_id, campaign_id).catch((err) =>
-        console.error("[CAMPAIGN-CREATE] Failed to log gallery asset usage:", err.message)
+        console.error(
+          "[CAMPAIGN-CREATE] Failed to log gallery asset usage:",
+          err.message,
+        ),
       );
     }
 
@@ -627,11 +657,8 @@ export const executeCampaignBatchService = async (
         if (headerComponent) {
           const hFormat = headerComponent.header_format?.toUpperCase();
           const mediaHandle = campaign.media_handle;
-          const mediaId =
-            mediaHandle && /^[0-9]+$/.test(String(mediaHandle))
-              ? String(mediaHandle)
-              : null;
-          
+          const mediaId = mediaHandle ? String(mediaHandle) : null;
+
           if (
             ["IMAGE", "VIDEO", "DOCUMENT"].includes(hFormat) &&
             (mediaHandle || campaignHeaderMediaUrl)
@@ -647,13 +674,6 @@ export const executeCampaignBatchService = async (
               );
             }
 
-            // If media_handle exists but is not a valid Meta media ID, use link flow.
-            if (mediaHandle && !mediaId && campaignHeaderMediaUrl) {
-              console.warn(
-                `[CAMPAIGN-SEND] media_handle is not a valid Meta media ID for ${campaign_id}. Falling back to link.`,
-              );
-            }
-             
             if (hFormat === "DOCUMENT") {
               mediaObj.filename = campaign.header_file_name || "document.pdf";
             }
@@ -765,13 +785,20 @@ export const executeCampaignBatchService = async (
         } catch (sendErr) {
           const errMsg = String(sendErr?.message || "");
           const hasInvalidMediaId =
-            errMsg.includes("is not a valid whatsapp business account media attachment ID") ||
-            errMsg.includes("template['components'][0]['parameters'][0]['image']['id']");
+            errMsg.includes(
+              "is not a valid whatsapp business account media attachment ID",
+            ) ||
+            errMsg.includes(
+              "template['components'][0]['parameters'][0]['image']['id']",
+            );
 
           // Auto-retry once with LINK if Meta rejects the media ID and we have a preview URL.
           if (hasInvalidMediaId && campaignHeaderMediaUrl) {
             const retryComponents = components.map((component) => {
-              if (component?.type !== "header" || !Array.isArray(component.parameters)) {
+              if (
+                component?.type !== "header" ||
+                !Array.isArray(component.parameters)
+              ) {
                 return component;
               }
               const nextParams = component.parameters.map((param) => {
@@ -941,7 +968,8 @@ export const executeCampaignBatchService = async (
         );
         const currentRetryCount = Number(recipient.retry_count || 0);
         const nextRetryCount = currentRetryCount + 1;
-        const backoffMinutes = nextRetryCount === 1 ? 5 : nextRetryCount === 2 ? 15 : 45;
+        const backoffMinutes =
+          nextRetryCount === 1 ? 5 : nextRetryCount === 2 ? 15 : 45;
         const nextRetryAt = new Date(Date.now() + backoffMinutes * 60 * 1000);
 
         await recipient.update({
@@ -1169,7 +1197,11 @@ const toTransitionLabel = (status) => {
   return status;
 };
 
-export const updateCampaignStatusService = async (campaign_id, tenant_id, nextStatusRaw) => {
+export const updateCampaignStatusService = async (
+  campaign_id,
+  tenant_id,
+  nextStatusRaw,
+) => {
   const campaign = await db.WhatsappCampaigns.findOne({
     where: { campaign_id, tenant_id, is_deleted: false },
   });
@@ -1204,7 +1236,9 @@ export const updateCampaignStatusService = async (campaign_id, tenant_id, nextSt
 export const recordCampaignEventService = async (payload = {}) => {
   const campaign_id = payload.campaign_id || payload.campaignId;
   const recipient_id = payload.recipient_id || payload.recipientId;
-  const event_type = String(payload.event_type || payload.eventType || "").toLowerCase();
+  const event_type = String(
+    payload.event_type || payload.eventType || "",
+  ).toLowerCase();
   const meta_message_id = payload.meta_message_id || payload.metaMessageId;
 
   if (!campaign_id || !["open", "click"].includes(event_type)) {
@@ -1253,7 +1287,9 @@ export const getCampaignStatsService = async (campaign_id, tenant_id) => {
     where: {
       campaign_id,
       is_deleted: false,
-      status: { [db.Sequelize.Op.in]: ["sent", "delivered", "read", "replied"] },
+      status: {
+        [db.Sequelize.Op.in]: ["sent", "delivered", "read", "replied"],
+      },
     },
   });
 
@@ -1283,7 +1319,9 @@ export const getCampaignStatsService = async (campaign_id, tenant_id) => {
 
   const safeDenominator = total_sent || 1;
   const open_rate = Number(((total_opened / safeDenominator) * 100).toFixed(2));
-  const click_rate = Number(((total_clicked / safeDenominator) * 100).toFixed(2));
+  const click_rate = Number(
+    ((total_clicked / safeDenominator) * 100).toFixed(2),
+  );
 
   return {
     total_sent,

@@ -509,6 +509,20 @@ export const defineAssociations = (db) => {
     constraints: false,
   });
 
+  // AiTokenUsage → BillingLedger (One-to-One)
+  db.AiTokenUsage.hasOne(db.BillingLedger, {
+    foreignKey: "ai_token_usage_id",
+    sourceKey: "id",
+    as: "billingLedger",
+    constraints: false,
+  });
+  db.BillingLedger.belongsTo(db.AiTokenUsage, {
+    foreignKey: "ai_token_usage_id",
+    targetKey: "id",
+    as: "aiTokenUsage",
+    constraints: false,
+  });
+
   // ========================================
   // WALLET MODULE RELATIONSHIPS
   // ========================================

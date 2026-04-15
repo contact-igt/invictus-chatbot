@@ -21,6 +21,7 @@ import {
   getUnresolvedEvents,
 } from "../../utils/billing/billingHealthMonitor.js";
 import db from "../../database/index.js";
+import { logger } from "../../utils/logger.js";
 
 // ─── Invoice Controllers ──────────────────────────────────
 
@@ -45,7 +46,7 @@ export const getInvoicesController = async (req, res) => {
     );
     res.json({ success: true, data: result });
   } catch (error) {
-    console.error("[INVOICE] getInvoices error:", error.message);
+    logger.error("[INVOICE] getInvoices error:", error.message);
     res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -69,7 +70,7 @@ export const getInvoiceDetailController = async (req, res) => {
         : await getInvoiceDetailService(tenant_id, parseInt(id));
     res.json({ success: true, data: result });
   } catch (error) {
-    console.error("[INVOICE] getInvoiceDetail error:", error.message);
+    logger.error("[INVOICE] getInvoiceDetail error:", error.message);
     res.status(error.message === "Invoice not found" ? 404 : 500).json({
       success: false,
       message: error.message,
@@ -90,7 +91,7 @@ export const payInvoiceController = async (req, res) => {
     const result = await payInvoiceService(tenant_id, parseInt(id), req.body);
     res.json({ success: true, ...result });
   } catch (error) {
-    console.error("[INVOICE] payInvoice error:", error.message);
+    logger.error("[INVOICE] payInvoice error:", error.message);
 
     // Record failure for retry tracking
     if (req.params.id && req.user?.tenant_id) {
@@ -123,7 +124,7 @@ export const getBillingModeController = async (req, res) => {
     const result = await getBillingModeService(tenant_id);
     res.json({ success: true, data: result });
   } catch (error) {
-    console.error("[BILLING] getBillingMode error:", error.message);
+    logger.error("[BILLING] getBillingMode error:", error.message);
     res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -142,7 +143,7 @@ export const adminForceUnlockController = async (req, res) => {
     const result = await forceUnlockAccess(admin_id, tenant_id, reason);
     res.json({ success: true, ...result });
   } catch (error) {
-    console.error("[ADMIN-BILLING] forceUnlock error:", error.message);
+    logger.error("[ADMIN-BILLING] forceUnlock error:", error.message);
     res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -165,7 +166,7 @@ export const adminManualCreditController = async (req, res) => {
     );
     res.json({ success: true, ...result });
   } catch (error) {
-    console.error("[ADMIN-BILLING] manualCredit error:", error.message);
+    logger.error("[ADMIN-BILLING] manualCredit error:", error.message);
     res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -187,7 +188,7 @@ export const adminInvoiceCloseController = async (req, res) => {
     );
     res.json({ success: true, ...result });
   } catch (error) {
-    console.error("[ADMIN-BILLING] invoiceClose error:", error.message);
+    logger.error("[ADMIN-BILLING] invoiceClose error:", error.message);
     res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -210,7 +211,7 @@ export const adminChangeBillingModeController = async (req, res) => {
     );
     res.json({ success: true, ...result });
   } catch (error) {
-    console.error("[ADMIN-BILLING] changeBillingMode error:", error.message);
+    logger.error("[ADMIN-BILLING] changeBillingMode error:", error.message);
     res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -227,7 +228,7 @@ export const adminUpdateUsageLimitsController = async (req, res) => {
     const result = await updateUsageLimits(admin_id, tenant_id, limits);
     res.json({ success: true, ...result });
   } catch (error) {
-    console.error("[ADMIN-BILLING] updateUsageLimits error:", error.message);
+    logger.error("[ADMIN-BILLING] updateUsageLimits error:", error.message);
     res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -242,7 +243,7 @@ export const adminGetAuditLogController = async (req, res) => {
     );
     res.json({ success: true, ...result });
   } catch (error) {
-    console.error("[ADMIN-BILLING] getAuditLog error:", error.message);
+    logger.error("[ADMIN-BILLING] getAuditLog error:", error.message);
     res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -252,7 +253,7 @@ export const adminGetHealthSummaryController = async (req, res) => {
     const result = await getHealthSummary();
     res.json({ success: true, ...result });
   } catch (error) {
-    console.error("[ADMIN-BILLING] getHealthSummary error:", error.message);
+    logger.error("[ADMIN-BILLING] getHealthSummary error:", error.message);
     res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -312,7 +313,7 @@ export const adminGetTenantsController = async (req, res) => {
 
     res.json({ success: true, tenants: result });
   } catch (error) {
-    console.error("[ADMIN-BILLING] getTenants error:", error.message);
+    logger.error("[ADMIN-BILLING] getTenants error:", error.message);
     res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -330,7 +331,7 @@ export const adminResolveHealthEventController = async (req, res) => {
     await resolveHealthEvent(parseInt(id));
     res.json({ success: true, message: "Event resolved" });
   } catch (error) {
-    console.error("[ADMIN-BILLING] resolveHealthEvent error:", error.message);
+    logger.error("[ADMIN-BILLING] resolveHealthEvent error:", error.message);
     res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -411,7 +412,7 @@ export const adminGetTenantOverviewController = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("[ADMIN-BILLING] getTenantOverview error:", error.message);
+    logger.error("[ADMIN-BILLING] getTenantOverview error:", error.message);
     res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -423,7 +424,7 @@ export const adminGetUnresolvedEventsController = async (req, res) => {
     const events = await getUnresolvedEvents(parseInt(req.query.limit) || 50);
     res.json({ success: true, events });
   } catch (error) {
-    console.error("[ADMIN-BILLING] getUnresolvedEvents error:", error.message);
+    logger.error("[ADMIN-BILLING] getUnresolvedEvents error:", error.message);
     res.status(500).json({ success: false, message: error.message });
   }
 };

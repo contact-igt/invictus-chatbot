@@ -4,12 +4,14 @@ import {
     getAllSpecializationsController,
     getSpecializationByIdController,
     updateSpecializationController,
-    deleteSpecializationController,
     toggleActiveStatusController,
-    getDeletedSpecializationListController,
-    restoreSpecializationController,
-    permanentDeleteSpecializationController,
 } from "./specialization.controller.js";
+import {
+    softDeleteSpecializationController,
+    hardDeleteSpecializationController,
+    restoreSpecializationController,
+    getDeletedSpecializationsController,
+} from "./specialization.lifecycle.js";
 import { authenticate, authorize } from "../../middlewares/auth/authMiddlewares.js";
 
 const Router = express.Router();
@@ -30,7 +32,7 @@ Router.get(
     "/specializations/deleted",
     authenticate,
     authorize({ user_type: "tenant", roles: managerRoles }),
-    getDeletedSpecializationListController,
+    getDeletedSpecializationsController,
 );
 
 // Restore specialization (admin only)
@@ -46,7 +48,7 @@ Router.delete(
     "/specialization/:id/permanent",
     authenticate,
     authorize({ user_type: "tenant", roles: ["tenant_admin"] }),
-    permanentDeleteSpecializationController,
+    hardDeleteSpecializationController,
 );
 
 // Get specialization by ID
@@ -81,12 +83,12 @@ Router.patch(
     toggleActiveStatusController,
 );
 
-// Delete specialization (admin only)
+// Delete specialization (soft — admin only)
 Router.delete(
     "/specialization/:id",
     authenticate,
     authorize({ user_type: "tenant", roles: ["tenant_admin"] }),
-    deleteSpecializationController,
+    softDeleteSpecializationController,
 );
 
 export default Router;

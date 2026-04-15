@@ -3,6 +3,11 @@ import db from "../../database/index.js";
 import { getIO } from "../../middlewares/socket/socket.js";
 import crypto from "crypto";
 import { logger } from "../../utils/logger.js";
+import {
+  calculateGST,
+  getWalletCreditAmount,
+} from "../../utils/gstCalculator.js";
+import { getActiveGSTRate } from "../../services/taxSettings.service.js";
 
 const razorpay = new Razorpay({
   key_id: process.env.RAZORPAY_KEY_ID,
@@ -138,7 +143,10 @@ export const verifyRazorpayPaymentService = async (tenant_id, paymentData) => {
         `[PAYMENT] No pending record for order ${razorpay_order_id} — used Razorpay API amount: ₹${amountInRupees}`,
       );
     } catch (fetchErr) {
-      logger.error("[PAYMENT] Could not fetch order from Razorpay:", fetchErr.message);
+      logger.error(
+        "[PAYMENT] Could not fetch order from Razorpay:",
+        fetchErr.message,
+      );
       throw new Error("Payment order not found. Please contact support.");
     }
   }
@@ -147,6 +155,22 @@ export const verifyRazorpayPaymentService = async (tenant_id, paymentData) => {
   const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
   const randomSuffix = Math.random().toString(36).substring(2, 7).toUpperCase();
   const invoiceNumber = `INV-${dateStr}-${randomSuffix}`;
+
+  // Calculate GST: tenant pays gross amount, wallet gets base amount only
+  const tenant = await db.Tenants.findOne({
+    where: { tenant_id },
+    attributes: ["state"],
+    raw: true,
+  });
+  const tenantState = tenant?.state?.trim()?.toUpperCase?.() || "";
+  const companyState =
+    process.env.COMPANY_STATE?.trim()?.toUpperCase?.() || "TN";
+
+  const activeGstRate = await getActiveGSTRate();
+  const gstResult = calculateGST(amountInRupees, tenantState, companyState, activeGstRate);
+  const walletCreditAmount = parseFloat(gstResult.base_amount); // Only base amount credited to wallet
+  const grossAmount = parseFloat(gstResult.gross_amount);
+  const gstAmount = parseFloat(gstResult.gst_amount);
 
   await db.sequelize.transaction(async (t) => {
     // Check for duplicate payment INSIDE transaction (race-safe)
@@ -162,7 +186,7 @@ export const verifyRazorpayPaymentService = async (tenant_id, paymentData) => {
       return;
     }
 
-    // Credit wallet with row-level lock
+    // Credit wallet with row-level lock — ONLY base_amount (after GST)
     let [wallet] = await db.Wallets.findOrCreate({
       where: { tenant_id },
       defaults: { tenant_id, balance: 0, currency: "INR" },
@@ -171,62 +195,65 @@ export const verifyRazorpayPaymentService = async (tenant_id, paymentData) => {
 
     // NaN protection: ensure balance is a valid number
     const currentBalance = parseFloat(wallet.balance) || 0;
-    const newBalance = currentBalance + amountInRupees;
+    const newBalance = currentBalance + walletCreditAmount; // Credit base_amount only
     await wallet.update({ balance: newBalance }, { transaction: t });
 
-    // Save to WalletTransactions (audit trail)
+    // Save to WalletTransactions (audit trail) with GST breakdown
     await db.WalletTransactions.create(
       {
         tenant_id,
         type: "credit",
-        amount: amountInRupees,
+        amount: walletCreditAmount, // base_amount credited
+        gross_amount: grossAmount,
+        base_amount: walletCreditAmount,
+        gst_amount: gstAmount,
+        gst_rate: activeGstRate,
         reference_id: razorpay_payment_id,
-        description: "Wallet Recharge (Online)",
+        description: `Wallet Recharge (Online) - ₹${grossAmount} paid, ₹${walletCreditAmount} credited after ${activeGstRate}% GST`,
         balance_after: newBalance,
       },
       { transaction: t },
     );
 
-    // Update or create PaymentHistory record (pending → success)
+    // Update or create PaymentHistory record (pending → success) with GST breakdown
+    const paymentUpdateData = {
+      razorpay_payment_id,
+      status: "success",
+      description: "Wallet Recharge",
+      balance_before: currentBalance,
+      balance_after: newBalance,
+      invoice_number: invoiceNumber,
+      gross_amount: grossAmount,
+      base_amount: walletCreditAmount,
+      gst_amount: gstAmount,
+      is_intra_state: gstResult.is_intra_state,
+      metadata: {
+        order_id: razorpay_order_id,
+        verified_at: new Date().toISOString(),
+        gst_breakdown: gstResult,
+      },
+    };
+
     if (pendingRecord) {
-      await pendingRecord.update(
-        {
-          razorpay_payment_id,
-          status: "success",
-          description: "Wallet Recharge",
-          balance_before: currentBalance,
-          balance_after: newBalance,
-          invoice_number: invoiceNumber,
-          metadata: {
-            order_id: razorpay_order_id,
-            verified_at: new Date().toISOString(),
-          },
-        },
-        { transaction: t },
-      );
+      await pendingRecord.update(paymentUpdateData, { transaction: t });
     } else {
       await db.PaymentHistory.create(
         {
           tenant_id,
           razorpay_order_id,
-          razorpay_payment_id,
-          amount: amountInRupees,
+          amount: walletCreditAmount, // actual wallet credit
           currency: "INR",
-          status: "success",
           payment_method: "Online",
-          description: "Wallet Recharge",
-          balance_before: currentBalance,
-          balance_after: newBalance,
-          invoice_number: invoiceNumber,
-          metadata: {
-            order_id: razorpay_order_id,
-            verified_at: new Date().toISOString(),
-          },
+          ...paymentUpdateData,
         },
         { transaction: t },
       );
     }
   });
+
+  logger.info(
+    `[PAYMENT] GST applied: ₹${grossAmount} paid → ₹${walletCreditAmount} credited + ₹${gstAmount} GST (${activeGstRate}%) for tenant ${tenant_id}`,
+  );
 
   // Emit socket update for payment success
   try {
@@ -236,8 +263,11 @@ export const verifyRazorpayPaymentService = async (tenant_id, paymentData) => {
 
     io.to(`tenant-${tenant_id}`).emit("payment-update", {
       type: "PAYMENT_SUCCESS",
-      amount: amountInRupees,
+      grossAmount: grossAmount,
+      walletCredit: walletCreditAmount,
+      gstAmount: gstAmount,
       balance: newBalance,
+      gstBreakdown: gstResult,
     });
 
     if (newBalance > 0) {
@@ -438,7 +468,8 @@ export const payInvoiceService = async (tenant_id, invoice_id, paymentData) => {
  *   payment.failed      — payment failed; record failure for retry
  */
 export const handleRazorpayWebhookService = async (rawBody, signature) => {
-  const razorpaySecret = process.env.RAZORPAY_WEBHOOK_SECRET || process.env.RAZORPAY_KEY_SECRET;
+  const razorpaySecret =
+    process.env.RAZORPAY_WEBHOOK_SECRET || process.env.RAZORPAY_KEY_SECRET;
   if (!razorpaySecret) {
     throw new Error("Razorpay webhook secret not configured");
   }
@@ -462,7 +493,11 @@ export const handleRazorpayWebhookService = async (rawBody, signature) => {
     return { processed: false, reason: "no_payment_entity" };
   }
 
-  const { id: razorpay_payment_id, order_id: razorpay_order_id, amount: amountPaise } = paymentEntity;
+  const {
+    id: razorpay_payment_id,
+    order_id: razorpay_order_id,
+    amount: amountPaise,
+  } = paymentEntity;
 
   if (eventType === "payment.authorized" || eventType === "payment.captured") {
     // Look up pending PaymentHistory row to identify tenant + amount
@@ -471,7 +506,6 @@ export const handleRazorpayWebhookService = async (rawBody, signature) => {
     });
 
     if (!pendingRecord) {
-      // Could be an invoice payment — look up by order_id in MonthlyInvoices metadata
       logger.warn(
         `[PAYMENT-WEBHOOK] No pending record for order ${razorpay_order_id} — event ${eventType}`,
       );
@@ -479,19 +513,41 @@ export const handleRazorpayWebhookService = async (rawBody, signature) => {
     }
 
     const tenant_id = pendingRecord.tenant_id;
+    // pendingRecord.amount is the GROSS amount the tenant paid (set at order creation)
     const amountInRupees = parseFloat(pendingRecord.amount);
 
-    // Idempotency: skip if already processed by verify endpoint
-    const alreadyProcessed = await db.PaymentHistory.findOne({
-      where: { razorpay_payment_id, status: "success" },
+    // Resolve GST — same logic as the /verify endpoint
+    const tenant = await db.Tenants.findOne({
+      where: { tenant_id },
+      attributes: ["state"],
+      raw: true,
     });
-    if (alreadyProcessed) {
-      logger.debug(`[PAYMENT-WEBHOOK] Payment ${razorpay_payment_id} already processed, skipping`);
-      return { processed: false, reason: "already_processed" };
-    }
+    const tenantState = tenant?.state?.trim()?.toUpperCase?.() || "";
+    const companyState =
+      process.env.COMPANY_STATE?.trim()?.toUpperCase?.() || "TN";
+    const webhookGstRate = await getActiveGSTRate();
+    const gstResult = calculateGST(amountInRupees, tenantState, companyState, webhookGstRate);
+    const walletCreditAmount = parseFloat(gstResult.base_amount);
+    const grossAmount = parseFloat(gstResult.gross_amount);
+    const gstAmount = parseFloat(gstResult.gst_amount);
 
-    // Credit wallet atomically
+    // Credit wallet atomically — idempotency guard is INSIDE the transaction with a row lock
+    // to prevent double-credit when Razorpay delivers the webhook concurrently with /verify.
     await db.sequelize.transaction(async (t) => {
+      // ── Idempotency check (inside transaction with lock) ──────────────────
+      const alreadyProcessed = await db.PaymentHistory.findOne({
+        where: { razorpay_payment_id, status: "success" },
+        transaction: t,
+        lock: t.LOCK.UPDATE,
+      });
+      if (alreadyProcessed) {
+        logger.debug(
+          `[PAYMENT-WEBHOOK] Payment ${razorpay_payment_id} already processed, skipping`,
+        );
+        return; // transaction will commit a no-op
+      }
+      // ──────────────────────────────────────────────────────────────────────
+
       const [wallet] = await db.Wallets.findOrCreate({
         where: { tenant_id },
         defaults: { tenant_id, balance: 0, currency: "INR" },
@@ -499,16 +555,21 @@ export const handleRazorpayWebhookService = async (rawBody, signature) => {
       });
 
       const currentBalance = parseFloat(wallet.balance) || 0;
-      const newBalance = currentBalance + amountInRupees;
+      // Credit only base_amount (after GST), matching the /verify endpoint
+      const newBalance = currentBalance + walletCreditAmount;
       await wallet.update({ balance: newBalance }, { transaction: t });
 
       await db.WalletTransactions.create(
         {
           tenant_id,
           type: "credit",
-          amount: amountInRupees,
+          amount: walletCreditAmount,       // base_amount credited
+          gross_amount: grossAmount,        // what tenant paid
+          base_amount: walletCreditAmount,  // wallet credit (gross / 1.18)
+          gst_amount: gstAmount,            // GST component
+          gst_rate: webhookGstRate,
           reference_id: razorpay_payment_id,
-          description: "Wallet Recharge (Webhook)",
+          description: `Wallet Recharge (Webhook) — ₹${grossAmount} paid, ₹${walletCreditAmount} credited after ${webhookGstRate}% GST`,
           balance_after: newBalance,
         },
         { transaction: t },
@@ -524,11 +585,16 @@ export const handleRazorpayWebhookService = async (rawBody, signature) => {
           balance_before: currentBalance,
           balance_after: newBalance,
           invoice_number: `INV-${dateStr}-${suffix}`,
+          gross_amount: grossAmount,
+          base_amount: walletCreditAmount,
+          gst_amount: gstAmount,
+          is_intra_state: gstResult.is_intra_state,
           metadata: {
             ...pendingRecord.metadata,
             razorpay_payment_id,
             webhook_event: eventType,
             captured_at: new Date().toISOString(),
+            gst_breakdown: gstResult,
           },
         },
         { transaction: t },
@@ -538,13 +604,16 @@ export const handleRazorpayWebhookService = async (rawBody, signature) => {
     // Notify tenant via socket
     try {
       const io = getIO();
-      const wallet = await db.Wallets.findOne({ where: { tenant_id } });
-      const newBalance = parseFloat(wallet.balance);
+      const updatedWallet = await db.Wallets.findOne({ where: { tenant_id } });
+      const newBalance = parseFloat(updatedWallet.balance);
       io.to(`tenant-${tenant_id}`).emit("payment-update", {
         type: "PAYMENT_SUCCESS",
-        amount: amountInRupees,
+        grossAmount: grossAmount,
+        walletCredit: walletCreditAmount,
+        gstAmount: gstAmount,
         balance: newBalance,
         source: "webhook",
+        gstBreakdown: gstResult,
       });
       if (newBalance > 0) {
         io.to(`tenant-${tenant_id}`).emit("wallet-restored", {
@@ -557,7 +626,7 @@ export const handleRazorpayWebhookService = async (rawBody, signature) => {
     } catch (_) {}
 
     logger.info(
-      `[PAYMENT-WEBHOOK] Credited ₹${amountInRupees} to tenant ${tenant_id} via webhook ${eventType}`,
+      `[PAYMENT-WEBHOOK] GST applied: ₹${grossAmount} paid → ₹${walletCreditAmount} credited + ₹${gstAmount} GST (${webhookGstRate}%) for tenant ${tenant_id} via webhook ${eventType}`,
     );
     return { processed: true };
   }
@@ -619,7 +688,8 @@ export const recordInvoicePaymentFailure = async (tenant_id, invoice_id) => {
     try {
       const { getIO } = await import("../../middlewares/socket/socket.js");
       const io = getIO();
-      io.emit("payment-failure-alert", {
+      // Emit to management room only — NOT to all sockets (would expose tenant data)
+      io.to("management-room").emit("payment-failure-alert", {
         tenant_id,
         invoice_number: invoice.invoice_number,
         retry_count: invoice.retry_count + 1,

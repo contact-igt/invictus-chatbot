@@ -10,9 +10,36 @@ import {
   deleteMediaAssetService,
   updateMediaTagsService,
   restoreMediaAssetService,
+  getMediaStatsService,
 } from "./gallery.service.js";
 import { getWhatsappAccountByTenantService } from "../WhatsappAccountModel/whatsappAccount.service.js";
 import { logger } from "../../utils/logger.js";
+
+/**
+ * Get media stats (counts per type, approval status, total storage)
+ * GET /api/whatsapp/gallery/stats
+ */
+export const getMediaStatsController = async (req, res) => {
+  try {
+    const tenant_id = req.user?.tenant_id;
+    if (!tenant_id) {
+      return res.status(401).json({
+        success: false,
+        error_code: "UNAUTHORIZED",
+        message: "Authentication required",
+      });
+    }
+    const data = await getMediaStatsService(tenant_id);
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    logger.error("Error in getMediaStatsController:", error);
+    return res.status(500).json({
+      success: false,
+      error_code: "INTERNAL_ERROR",
+      message: error.message || "Failed to fetch media stats",
+    });
+  }
+};
 
 /**
  * Upload media file
@@ -22,7 +49,8 @@ export const uploadMediaController = async (req, res) => {
   try {
     const { tags, folder } = req.body;
     const tenant_id = req.user?.tenant_id;
-    const userId = req.user?.unique_id || req.user?.tenant_user_id || req.user?.id;
+    const userId =
+      req.user?.unique_id || req.user?.tenant_user_id || req.user?.id;
 
     // Validate required fields
     if (!tenant_id) {
@@ -58,7 +86,8 @@ export const uploadMediaController = async (req, res) => {
     if (!appId) {
       return res.status(500).json({
         success: false,
-        message: "META_APP_ID not configured. Please provide it in WhatsApp settings.",
+        message:
+          "META_APP_ID not configured. Please provide it in WhatsApp settings.",
       });
     }
 
@@ -114,7 +143,19 @@ export const uploadMediaController = async (req, res) => {
  */
 export const listMediaAssetsController = async (req, res) => {
   try {
-    const { type, search, tags, folder, approved_only, pending_only, page, limit } = req.query;
+    const {
+      type,
+      search,
+      tags,
+      folder,
+      approved_only,
+      pending_only,
+      page,
+      limit,
+      show_deleted,
+      sort_field,
+      sort_dir,
+    } = req.query;
     const tenant_id = req.user?.tenant_id;
 
     // Validate required fields
@@ -139,6 +180,9 @@ export const listMediaAssetsController = async (req, res) => {
       folder,
       approved_only,
       pending_only,
+      show_deleted,
+      sort_field,
+      sort_dir,
     };
 
     const pagination = {
@@ -188,9 +232,21 @@ export const getMediaAssetController = async (req, res) => {
   } catch (error) {
     logger.error("Error in getMediaAssetController:", error);
     if (error.message === "Media asset not found") {
-      return res.status(404).json({ success: false, error_code: "NOT_FOUND", message: error.message });
+      return res
+        .status(404)
+        .json({
+          success: false,
+          error_code: "NOT_FOUND",
+          message: error.message,
+        });
     }
-    return res.status(500).json({ success: false, error_code: "INTERNAL_ERROR", message: error.message || "Failed to get media asset" });
+    return res
+      .status(500)
+      .json({
+        success: false,
+        error_code: "INTERNAL_ERROR",
+        message: error.message || "Failed to get media asset",
+      });
   }
 };
 
@@ -220,12 +276,30 @@ export const deleteMediaAssetController = async (req, res) => {
   } catch (error) {
     logger.error("Error in deleteMediaAssetController:", error);
     if (error.message === "Media asset not found") {
-      return res.status(404).json({ success: false, error_code: "NOT_FOUND", message: error.message });
+      return res
+        .status(404)
+        .json({
+          success: false,
+          error_code: "NOT_FOUND",
+          message: error.message,
+        });
     }
     if (error.message.includes("linked") || error.message.includes("used in")) {
-      return res.status(409).json({ success: false, error_code: "ASSET_IN_USE", message: error.message });
+      return res
+        .status(409)
+        .json({
+          success: false,
+          error_code: "ASSET_IN_USE",
+          message: error.message,
+        });
     }
-    return res.status(400).json({ success: false, error_code: "DELETE_FAILED", message: error.message || "Failed to delete media asset" });
+    return res
+      .status(400)
+      .json({
+        success: false,
+        error_code: "DELETE_FAILED",
+        message: error.message || "Failed to delete media asset",
+      });
   }
 };
 
@@ -233,28 +307,6 @@ export const deleteMediaAssetController = async (req, res) => {
  * Restore soft-deleted media asset
  * POST /api/whatsapp/gallery/:asset_id/restore
  */
-export const restoreMediaAssetController = async (req, res) => {
-  try {
-    const { asset_id } = req.params;
-    const tenant_id = req.user?.tenant_id;
-
-    if (!tenant_id) {
-      return res.status(400).json({
-        success: false,
-        message: "tenant_id is required",
-      });
-    }
-
-    const result = await restoreMediaAssetService(asset_id, tenant_id);
-    return res.status(200).json(result);
-  } catch (error) {
-    logger.error("Error in restoreMediaAssetController:", error);
-    if (error.message === "Asset not found or not deleted") {
-      return res.status(404).json({ success: false, error_code: "NOT_FOUND", message: error.message });
-    }
-    return res.status(400).json({ success: false, error_code: "RESTORE_FAILED", message: error.message || "Failed to restore media asset" });
-  }
-};
 
 /**
  * Update media asset tags
@@ -292,8 +344,20 @@ export const updateMediaTagsController = async (req, res) => {
   } catch (error) {
     logger.error("Error in updateMediaTagsController:", error);
     if (error.message === "Media asset not found") {
-      return res.status(404).json({ success: false, error_code: "NOT_FOUND", message: error.message });
+      return res
+        .status(404)
+        .json({
+          success: false,
+          error_code: "NOT_FOUND",
+          message: error.message,
+        });
     }
-    return res.status(500).json({ success: false, error_code: "INTERNAL_ERROR", message: error.message || "Failed to update tags" });
+    return res
+      .status(500)
+      .json({
+        success: false,
+        error_code: "INTERNAL_ERROR",
+        message: error.message || "Failed to update tags",
+      });
   }
 };

@@ -14,6 +14,11 @@ import {
   removeFaqKnowledgeEntryController,
 } from "./faq.controller.js";
 import {
+  getDeletedFaqReviewsController,
+  restoreFaqReviewController,
+  hardDeleteFaqReviewController,
+} from "./faq.lifecycle.js";
+import {
   authenticate,
   authorize,
 } from "../../middlewares/auth/authMiddlewares.js";
@@ -78,12 +83,36 @@ router.put(
   toggleFaqActiveController,
 );
 
+// GET     /faq-reviews/deleted
+router.get(
+  "/faq-reviews/deleted",
+  authenticate,
+  authorize({ user_type: "tenant", roles: managerRoles }),
+  getDeletedFaqReviewsController,
+);
+
+// PUT     /faq-reviews/:id/restore
+router.put(
+  "/faq-reviews/:id/restore",
+  authenticate,
+  authorize({ user_type: "tenant", roles: managerRoles }),
+  restoreFaqReviewController,
+);
+
 // DELETE  /faq-reviews/:id/soft
 router.delete(
   "/faq-reviews/:id/soft",
   authenticate,
   authorize({ user_type: "tenant", roles: managerRoles }),
   softDeleteFaqController,
+);
+
+// DELETE  /faq-reviews/:id  (hard delete — admin only)
+router.delete(
+  "/faq-reviews/:id",
+  authenticate,
+  authorize({ user_type: "tenant", roles: ["tenant_admin"] }),
+  hardDeleteFaqReviewController,
 );
 
 // GET  /faq-reviews/knowledge-entries
