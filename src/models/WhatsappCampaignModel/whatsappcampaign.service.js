@@ -22,6 +22,7 @@ import { generateWhatsAppOTPService } from "../OtpVerificationModel/otpverificat
 import { canSendCampaign } from "../../utils/billing/walletGuard.js";
 import { estimateMetaCost } from "../../utils/billing/costEstimator.js";
 import { addCampaignUsageService } from "../GalleryModel/gallery.service.js";
+import { logger } from "../../utils/logger.js";
 
 /**
  * Creates a new campaign and populates its recipients.
@@ -1070,80 +1071,94 @@ export const permanentDeleteCampaignService = async (
  * Starts a cron job to handle scheduled and active campaigns.
  */
 export const startCampaignSchedulerService = () => {
-  console.log("🚀 WhatsApp Campaign Scheduler Started");
+  logger.info("[CAMPAIGN-SCHEDULER] Started");
 
   // Run every minute
   cron.schedule("* * * * *", async () => {
     try {
+      const now = new Date();
+
       // 1. Check for scheduled campaigns that need to be activated
-      const [scheduledToActive] = await db.sequelize.query(`
-        UPDATE ${tableNames.WHATSAPP_CAMPAIGN}
-        SET status = 'active'
-        WHERE status = 'scheduled' 
-          AND scheduled_at <= UTC_TIMESTAMP()
-          AND is_deleted = false
-      `);
+      const [scheduledToActiveCount] = await db.WhatsappCampaigns.update(
+        { status: "active" },
+        {
+          where: {
+            status: "scheduled",
+            scheduled_at: { [db.Sequelize.Op.lte]: now },
+            is_deleted: false,
+          },
+        },
+      );
+
+      if (scheduledToActiveCount > 0) {
+        logger.info(
+          `[CAMPAIGN-SCHEDULER] Activated ${scheduledToActiveCount} scheduled campaign(s) at ${now.toISOString()}`,
+        );
+      }
 
       const activeCampaigns = await db.WhatsappCampaigns.findAll({
         where: { status: "active", is_deleted: false },
       });
 
       for (const campaign of activeCampaigns) {
-        // Pre-execution billing check: verify tenant can afford at least 1 batch
         try {
-          const template = await db.WhatsappTemplates.findOne({
-            where: { template_id: campaign.template_id },
-            attributes: ["category"],
-            raw: true,
-          });
-          const category = (template?.category || "marketing").toLowerCase();
-          const tenantForBilling = await db.Tenants.findOne({
-            where: { tenant_id: campaign.tenant_id },
-            attributes: ["country", "owner_country_code", "timezone"],
-            raw: true,
-          });
-          const isIndia =
-            tenantForBilling?.owner_country_code === "91" ||
-            tenantForBilling?.timezone === "Asia/Kolkata";
-          const billingCountry =
-            tenantForBilling?.country || (isIndia ? "IN" : "Global");
-          const cost = await estimateMetaCost(category, billingCountry);
-          // Estimate cost for a single batch of 100 messages
-          const pendingCount = await db.WhatsappCampaignRecipients.count({
-            where: { campaign_id: campaign.campaign_id, status: "pending" },
-          });
-          const batchEstimate = Math.min(pendingCount, 100);
-          const batchCost = cost.totalCostInr * batchEstimate;
+          // Pre-execution billing check: verify tenant can afford at least 1 batch
+          try {
+            const template = await db.WhatsappTemplates.findOne({
+              where: { template_id: campaign.template_id },
+              attributes: ["category"],
+              raw: true,
+            });
+            const category = (template?.category || "marketing").toLowerCase();
+            const tenantForBilling = await db.Tenants.findOne({
+              where: { tenant_id: campaign.tenant_id },
+              attributes: ["country", "owner_country_code", "timezone"],
+              raw: true,
+            });
+            const isIndia =
+              tenantForBilling?.owner_country_code === "91" ||
+              tenantForBilling?.timezone === "Asia/Kolkata";
+            const billingCountry =
+              tenantForBilling?.country || (isIndia ? "IN" : "Global");
+            const cost = await estimateMetaCost(category, billingCountry);
+            const pendingCount = await db.WhatsappCampaignRecipients.count({
+              where: { campaign_id: campaign.campaign_id, status: "pending" },
+            });
+            const batchEstimate = Math.min(pendingCount, 100);
+            const batchCost = cost.totalCostInr * batchEstimate;
 
-          const billingCheck = await canSendCampaign(
-            campaign.tenant_id,
-            batchCost,
-          );
-
-          if (!billingCheck.allowed) {
-            console.warn(
-              `[CAMPAIGN-SCHEDULER] Skipping campaign ${campaign.campaign_id} — ${billingCheck.reason}`,
+            const billingCheck = await canSendCampaign(
+              campaign.tenant_id,
+              batchCost,
             );
-            await campaign.update({ status: "paused" });
-            continue; // Skip this campaign, move to next
-          }
-        } catch (billingErr) {
-          console.error(
-            `[CAMPAIGN-SCHEDULER] Billing check error for ${campaign.campaign_id}:`,
-            billingErr.message,
-          );
-          // Fail open — proceed with execution
-        }
 
-        // Execute a batch for each active campaign
-        await executeCampaignBatchService(
-          campaign.campaign_id,
-          campaign.tenant_id,
-          100,
-        );
+            if (!billingCheck.allowed) {
+              logger.warn(
+                `[CAMPAIGN-SCHEDULER] Skipping campaign ${campaign.campaign_id} - ${billingCheck.reason}`,
+              );
+              await campaign.update({ status: "paused" });
+              continue;
+            }
+          } catch (billingErr) {
+            logger.error(
+              `[CAMPAIGN-SCHEDULER] Billing check error for ${campaign.campaign_id}: ${billingErr.message}`,
+            );
+            // Fail open — proceed with execution
+          }
+
+          await executeCampaignBatchService(
+            campaign.campaign_id,
+            campaign.tenant_id,
+            100,
+          );
+        } catch (campaignErr) {
+          logger.error(
+            `[CAMPAIGN-SCHEDULER] Campaign ${campaign.campaign_id} execution error: ${campaignErr.message}`,
+          );
+        }
       }
     } catch (err) {
-      console.error("Campaign Scheduler Error:", err.message);
+      logger.error(`[CAMPAIGN-SCHEDULER] Worker error: ${err.message}`);
     }
   });
 

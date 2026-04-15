@@ -301,7 +301,7 @@ export const syncAllWhatsappTemplatesController = async (req, res) => {
     }
 
     const result = await pullTemplatesFromMetaService(tenant_id);
-
+    console.log("result", result);
     return res.status(200).json({
       message: "Templates synced successfully (Imported & Updated)",
       data: result,
@@ -417,6 +417,24 @@ export const updateWhatsappTemplateController = async (req, res) => {
       data: result,
     });
   } catch (err) {
+    if (err.errorCode === "EDIT_LIMIT_24H") {
+      return res.status(429).json({
+        message: err.message,
+        error_code: err.errorCode,
+        hours_remaining: err.hoursRemaining,
+        next_edit_at: err.nextEditAt,
+      });
+    }
+    if (err.errorCode === "EDIT_LIMIT_30DAYS") {
+      return res.status(429).json({
+        message: err.message,
+        error_code: err.errorCode,
+        edits_used: err.editsUsed,
+        edits_allowed: err.editsAllowed,
+        period_end_at: err.periodEndAt,
+        days_remaining: err.daysRemaining,
+      });
+    }
     return res.status(500).json({ message: err.message });
   }
 };

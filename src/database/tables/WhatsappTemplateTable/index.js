@@ -102,6 +102,27 @@ export const WhatsappTemplateTable = (sequelize, Sequelize) => {
         allowNull: true,
       },
 
+      // ── Meta edit-limit tracking ───────────────────────────────────────────
+      // Timestamp of the last successful edit pushed to Meta (24h cooldown starts here)
+      last_edited_at: {
+        type: Sequelize.DATE,
+        allowNull: true,
+      },
+
+      // Start of the current 30-day edit window (reset when > 30 days old)
+      edit_period_start: {
+        type: Sequelize.DATE,
+        allowNull: true,
+      },
+
+      // Number of Meta edits made in the current 30-day window (max 10)
+      edit_count_30d: {
+        type: Sequelize.INTEGER,
+        allowNull: false,
+        defaultValue: 0,
+      },
+      // ──────────────────────────────────────────────────────────────────────
+
 
       createdAt: {
         type: Sequelize.DATE,

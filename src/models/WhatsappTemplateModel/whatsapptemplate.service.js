@@ -1429,6 +1429,9 @@ export const updateWhatsappTemplateService = async (
     let nextStatus = template.status;
     let metaEditPayload = null;
     let metaEditResponse = null;
+    let approvedEditCount = null;
+    let approvedPeriodStart = null;
+    let approvedEditTimestamp = null;
 
     if (shouldEditOnMeta) {
       const whatsappAccount =
@@ -1436,6 +1439,69 @@ export const updateWhatsappTemplateService = async (
       if (!whatsappAccount || whatsappAccount.status !== "active") {
         throw new Error("WhatsApp account not active");
       }
+
+      // ── Pre-flight edit-limit checks — APPROVED templates only ──────────
+      // Rejected / paused templates have no Meta edit limits; only approved ones do.
+      if (template.status === "approved") {
+        const now = Date.now();
+
+        // 1. 24-hour cooldown — prefer last_edited_at, but fall back to updated_at for legacy rows
+        const lastEditedAt = template.last_edited_at || template.updated_at;
+        if (lastEditedAt) {
+          const hoursSinceEdit =
+            (now - new Date(lastEditedAt).getTime()) / 3_600_000;
+          if (hoursSinceEdit < 24) {
+            const hoursLeft = Math.max(1, Math.ceil(24 - hoursSinceEdit));
+            const nextEditAt = new Date(
+              new Date(lastEditedAt).getTime() + 24 * 3_600_000,
+            ).toISOString();
+            const err = new Error(
+              `Meta allows editing approved templates only once per 24 hours. Try again in ${hoursLeft} hour(s).`,
+            );
+            err.errorCode = "EDIT_LIMIT_24H";
+            err.hoursRemaining = hoursLeft;
+            err.nextEditAt = nextEditAt;
+            throw err;
+          }
+        }
+
+        // 2. 30-day window — reset counter if 30 days have passed since period start
+        let editCount = template.edit_count_30d || 0;
+        let periodStart = template.edit_period_start
+          ? new Date(template.edit_period_start)
+          : null;
+
+        const daysSincePeriodStart = periodStart
+          ? (now - periodStart.getTime()) / 86_400_000
+          : null;
+
+        if (!periodStart || daysSincePeriodStart >= 30) {
+          // New 30-day window starts now — reset counter
+          editCount = 0;
+          periodStart = new Date(now);
+        }
+
+        if (editCount >= 10) {
+          const periodEndAt = new Date(
+            periodStart.getTime() + 30 * 86_400_000,
+          ).toISOString();
+          const daysLeft = Math.max(1, Math.ceil(30 - daysSincePeriodStart));
+          const err = new Error(
+            `This template has reached the maximum of 10 edits in the current 30-day period. Next window opens in ${daysLeft} day(s).`,
+          );
+          err.errorCode = "EDIT_LIMIT_30DAYS";
+          err.editsUsed = editCount;
+          err.editsAllowed = 10;
+          err.periodEndAt = periodEndAt;
+          err.daysRemaining = daysLeft;
+          throw err;
+        }
+
+        approvedEditCount = editCount;
+        approvedPeriodStart = periodStart;
+        approvedEditTimestamp = now;
+      }
+      // ─────────────────────────────────────────────────────────────────────
 
       metaEditPayload = await buildMetaTemplatePayload({
         template: {
@@ -1519,10 +1585,43 @@ export const updateWhatsappTemplateService = async (
           template.meta_template_id,
           whatsappAccount,
         );
+
+        // ── Post-success: persist edit-limit tracking fields (approved only) ─
+        if (template.status === "approved") {
+          const newEditCount = approvedEditCount + 1;
+          const newPeriodStart = approvedPeriodStart
+            .toISOString()
+            .slice(0, 19)
+            .replace("T", " ");
+          const newLastEditedAt = new Date(approvedEditTimestamp)
+            .toISOString()
+            .slice(0, 19)
+            .replace("T", " ");
+
+          await db.sequelize.query(
+            `UPDATE ${tableNames.WHATSAPP_TEMPLATE}
+             SET last_edited_at = ?, edit_period_start = ?, edit_count_30d = ?
+             WHERE template_id = ? AND is_deleted = false`,
+            {
+              replacements: [
+                newLastEditedAt,
+                newPeriodStart,
+                newEditCount,
+                template_id,
+              ],
+              transaction,
+            },
+          );
+        }
+        // ─────────────────────────────────────────────────────────────────
       } catch (metaErr) {
+        // Re-throw our own structured errors unchanged
+        if (metaErr.errorCode) throw metaErr;
+
+        const metaData = metaErr.response?.data?.error;
         const metaMsg =
-          metaErr.response?.data?.error?.error_user_msg ||
-          metaErr.response?.data?.error?.message ||
+          metaData?.error_user_msg ||
+          metaData?.message ||
           metaErr.message;
         throw new Error(`Template edit failed on Meta: ${metaMsg}`);
       }
