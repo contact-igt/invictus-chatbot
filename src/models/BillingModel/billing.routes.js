@@ -42,6 +42,7 @@ import {
   adminActivateGSTRateController,
   adminDeactivateGSTRateController,
   adminDeleteGSTRateController,
+  adminUpdateGSTRateController,
 } from "./gstAdmin.controller.js";
 import { downloadInvoicePdf } from "../../controllers/invoice.controller.js";
 import {
@@ -369,6 +370,12 @@ router.post(
   authenticateAdmin,
   adminBillingRateLimiter,
   adminDeactivateGSTRateController,
+);
+router.put(
+  "/billing/admin/gst/:id",
+  authenticateAdmin,
+  adminBillingRateLimiter,
+  adminUpdateGSTRateController,
 );
 router.delete(
   "/billing/admin/gst/:id",

@@ -392,6 +392,60 @@ export const deleteGSTRate = async (id, adminId) => {
 };
 
 /**
+ * Update an existing GST rate record (only allowed on inactive rates).
+ * Editable fields: gst_rate, effective_from, notes.
+ *
+ * @param {number} id
+ * @param {object} updates  - { gst_rate?, effective_from?, notes? }
+ * @param {string} adminId
+ * @returns {Promise<object>} - Updated record
+ */
+export const updateGSTRate = async (id, updates, adminId) => {
+  const target = await db.TaxSettings.findByPk(id);
+  if (!target) throw new Error(`GST rate id=${id} not found`);
+  if (target.is_active) {
+    throw Object.assign(
+      new Error("Cannot edit an active GST rate. Deactivate it first."),
+      { code: "ACTIVE_RATE_EDIT_BLOCKED" },
+    );
+  }
+
+  const patch = {};
+
+  if (updates.gst_rate !== undefined) {
+    const rate = parseFloat(updates.gst_rate);
+    if (isNaN(rate) || rate <= 0 || rate > 100) {
+      throw new Error("gst_rate must be a number between 0 and 100");
+    }
+    patch.gst_rate = rate;
+  }
+
+  if (updates.effective_from !== undefined) {
+    const effectiveDate = new Date(updates.effective_from);
+    if (isNaN(effectiveDate.getTime())) {
+      throw new Error("effective_from must be a valid date");
+    }
+    patch.effective_from = effectiveDate;
+  }
+
+  if (updates.notes !== undefined) {
+    patch.notes = updates.notes || null;
+  }
+
+  if (Object.keys(patch).length === 0) {
+    throw new Error("No valid fields to update");
+  }
+
+  await target.update(patch);
+
+  logger.info(
+    `[TAX] GST rate id=${id} updated by admin ${adminId}: ${JSON.stringify(patch)}`,
+  );
+
+  return target.toJSON();
+};
+
+/**
  * Return paginated GST rate history (newest first).
  *
  * @param {number} [page=1]

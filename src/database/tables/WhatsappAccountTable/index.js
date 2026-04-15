@@ -102,7 +102,7 @@ export const WhatsappAccountTable = (sequelize, Sequelize) => {
       createdAt: {
         type: Sequelize.DATE,
         allowNull: false,
-        defaultValue: Sequelize.literal("CURRENT_TIMESTAMP"),
+        defaultValue: sequelize.literal("CURRENT_TIMESTAMP"),
         field: "created_at",
       },
 

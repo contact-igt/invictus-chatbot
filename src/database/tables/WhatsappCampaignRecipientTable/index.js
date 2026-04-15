@@ -85,6 +85,7 @@ export const WhatsappCampaignRecipientTable = (sequelize, Sequelize) => {
 
       is_deleted: {
         type: Sequelize.BOOLEAN,
+        allowNull: false,
         defaultValue: false,
       },
 

@@ -44,21 +44,25 @@ export const WhatsappCampaignTable = (sequelize, Sequelize) => {
 
             total_audience: {
                 type: Sequelize.INTEGER,
+                allowNull: false,
                 defaultValue: 0,
             },
 
             delivered_count: {
                 type: Sequelize.INTEGER,
+                allowNull: false,
                 defaultValue: 0,
             },
 
             read_count: {
                 type: Sequelize.INTEGER,
+                allowNull: false,
                 defaultValue: 0,
             },
 
             replied_count: {
                 type: Sequelize.INTEGER,
+                allowNull: false,
                 defaultValue: 0,
             },
 
@@ -99,6 +103,7 @@ export const WhatsappCampaignTable = (sequelize, Sequelize) => {
 
             is_deleted: {
                 type: Sequelize.BOOLEAN,
+                allowNull: false,
                 defaultValue: false,
             },
 

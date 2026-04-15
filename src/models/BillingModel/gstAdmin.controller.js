@@ -6,6 +6,7 @@ import {
   deactivateGSTRate,
   deleteGSTRate,
   listGSTRates,
+  updateGSTRate,
 } from "../../services/taxSettings.service.js";
 import { logger } from "../../utils/logger.js";
 
@@ -157,6 +158,34 @@ export const adminDeactivateGSTRateController = async (req, res) => {
   } catch (error) {
     logger.error("[ADMIN-GST] deactivateGSTRate error:", error.message);
     res.status(400).json({ success: false, message: error.message });
+  }
+};
+
+/**
+ * PUT /billing/admin/gst/:id
+ * Edit an inactive GST rate (gst_rate, effective_from, notes).
+ * Active rates cannot be edited — deactivate first.
+ */
+export const adminUpdateGSTRateController = async (req, res) => {
+  try {
+    const admin_id = req.user.unique_id;
+    const { id } = req.params;
+    const { gst_rate, effective_from, notes } = req.body;
+
+    if (!id) {
+      return res.status(400).json({ success: false, message: "id is required" });
+    }
+
+    const record = await updateGSTRate(parseInt(id), { gst_rate, effective_from, notes }, admin_id);
+    res.json({ success: true, message: "GST rate updated", data: record });
+  } catch (error) {
+    logger.error("[ADMIN-GST] updateGSTRate error:", error.message);
+    const status = error.code === "ACTIVE_RATE_EDIT_BLOCKED" ? 409 : 400;
+    res.status(status).json({
+      success: false,
+      message: error.message,
+      code: error.code || null,
+    });
   }
 };
 

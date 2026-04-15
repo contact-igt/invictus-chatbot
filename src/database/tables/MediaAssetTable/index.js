@@ -1,4 +1,13 @@
+import crypto from "crypto";
 import { tableNames } from "../../tableName.js";
+
+const getMediaHandleHash = (mediaHandle) => {
+  if (!mediaHandle) {
+    return null;
+  }
+
+  return crypto.createHash("sha256").update(mediaHandle).digest("hex");
+};
 
 export const MediaAssetTable = (sequelize, Sequelize) => {
   return sequelize.define(
@@ -14,7 +23,6 @@ export const MediaAssetTable = (sequelize, Sequelize) => {
       media_asset_id: {
         type: Sequelize.STRING,
         allowNull: false,
-        unique: true,
       },
 
       tenant_id: {
@@ -45,7 +53,11 @@ export const MediaAssetTable = (sequelize, Sequelize) => {
       media_handle: {
         type: Sequelize.TEXT,
         allowNull: false,
-        unique: true,
+      },
+
+      media_handle_hash: {
+        type: Sequelize.STRING(64),
+        allowNull: false,
       },
 
       preview_url: {
@@ -88,6 +100,11 @@ export const MediaAssetTable = (sequelize, Sequelize) => {
         allowNull: true,
       },
 
+      handle_expires_at: {
+        type: Sequelize.DATE,
+        allowNull: true,
+      },
+
       is_deleted: {
         type: Sequelize.BOOLEAN,
         defaultValue: false,
@@ -117,6 +134,14 @@ export const MediaAssetTable = (sequelize, Sequelize) => {
       tableName: tableNames.MEDIA_ASSETS,
       timestamps: true,
       underscored: true,
+      hooks: {
+        beforeValidate: (mediaAsset) => {
+          mediaAsset.setDataValue(
+            "media_handle_hash",
+            getMediaHandleHash(mediaAsset.getDataValue("media_handle")),
+          );
+        },
+      },
       indexes: [
         {
           name: "unique_media_asset_id",
@@ -138,7 +163,7 @@ export const MediaAssetTable = (sequelize, Sequelize) => {
         {
           name: "idx_media_assets_media_handle",
           unique: true,
-          fields: ["media_handle"],
+          fields: ["media_handle_hash"],
         },
         {
           name: "idx_media_assets_deleted",

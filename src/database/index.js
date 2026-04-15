@@ -60,7 +60,9 @@ const dbconfig =
     ? DatabaseEnvironmentConfig?.live
     : ServerEnvironmentConfig?.server?.line === "development"
       ? DatabaseEnvironmentConfig?.development
-      : DatabaseEnvironmentConfig?.local;
+      : ServerEnvironmentConfig?.server?.line === "stage"
+        ? DatabaseEnvironmentConfig?.stage
+        : DatabaseEnvironmentConfig?.local;
 
 const sequelize = new Sequelize(
   dbconfig?.databse,
