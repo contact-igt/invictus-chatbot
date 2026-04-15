@@ -77,7 +77,9 @@ const resolveAiReplyEnvelope = (aiResult, userText) => {
   const requestedTopic = normalizeRequestedTopic(userText);
 
   const detectedTag = aiResult?.tagDetected || null;
-  const isMissingInfoTag = detectedTag ? MISSING_INFO_TAGS.has(detectedTag) : false;
+  const isMissingInfoTag = detectedTag
+    ? MISSING_INFO_TAGS.has(detectedTag)
+    : false;
   const looksLikeMissingInfoReply = MISSING_INFO_REPLY_PATTERN.test(
     finalReply || "",
   );
@@ -167,16 +169,57 @@ export const receiveMessage = async (req, res) => {
       const mappedStatus = STATUS_MAP[status] || "pending";
 
       try {
+        const [[account]] = await db.sequelize.query(
+          `
+          SELECT tenant_id
+          FROM ${tableNames.WHATSAPP_ACCOUNT}
+          WHERE waba_id = ?
+            AND is_deleted = false
+          LIMIT 1
+          `,
+          { replacements: [wabaId] },
+        );
+
+        if (!account?.tenant_id) {
+          console.warn(
+            `[WEBHOOK] No tenant found for template status update WABA ${wabaId}`,
+          );
+          return res.sendStatus(200);
+        }
+
         // Update template status in DB
         const [[template]] = await db.sequelize.query(
-          `SELECT template_id, media_asset_id FROM ${tableNames.WHATSAPP_TEMPLATE} WHERE meta_template_id = ? OR template_name = ? LIMIT 1`,
-          { replacements: [templateId, templateName] },
+          `
+          SELECT
+            t.template_id,
+            COALESCE(t.media_asset_id, c.media_asset_id) AS media_asset_id
+          FROM ${tableNames.WHATSAPP_TEMPLATE} t
+          LEFT JOIN ${tableNames.WHATSAPP_TEMPLATE_COMPONENTS} c
+            ON c.template_id = t.template_id
+           AND c.component_type = 'header'
+          WHERE t.tenant_id = ?
+            AND t.is_deleted = false
+            AND (t.meta_template_id = ? OR t.template_name = ?)
+          LIMIT 1
+          `,
+          { replacements: [account.tenant_id, templateId, templateName] },
         );
 
         if (template) {
           await db.sequelize.query(
-            `UPDATE ${tableNames.WHATSAPP_TEMPLATE} SET status = ? WHERE template_id = ?`,
-            { replacements: [mappedStatus, template.template_id] },
+            `
+            UPDATE ${tableNames.WHATSAPP_TEMPLATE}
+            SET status = ?
+            WHERE template_id = ?
+              AND tenant_id = ?
+            `,
+            {
+              replacements: [
+                mappedStatus,
+                template.template_id,
+                account.tenant_id,
+              ],
+            },
           );
 
           // If approved and has media, mark media as approved
@@ -797,11 +840,15 @@ export const receiveMessage = async (req, res) => {
           contactsaved?.contact_id,
           phone_number_id,
           phone,
-          null,
+          botMsgResponse?.wamid || null,
           name,
           "bot",
           null,
           messageToSend,
+          "text",
+          null,
+          null,
+          botMsgResponse?.wamid ? "sent" : null,
         );
 
         const ioInstance = getIO();
@@ -826,24 +873,6 @@ export const receiveMessage = async (req, res) => {
           sender: "bot",
           created_at: new Date(),
         });
-
-        // Update bot message with WAMID for status tracking
-        if (botMsgResponse?.wamid && savedBotMsg?.id) {
-          try {
-            await db.sequelize.query(
-              `UPDATE messages SET wamid = ?, status = 'sent' WHERE id = ?`,
-              { replacements: [botMsgResponse.wamid, savedBotMsg.id] },
-            );
-            console.log(
-              `[WEBHOOK] Bot message ${savedBotMsg.id} updated with wamid: ${botMsgResponse.wamid}`,
-            );
-          } catch (updateErr) {
-            console.error(
-              "[WEBHOOK] Failed to update bot message wamid:",
-              updateErr.message,
-            );
-          }
-        }
 
         // Execute tag handler AFTER sending the AI reply
         // This ensures correct message ordering (e.g., "Let me check..." before slots list)
@@ -975,11 +1004,15 @@ export const receiveMessage = async (req, res) => {
                     pending.contact_id,
                     phone_number_id,
                     phone,
-                    null,
+                    botMsgResponse?.wamid || null,
                     pending.contactsaved?.name || "Bot",
                     "bot",
                     null,
                     messageToSend,
+                    "text",
+                    null,
+                    null,
+                    botMsgResponse?.wamid ? "sent" : null,
                   );
 
                   const io = getIO();
@@ -1002,17 +1035,6 @@ export const receiveMessage = async (req, res) => {
                     sender: "bot",
                     created_at: new Date(),
                   });
-
-                  if (botMsgResponse?.wamid && savedBotMsg?.id) {
-                    try {
-                      await db.sequelize.query(
-                        `UPDATE messages SET wamid = ?, status = 'sent' WHERE id = ?`,
-                        {
-                          replacements: [botMsgResponse.wamid, savedBotMsg.id],
-                        },
-                      );
-                    } catch (_) {}
-                  }
 
                   if (queuedTagToExecute) {
                     const { executeTagHandler } =

@@ -7,12 +7,13 @@ export const logger = {
     }
   },
   error: (...args) => {
-    if (isDev) {
-      console.error(...args);
-    }
+    console.error(...args);
   },
   info: (...args) => {
     console.log(...args);
+  },
+  warn: (...args) => {
+    console.warn(...args);
   },
 };
 

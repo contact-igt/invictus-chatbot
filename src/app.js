@@ -46,6 +46,7 @@ import { logger } from "./utils/logger.js";
 import cron from "node-cron";
 import { tableNames } from "./database/tableName.js";
 import { runHardDeleteCron } from "./utils/lifecycle/hardDeleteCron.js";
+import { runMissingMessageBillingReconciliationCron } from "./cron/reconciliationCron.js";
 
 dns.setDefaultResultOrder("ipv4first");
 
@@ -134,7 +135,9 @@ try {
   validateRazorpayConfig();
   logger.info("[PAYMENT] Razorpay configuration validated successfully");
 } catch (err) {
-  logger.warn(`[PAYMENT] ${err.message} — payment features will be unavailable until fixed`);
+  logger.warn(
+    `[PAYMENT] ${err.message} — payment features will be unavailable until fixed`,
+  );
 }
 
 startLeadHeatDecayCronService();
@@ -163,6 +166,15 @@ cron.schedule("0 2 * * *", () => {
   logger.debug("[CRON] Running daily reconciliation...");
   runDailyReconciliation();
 }); // Daily at 02:00 UTC
+
+cron.schedule("*/10 * * * *", () => {
+  logger.debug("[CRON] Running missing-message billing reconciliation...");
+  void runMissingMessageBillingReconciliationCron().catch((error) => {
+    logger.error(
+      `[CRON] Unhandled missing-message reconciliation failure: ${error.message}`,
+    );
+  });
+}); // Every 10 minutes — detect outbound messages missing billing artifacts
 
 // Master lifecycle hard-delete cron — runs at 04:00 UTC daily
 // Processes ALL Tier 1 tables (campaigns, templates, knowledge, contacts, doctors, etc.)
@@ -198,5 +210,3 @@ initSocket(server);
 server.listen(PORT, () => {
   logger.info("Server + Socket running on", PORT);
 });
-
-

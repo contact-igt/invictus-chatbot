@@ -196,6 +196,7 @@ export const getWeeklySummaryService = async (tenantId) => {
 
       // Generate AI summary based on metrics
       const summary = await generateWeeklySummary({
+        tenantId,
         weekNumber: week.weekNumber,
         totalChats,
         newLeads,
@@ -233,6 +234,7 @@ export const getWeeklySummaryService = async (tenantId) => {
  */
 const generateWeeklySummary = async (metrics) => {
   const {
+    tenantId,
     weekNumber,
     totalChats,
     newLeads,
@@ -270,7 +272,12 @@ Rules:
 Summary:`;
 
   try {
-    const aiSummary = await AiService("system", prompt, null, "weekly_summary");
+    const aiSummary = await AiService(
+      "system",
+      prompt,
+      tenantId,
+      "weekly_summary",
+    );
     return aiSummary?.trim() || buildFallbackSummary(metrics);
   } catch (err) {
     console.error(
@@ -417,6 +424,7 @@ export const getContactWeeklySummaryService = async (
 
       // Generate AI-powered contact-specific summary
       const summary = await generateContactSummary({
+        tenantId,
         contactName: contactInfo?.name || "Contact",
         messageCount,
         sentiment,
@@ -648,6 +656,7 @@ const calculateEngagementScore = ({
  * Generate AI-powered contact-specific summary narrative
  */
 const generateContactSummary = async ({
+  tenantId,
   contactName,
   messageCount,
   sentiment,
@@ -684,7 +693,7 @@ Summary:`;
     const aiSummary = await AiService(
       "system",
       prompt,
-      null,
+      tenantId,
       "contact_weekly_summary",
     );
     return (

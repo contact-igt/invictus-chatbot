@@ -14,6 +14,13 @@ import {
 } from "../../utils/billing/usageLimiter.js";
 import { recordHealthEvent } from "../../utils/billing/billingHealthMonitor.js";
 import { logger } from "../../utils/logger.js";
+import {
+  buildBillingContext,
+  createCorrelationId,
+  logBillingEvent,
+  recordBillingHealthEvent,
+} from "../../utils/healthEventService.js";
+import { resolveMessageBillingReconciliation } from "../../services/reconciliationService.js";
 
 const phoneUtil = libphonenumber.PhoneNumberUtil.getInstance();
 
@@ -24,6 +31,13 @@ const phoneUtil = libphonenumber.PhoneNumberUtil.getInstance();
 export const processBillingFromWebhook = async (tenant_id, statusUpdate) => {
   try {
     const { id: message_id, status, pricing, conversation } = statusUpdate;
+    const correlation_id = createCorrelationId("message_billing");
+    const billingContext = buildBillingContext({
+      tenant_id,
+      message_id,
+      wamid: message_id,
+      correlation_id,
+    });
 
     // Skip all billing if the tenant's WhatsApp account has a token error.
     // A broken token means no new messages are being sent, so billing should stop.
@@ -33,17 +47,38 @@ export const processBillingFromWebhook = async (tenant_id, statusUpdate) => {
         { replacements: [tenant_id] },
       );
       if (acctRows[0]?.status === "token_error") {
-        logger.info(
-          `[BILLING] Skipping Meta billing for tenant ${tenant_id} — account has token_error status`,
+        logBillingEvent(
+          "info",
+          "[BILLING] Skipping Meta billing because account has token_error status",
+          billingContext,
         );
         return;
       }
     } catch (checkErr) {
-      logger.error("[BILLING] Token status check failed:", checkErr.message);
+      logBillingEvent(
+        "error",
+        `[BILLING] Token status check failed: ${checkErr.message}`,
+        billingContext,
+      );
     }
 
     // We only create entries when Meta provides the pricing object on the "sent" status of a new conversation window.
     if (!pricing) {
+      await recordBillingHealthEvent({
+        event_type: "pricing_missing",
+        tenant_id,
+        error_message: `Webhook billing skipped because pricing payload is missing for message ${message_id}.`,
+        metadata: {
+          status,
+          conversation_id: conversation?.id || null,
+        },
+        context: billingContext,
+      });
+      logBillingEvent(
+        "warn",
+        "[BILLING] Webhook pricing payload missing; skipping billing until reconciliation",
+        billingContext,
+      );
       return;
     }
 
@@ -69,6 +104,8 @@ export const processBillingFromWebhook = async (tenant_id, statusUpdate) => {
       },
     });
 
+    let shouldCreateLedger = created;
+
     // If record already existed, just update status if changed
     if (!created) {
       if (usageRecord.status !== status) {
@@ -85,7 +122,38 @@ export const processBillingFromWebhook = async (tenant_id, statusUpdate) => {
           });
         } catch (_) {}
       }
-      return;
+
+      const existingLedger = await db.BillingLedger.findOne({
+        where: { message_usage_id: usageRecord.id },
+      });
+
+      if (existingLedger) {
+        await recordBillingHealthEvent({
+          event_type: "duplicate_webhook",
+          tenant_id,
+          error_message: `Duplicate webhook ignored for message ${message_id}.`,
+          metadata: {
+            usage_row_id: usageRecord.id,
+            ledger_id: existingLedger.id,
+            status,
+          },
+          context: billingContext,
+        });
+        await resolveMessageBillingReconciliation(tenant_id, message_id);
+        return;
+      }
+
+      await recordBillingHealthEvent({
+        event_type: "missing_ledger_detected",
+        tenant_id,
+        error_message: `message_usage ${usageRecord.id} exists without billing_ledger for message ${message_id}. Retrying ledger creation from duplicate webhook.`,
+        metadata: {
+          usage_row_id: usageRecord.id,
+          status,
+        },
+        context: billingContext,
+      });
+      shouldCreateLedger = true;
     }
 
     // 2. Detect country from recipient phone number
@@ -129,6 +197,10 @@ export const processBillingFromWebhook = async (tenant_id, statusUpdate) => {
     const totalCostInr = costResult.totalCostInr;
     const usdToInrRate = costResult.conversionRate;
     const pricingVersion = costResult.pricingVersion;
+    const pricedBillingContext = buildBillingContext({
+      ...billingContext,
+      pricing_version: pricingVersion,
+    });
 
     let template_name = null;
     let campaign_name = null;
@@ -187,27 +259,63 @@ export const processBillingFromWebhook = async (tenant_id, statusUpdate) => {
           monthly: usageCheck.monthly,
         });
       } catch (_) {}
-      // MessageUsage already created above — skip cost billing
+      // MessageUsage already created — create a ledger entry so it appears in Transaction Ledger
+      try {
+        await db.BillingLedger.create({
+          tenant_id,
+          entry_type: "message",
+          message_usage_id: usageRecord.id,
+          template_name: null,
+          campaign_name: null,
+          category,
+          country,
+          rate: 0,
+          meta_cost: 0,
+          platform_fee: 0,
+          total_cost: 0,
+          markup_percent: 0,
+          usd_to_inr_rate: 94,
+          total_cost_inr: 0,
+          billing_status: "insufficient_balance",
+        });
+        await resolveMessageBillingReconciliation(tenant_id, message_id);
+      } catch (ledgerErr) {
+        logger.warn(
+          "[BILLING] Failed to create ledger entry for usage-limit hit:",
+          ledgerErr.message,
+        );
+      }
       invalidateUsageCache(tenant_id);
       return;
     }
 
     // 6. Create BillingLedger Record (both modes — for reporting)
     await db.sequelize.transaction(async (t) => {
+      if (!shouldCreateLedger) {
+        return;
+      }
+
       // Check for duplicate billing first
       const existingLedger = await db.BillingLedger.findOne({
         where: { message_usage_id: usageRecord.id },
         transaction: t,
       });
       if (existingLedger) {
-        logger.info(
+        logBillingEvent(
+          "info",
           `[BILLING] Skipping duplicate billing for message_usage_id ${usageRecord.id}`,
+          pricedBillingContext,
         );
+        await resolveMessageBillingReconciliation(tenant_id, message_id, t);
         return;
       }
 
-      if (totalCostInr > 0 && billing_mode === "prepaid") {
-        // PREPAID: Deduct from wallet FIRST, then create ledger
+      // Determine billing_status before creating ledger
+      let billingStatusForEntry = "charged";
+      if (totalCostInr === 0) {
+        billingStatusForEntry = "free";
+      } else if (billing_mode === "prepaid") {
+        // PREPAID: Deduct from wallet FIRST
         const deductResult = await deductWallet(
           tenant_id,
           totalCostInr,
@@ -230,12 +338,11 @@ export const processBillingFromWebhook = async (tenant_id, statusUpdate) => {
                 totalCostInr - deductResult.oldBalance,
             });
           } catch (_) {}
-          // Deduction failed — do NOT create ledger entry
-          return;
+          billingStatusForEntry = "insufficient_balance";
         }
       }
 
-      // Create ledger AFTER successful deduction (prepaid) or directly (postpaid)
+      // Always create ledger entry (even on deduction failure) so it appears in the ledger
       const ledger = await db.BillingLedger.create(
         {
           tenant_id,
@@ -254,6 +361,7 @@ export const processBillingFromWebhook = async (tenant_id, statusUpdate) => {
           total_cost_inr: totalCostInr,
           conversion_rate_used: usdToInrRate,
           pricing_version: pricingVersion,
+          billing_status: billingStatusForEntry,
         },
         { transaction: t },
       );
@@ -388,6 +496,8 @@ export const processBillingFromWebhook = async (tenant_id, statusUpdate) => {
       } catch (summaryErr) {
         logger.error("[BILLING] Summary update error:", summaryErr.message);
       }
+
+      await resolveMessageBillingReconciliation(tenant_id, message_id, t);
     });
 
     // Invalidate usage cache
@@ -401,8 +511,10 @@ export const processBillingFromWebhook = async (tenant_id, statusUpdate) => {
       if (wallet) currentBalance = parseFloat(wallet.balance);
     } catch (e) {}
 
-    logger.info(
-      `[BILLING] ${billing_mode.toUpperCase()} billed ${category} for tenant ${tenant_id}: ₹${totalCostInr.toFixed(4)} ($${totalCostUsd.toFixed(4)} × ${usdToInrRate}). Balance: ₹${currentBalance.toFixed(4)}`,
+    logBillingEvent(
+      "info",
+      `[BILLING] ${billing_mode.toUpperCase()} billed ${category}: ₹${totalCostInr.toFixed(4)} ($${totalCostUsd.toFixed(4)} × ${usdToInrRate}). Balance: ₹${currentBalance.toFixed(4)}`,
+      pricedBillingContext,
     );
 
     try {
@@ -471,30 +583,49 @@ export const processBillingFromWebhook = async (tenant_id, statusUpdate) => {
  */
 export const getBillingKpiService = async (tenant_id, startDate, endDate) => {
   try {
-    const whereClause = { tenant_id };
+    const ledgerReplacements = [tenant_id];
+    let ledgerDateClause = "";
 
     if (startDate && endDate) {
-      whereClause.created_at = {
-        [Op.between]: [new Date(startDate), new Date(endDate)],
-      };
+      ledgerDateClause = " AND created_at BETWEEN ? AND ?";
+      ledgerReplacements.push(new Date(startDate), new Date(endDate));
     }
 
-    // 1. Calculate category-wise spent using aggregation (INR — actual wallet deductions)
-    const categoryTotals = await db.BillingLedger.findAll({
-      attributes: [
-        "category",
-        [
-          db.sequelize.fn("SUM", db.sequelize.col("total_cost_inr")),
-          "totalSpentInr",
-        ],
-        [
-          db.sequelize.fn("SUM", db.sequelize.col("total_cost")),
-          "totalSpentUsd",
-        ],
-      ],
-      where: whereClause,
-      group: ["category"],
-    });
+    const [statusTotalsRows] = await db.sequelize.query(
+      `
+      SELECT
+        COALESCE(SUM(CASE WHEN billing_status = 'charged' THEN total_cost_inr ELSE 0 END), 0) AS charged_total,
+        COALESCE(SUM(CASE WHEN billing_status = 'insufficient_balance' THEN total_cost_inr ELSE 0 END), 0) AS unpaid_total,
+        COALESCE(SUM(CASE WHEN billing_status = 'free' THEN total_cost_inr ELSE 0 END), 0) AS free_total,
+        COALESCE(SUM(total_cost_inr), 0) AS attempted_total
+      FROM ${tableNames.BILLING_LEDGER}
+      WHERE tenant_id = ?${ledgerDateClause}
+      `,
+      {
+        replacements: ledgerReplacements,
+      },
+    );
+
+    const [categoryTotals] = await db.sequelize.query(
+      `
+      SELECT
+        category,
+        COALESCE(SUM(CASE WHEN billing_status = 'charged' THEN total_cost_inr ELSE 0 END), 0) AS totalSpentInr,
+        COALESCE(SUM(CASE WHEN billing_status = 'charged' THEN total_cost ELSE 0 END), 0) AS totalSpentUsd
+      FROM ${tableNames.BILLING_LEDGER}
+      WHERE tenant_id = ?${ledgerDateClause}
+      GROUP BY category
+      `,
+      {
+        replacements: ledgerReplacements,
+      },
+    );
+
+    const chargedTotal = parseFloat(statusTotalsRows[0]?.charged_total) || 0;
+    const unpaidTotal = parseFloat(statusTotalsRows[0]?.unpaid_total) || 0;
+    const freeTotal = parseFloat(statusTotalsRows[0]?.free_total) || 0;
+    const attemptedTotal =
+      parseFloat(statusTotalsRows[0]?.attempted_total) || 0;
 
     let totalSpentInr = 0;
     let totalSpentUsd = 0;
@@ -505,8 +636,8 @@ export const getBillingKpiService = async (tenant_id, startDate, endDate) => {
 
     categoryTotals.forEach((result) => {
       const category = result.category;
-      const totalInr = parseFloat(result.get("totalSpentInr")) || 0;
-      const totalUsd = parseFloat(result.get("totalSpentUsd")) || 0;
+      const totalInr = parseFloat(result.totalSpentInr) || 0;
+      const totalUsd = parseFloat(result.totalSpentUsd) || 0;
       totalSpentInr += totalInr;
       totalSpentUsd += totalUsd;
       if (category === "marketing") marketingSpent = totalInr;
@@ -562,6 +693,14 @@ export const getBillingKpiService = async (tenant_id, startDate, endDate) => {
 
     return {
       totalSpentEstimated: totalSpentInr,
+      charged_total: chargedTotal,
+      unpaid_total: unpaidTotal,
+      free_total: freeTotal,
+      attempted_total: attemptedTotal,
+      chargedTotal,
+      unpaidTotal,
+      freeTotal,
+      attemptedTotal,
       totalSpentUsd,
       marketingSpent,
       utilitySpent,
@@ -615,7 +754,7 @@ export const getBillingLedgerService = async (
         {
           model: db.MessageUsage,
           as: "messageUsage",
-          attributes: ["status", "conversation_id"],
+          attributes: ["status", "conversation_id", "message_id"],
           include: [
             {
               model: db.Messages,
@@ -627,24 +766,39 @@ export const getBillingLedgerService = async (
         {
           model: db.AiTokenUsage,
           as: "aiTokenUsage",
-          attributes: ["model", "source", "prompt_tokens", "completion_tokens", "total_tokens", "billed"],
+          attributes: [
+            "model",
+            "source",
+            "prompt_tokens",
+            "completion_tokens",
+            "total_tokens",
+            "billed",
+          ],
         },
       ],
     });
 
     const records = rows.map((ledger) => {
       const isAi = ledger.entry_type === "ai";
+      const aiSource = ledger.aiTokenUsage?.source;
+      const aiModel = ledger.aiTokenUsage?.model;
+      const messagePhone = ledger.messageUsage?.messageDetails?.phone || null;
+      const messageId = ledger.messageUsage?.message_id || null;
       return {
         id: ledger.id,
         date: ledger.createdAt,
         entryType: ledger.entry_type,
         category: ledger.category,
-        template: isAi ? ledger.aiTokenUsage?.model || "—" : ledger.template_name || "—",
+        template: isAi
+          ? [aiSource, aiModel].filter(Boolean).join(" · ") || "—"
+          : ledger.template_name || "—",
         campaign: ledger.campaign_name || "—",
         messages: isAi ? null : 1,
         tokens: isAi ? ledger.aiTokenUsage?.total_tokens : null,
-        recipient: isAi ? ledger.aiTokenUsage?.source || "—" : ledger.messageUsage?.messageDetails?.phone || "—",
-        recipientName: isAi ? "AI Platform" : ledger.messageUsage?.messageDetails?.name || null,
+        recipient: isAi ? "—" : messagePhone || "—",
+        recipientName: isAi ? null : ledger.messageUsage?.messageDetails?.name || null,
+        // Internal: used for campaign-recipient fallback lookup, stripped before return
+        _messageId: isAi ? null : (!messagePhone ? messageId : null),
         country: ledger.country || "Global",
         rate: isAi ? "AI Usage" : ledger.rate,
         metaCost: isAi ? null : ledger.meta_cost,
@@ -656,9 +810,42 @@ export const getBillingLedgerService = async (
           ledger.total_cost_inr ||
           parseFloat(ledger.total_cost) *
             (parseFloat(ledger.usd_to_inr_rate) || DEFAULT_USD_TO_INR),
-        status: isAi ? (ledger.aiTokenUsage?.billed ? "billed" : "unbilled") : ledger.messageUsage?.status || "Unknown",
+        billingStatus: ledger.billing_status || "charged",
+        status: isAi
+          ? ledger.aiTokenUsage?.billed
+            ? "billed"
+            : "unbilled"
+          : ledger.billing_status === "insufficient_balance"
+            ? "unpaid"
+            : ledger.messageUsage?.status || "unknown",
       };
     });
+
+    // Fallback: for SERVICE entries missing a phone (wamid not in Messages table),
+    // try to resolve phone via WhatsappCampaignRecipients.meta_message_id
+    const missingIds = records
+      .filter((r) => r._messageId)
+      .map((r) => r._messageId);
+
+    if (missingIds.length > 0) {
+      const campaignRecipients = await db.WhatsappCampaignRecipients.findAll({
+        where: { meta_message_id: missingIds },
+        attributes: ["meta_message_id", "mobile_number"],
+        raw: true,
+      });
+      const recipientMap = {};
+      campaignRecipients.forEach((cr) => {
+        recipientMap[cr.meta_message_id] = cr.mobile_number;
+      });
+      records.forEach((r) => {
+        if (r._messageId && recipientMap[r._messageId]) {
+          r.recipient = recipientMap[r._messageId];
+        }
+      });
+    }
+
+    // Strip internal field before returning
+    records.forEach((r) => delete r._messageId);
 
     return {
       records,

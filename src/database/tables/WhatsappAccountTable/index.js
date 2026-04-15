@@ -35,7 +35,7 @@ export const WhatsappAccountTable = (sequelize, Sequelize) => {
         type: Sequelize.TEXT, // encrypted token
         allowNull: false,
       },
-  
+
       app_id: {
         type: Sequelize.STRING,
         allowNull: true,
@@ -52,6 +52,7 @@ export const WhatsappAccountTable = (sequelize, Sequelize) => {
           "verified", // verification successful
           "active", // ready to send messages
           "inactive", // manually disabled
+          "token_error", // Meta access token invalid or insufficient permissions
           "token_expired",
           "failed",
         ),

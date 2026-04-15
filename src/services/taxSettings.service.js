@@ -14,6 +14,7 @@
 import db from "../database/index.js";
 import { logger } from "../utils/logger.js";
 import { getIO } from "../middlewares/socket/socket.js";
+import { recordBillingHealthEvent } from "../utils/healthEventService.js";
 
 const CACHE_TTL_MS = 60 * 1000; // 60 seconds
 const DEFAULT_GST_RATE = 18.0;
@@ -22,6 +23,25 @@ const GST_AUDIT_COMPAT_ACTION_TYPE = "pricing_update";
 
 let _cachedRate = null;
 let _cacheTimestamp = 0;
+let _lastFallbackHealthReportAt = 0;
+
+async function reportGstFallback(message, metadata = {}) {
+  const now = Date.now();
+  if (now - _lastFallbackHealthReportAt < CACHE_TTL_MS) {
+    return;
+  }
+
+  _lastFallbackHealthReportAt = now;
+  await recordBillingHealthEvent({
+    event_type: "gst_fallback",
+    tenant_id: null,
+    error_message: message,
+    metadata: {
+      source: "tax_settings_service",
+      ...metadata,
+    },
+  });
+}
 
 // ─── Internal helpers ────────────────────────────────────────────────────────
 
@@ -131,12 +151,20 @@ export const getActiveGSTRate = async () => {
       logger.warn(
         `[TAX] No active GST rate found in tax_settings — using default ${DEFAULT_GST_RATE}%`,
       );
+      await reportGstFallback(
+        `No active GST rate found in tax_settings. Using default ${DEFAULT_GST_RATE}%.`,
+        { fallbackRate: DEFAULT_GST_RATE },
+      );
     }
 
     _setCache(rate);
     return rate;
   } catch (err) {
     logger.error(`[TAX] Failed to fetch active GST rate: ${err.message}`);
+    await reportGstFallback(
+      `Failed to fetch active GST rate: ${err.message}. Using default ${DEFAULT_GST_RATE}%.`,
+      { fallbackRate: DEFAULT_GST_RATE },
+    );
     // Do NOT cache the fallback so the next request retries the DB
     return DEFAULT_GST_RATE;
   }

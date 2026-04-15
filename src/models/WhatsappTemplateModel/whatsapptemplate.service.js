@@ -19,6 +19,30 @@ const STATUS_MAP = {
   DISABLED: "disabled",
 };
 
+const getTemplateLinkedMediaAssetId = async (
+  templateId,
+  transaction = null,
+) => {
+  const [[templateMedia]] = await db.sequelize.query(
+    `
+    SELECT COALESCE(t.media_asset_id, c.media_asset_id) AS media_asset_id
+    FROM ${tableNames.WHATSAPP_TEMPLATE} t
+    LEFT JOIN ${tableNames.WHATSAPP_TEMPLATE_COMPONENTS} c
+      ON c.template_id = t.template_id
+     AND c.component_type = 'header'
+    WHERE t.template_id = ?
+      AND t.is_deleted = false
+    LIMIT 1
+    `,
+    {
+      replacements: [templateId],
+      transaction,
+    },
+  );
+
+  return templateMedia?.media_asset_id || null;
+};
+
 // Valid Meta WhatsApp language codes
 const VALID_META_LANGUAGE_CODES = new Set([
   "af",
@@ -843,13 +867,17 @@ export const syncWhatsappTemplateStatusService = async ({
 
     await transaction.commit();
 
+    const linkedMediaAssetId = await getTemplateLinkedMediaAssetId(
+      template.template_id,
+    );
+
     // Keep gallery media approval in sync with template sync flow (same as webhook behavior).
-    if (mappedStatus === "approved" && template.media_asset_id) {
+    if (mappedStatus === "approved" && linkedMediaAssetId) {
       try {
-        await markMediaAsApprovedService(template.media_asset_id);
+        await markMediaAsApprovedService(linkedMediaAssetId);
       } catch (mediaErr) {
         console.error(
-          `[TEMPLATE-SYNC] Failed to auto-approve gallery media ${template.media_asset_id}:`,
+          `[TEMPLATE-SYNC] Failed to auto-approve gallery media ${linkedMediaAssetId}:`,
           mediaErr.message,
         );
       }

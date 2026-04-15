@@ -4,9 +4,30 @@ import {
   estimateAiCost,
 } from "../../utils/billing/costEstimator.js";
 import { checkUsageLimit } from "../../utils/billing/usageLimiter.js";
+import { recordHealthEvent } from "../../utils/billing/billingHealthMonitor.js";
 
 // Default token estimate for AI calls when exact count is unknown
 const AVG_TOKEN_ESTIMATE = { prompt: 1000, completion: 500 };
+
+const handleBillingGuardFailure = async (res, guardName, tenant_id, error) => {
+  console.error(`[BILLING-GUARD] ${guardName} error:`, error.message);
+  await recordHealthEvent(
+    "billing_failure",
+    tenant_id || null,
+    `${guardName} failed: ${error.message}`,
+    {
+      guard: guardName,
+      stack: error.stack,
+    },
+  );
+
+  return res.status(503).json({
+    success: false,
+    blocked: true,
+    reason:
+      "Billing validation is temporarily unavailable. Please try again shortly.",
+  });
+};
 
 /**
  * Core billing access check. estimated_cost is REQUIRED — never defaults to 0.
@@ -127,8 +148,11 @@ export const requireSufficientBalance = async (req, res, next) => {
       attributes: ["country", "owner_country_code", "timezone"],
       raw: true,
     });
-    const isIndia = (tenant?.owner_country_code === "91" || tenant?.timezone === "Asia/Kolkata");
-    const country = req.body.country || tenant?.country || (isIndia ? "IN" : "Global");
+    const isIndia =
+      tenant?.owner_country_code === "91" ||
+      tenant?.timezone === "Asia/Kolkata";
+    const country =
+      req.body.country || tenant?.country || (isIndia ? "IN" : "Global");
 
     // If template_id is provided, look up the actual template category from DB
     if (req.body.template_id) {
@@ -168,11 +192,12 @@ export const requireSufficientBalance = async (req, res, next) => {
 
     next();
   } catch (error) {
-    console.error(
-      "[BILLING-GUARD] requireSufficientBalance error:",
-      error.message,
+    return handleBillingGuardFailure(
+      res,
+      "requireSufficientBalance",
+      req.user?.tenant_id,
+      error,
     );
-    next(); // Fail open — don't block on guard error
   }
 };
 
@@ -212,8 +237,12 @@ export const requireAiAccess = async (req, res, next) => {
 
     next();
   } catch (error) {
-    console.error("[BILLING-GUARD] requireAiAccess error:", error.message);
-    next();
+    return handleBillingGuardFailure(
+      res,
+      "requireAiAccess",
+      req.user?.tenant_id,
+      error,
+    );
   }
 };
 
@@ -262,8 +291,11 @@ export const requireCampaignAccess = async (req, res, next) => {
       attributes: ["country", "owner_country_code", "timezone"],
       raw: true,
     });
-    const isIndia = (tenant?.owner_country_code === "91" || tenant?.timezone === "Asia/Kolkata");
-    const country = req.body.country || tenant?.country || (isIndia ? "IN" : "Global");
+    const isIndia =
+      tenant?.owner_country_code === "91" ||
+      tenant?.timezone === "Asia/Kolkata";
+    const country =
+      req.body.country || tenant?.country || (isIndia ? "IN" : "Global");
 
     const cost = await estimateMetaCost(category, country);
     const estimated_cost = cost.totalCostInr * recipientCount;
@@ -281,10 +313,11 @@ export const requireCampaignAccess = async (req, res, next) => {
 
     next();
   } catch (error) {
-    console.error(
-      "[BILLING-GUARD] requireCampaignAccess error:",
-      error.message,
+    return handleBillingGuardFailure(
+      res,
+      "requireCampaignAccess",
+      req.user?.tenant_id,
+      error,
     );
-    next();
   }
 };
