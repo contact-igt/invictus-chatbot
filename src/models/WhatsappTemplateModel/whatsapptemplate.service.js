@@ -1445,8 +1445,11 @@ export const updateWhatsappTemplateService = async (
       if (template.status === "approved") {
         const now = Date.now();
 
-        // 1. 24-hour cooldown — prefer last_edited_at, but fall back to updated_at for legacy rows
-        const lastEditedAt = template.last_edited_at || template.updated_at;
+        // 1. 24-hour cooldown — ONLY based on last_edited_at (last successful Meta edit).
+        //    created_at / updated_at are intentionally ignored: the 24h lock starts
+        //    AFTER AN EDIT, not after creation or approval.
+        //    If last_edited_at is null the template has never been edited → allow immediately.
+        const lastEditedAt = template.last_edited_at ?? null;
         if (lastEditedAt) {
           const hoursSinceEdit =
             (now - new Date(lastEditedAt).getTime()) / 3_600_000;
@@ -1623,6 +1626,47 @@ export const updateWhatsappTemplateService = async (
           metaData?.error_user_msg ||
           metaData?.message ||
           metaErr.message;
+
+        // ── Edge case: Meta rejects because the template was edited outside our system
+        //    (e.g., directly in Meta Business Manager UI). Our DB has no record of that edit,
+        //    so our pre-flight check passes but Meta returns a 24-hour error.
+        //    Record the lock now so future attempts respect it.
+        const is24hRejection =
+          metaData?.code === 1018007 ||
+          (typeof metaMsg === "string" &&
+            metaMsg.toLowerCase().includes("24 hour"));
+
+        if (is24hRejection && template.status === "approved") {
+          try {
+            // Use a fresh query (no transaction) so this persists even though the
+            // main transaction will be rolled back.
+            const lockTs = new Date()
+              .toISOString()
+              .slice(0, 19)
+              .replace("T", " ");
+            await db.sequelize.query(
+              `UPDATE ${tableNames.WHATSAPP_TEMPLATE}
+               SET last_edited_at = ?
+               WHERE template_id = ? AND is_deleted = false`,
+              { replacements: [lockTs, template_id] },
+            );
+          } catch (lockErr) {
+            console.error(
+              "[TEMPLATE-EDIT] Failed to record Meta 24h lock:",
+              lockErr.message,
+            );
+          }
+          const lockErr = new Error(
+            `Meta rejected this edit: the template was edited recently (possibly from the Meta UI). Try again in 24 hours.`,
+          );
+          lockErr.errorCode = "EDIT_LIMIT_24H";
+          lockErr.hoursRemaining = 24;
+          lockErr.nextEditAt = new Date(
+            Date.now() + 24 * 3_600_000,
+          ).toISOString();
+          throw lockErr;
+        }
+
         throw new Error(`Template edit failed on Meta: ${metaMsg}`);
       }
     }

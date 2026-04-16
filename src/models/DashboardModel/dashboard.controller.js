@@ -83,6 +83,19 @@ export const getDashboardController = async (req, res) => {
             };
         });
 
+        // ─── Normalize tier: DB may contain old "1K MSG LIMIT" format (default before WABA sync)
+        //     Always return a TIER_* key so the frontend lookup works correctly.
+        const rawTier = stats.waba?.tier || "TIER_NOT_SET";
+        const OLD_TIER_MAP = {
+            "1K MSG LIMIT":    "TIER_2K",
+            "10K MSG LIMIT":   "TIER_10K",
+            "100K MSG LIMIT":  "TIER_100K",
+            "UNLIMITED":       "TIER_UNLIMITED",
+        };
+        const normalizedTier = rawTier.startsWith("TIER_")
+            ? rawTier
+            : (OLD_TIER_MAP[rawTier] ?? "TIER_NOT_SET");
+
         // ─── Final Premium Response JSON ─────────────────────────────────
         const responseData = {
             period:   stats.periodLabel,
@@ -91,9 +104,10 @@ export const getDashboardController = async (req, res) => {
                 status:  stats.waba?.status === "active" ? "Live" : (stats.waba?.status || "Unknown"),
                 quality: stats.waba?.quality || "GREEN",
                 region:  stats.waba?.region  || "Global",
-                tier:    stats.waba?.tier    || "1K MSG LIMIT",
-                rolling24hUsed:  stats.waba?.rolling24hUsed ?? 0,
-                sevenDayUnique:  stats.waba?.sevenDayUnique ?? 0
+                tier:    normalizedTier,
+                rolling24hUsed:  stats.waba?.rolling24hUsed  ?? 0,
+                sevenDayUnique:  stats.waba?.sevenDayUnique  ?? 0,
+                thirtyDayUnique: stats.waba?.thirtyDayUnique ?? 0,
             },
             header: {
                 revenueToday:     `₹${stats.header.revenueToday}`,

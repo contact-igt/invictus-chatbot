@@ -417,6 +417,8 @@ export const updateWhatsappTemplateController = async (req, res) => {
       data: result,
     });
   } catch (err) {
+    // 24h lock — thrown either by our pre-flight check (last_edited_at) or when
+    // Meta itself rejects the edit (e.g. template edited from Meta UI).
     if (err.errorCode === "EDIT_LIMIT_24H") {
       return res.status(429).json({
         message: err.message,
