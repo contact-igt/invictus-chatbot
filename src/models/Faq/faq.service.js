@@ -33,7 +33,16 @@ export const listFaqReviewsService = async (tenant_id, status, page, limit) => {
   const dataQuery = `
     SELECT fr.id, fr.question, fr.normalized_question, fr.agent_category, fr.agent_reason,
            fr.doctor_answer, fr.whatsapp_number, fr.status, fr.add_to_kb, fr.is_active,
-           fr.reviewed_by, fr.answered_at, fr.deleted_at, fr.created_at, fr.updated_at,
+           fr.reviewed_by,
+           CASE
+             WHEN fr.reviewed_by IS NOT NULL
+              AND TRIM(fr.reviewed_by) <> ''
+              AND fr.reviewed_by NOT LIKE '%@%'
+               THEN fr.reviewed_by
+             WHEN fr.status = 'pending_review' THEN 'System'
+             ELSE 'Admin'
+           END AS creator_name,
+           fr.answered_at, fr.deleted_at, fr.created_at, fr.updated_at,
            fk.id AS knowledge_entry_id
     FROM ${tableNames.FAQ_REVIEWS} fr
     LEFT JOIN ${tableNames.FAQ_KNOWLEDGE_SOURCE} fk
@@ -598,7 +607,7 @@ export const editFaqKnowledgeEntryService = async (
   });
 };
 
-// ─── Remove FAQ Knowledge Entry (soft — deactivates AI retrieval) ─────────
+// ─── Remove FAQ Knowledge Entry (hard delete) ─────────────────────────────
 export const removeFaqKnowledgeEntryService = async (id, tenant_id) => {
   return db.sequelize.transaction(async (transaction) => {
     const [rows] = await db.sequelize.query(
@@ -613,18 +622,18 @@ export const removeFaqKnowledgeEntryService = async (id, tenant_id) => {
     if (!rows.length) return false;
 
     await db.sequelize.query(
-      `UPDATE ${tableNames.FAQ_KNOWLEDGE_SOURCE}
-       SET is_active = false, updated_at = NOW()
+      `DELETE FROM ${tableNames.FAQ_KNOWLEDGE_SOURCE}
        WHERE id = ? AND tenant_id = ?`,
       { replacements: [id, tenant_id], transaction },
     );
 
-    await db.sequelize.query(
-      `UPDATE ${tableNames.FAQ_REVIEWS}
-       SET is_active = false, updated_at = NOW()
-       WHERE id = ? AND tenant_id = ?`,
-      { replacements: [rows[0].faq_review_id, tenant_id], transaction },
-    );
+    if (rows[0].faq_review_id) {
+      await db.sequelize.query(
+        `DELETE FROM ${tableNames.FAQ_REVIEWS}
+         WHERE id = ? AND tenant_id = ?`,
+        { replacements: [rows[0].faq_review_id, tenant_id], transaction },
+      );
+    }
 
     if (rows[0].source_id) {
       await syncFaqKnowledgeChunks(tenant_id, rows[0].source_id, transaction);

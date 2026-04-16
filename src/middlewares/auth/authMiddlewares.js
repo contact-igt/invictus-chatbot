@@ -4,6 +4,21 @@ import { getManagementByIdService } from "../../models/ManagementModel/managemen
 import { findTenantUserByIdService } from "../../models/TenantUserModel/tenantuser.service.js";
 import { findTenantByIdService } from "../../models/TenantModel/tenant.service.js";
 
+const buildDisplayName = (user = {}) => {
+  const username = String(user?.username || user?.name || "").trim();
+  const title = String(user?.title || "").trim();
+
+  if (title && username) {
+    const normalizedTitle = title.toLowerCase();
+    const titleRegex = new RegExp(`\\b${normalizedTitle}\\b`, "i");
+    if (!titleRegex.test(username)) {
+      return `${title}. ${username}`;
+    }
+  }
+
+  return username || "";
+};
+
 /* =========================
    TOKEN GENERATORS
 ========================= */
@@ -88,6 +103,11 @@ export const authenticate = async (req, res, next) => {
           message: "Your account has been deactivated. Contact administrator.",
         });
       }
+
+      req.user.management_id = user.management_id;
+      req.user.username = user.username;
+      req.user.email = user.email || null;
+      req.user.name = buildDisplayName(user) || user.email || null;
     }
 
     // 🟢 TENANT USER CHECK
@@ -110,6 +130,8 @@ export const authenticate = async (req, res, next) => {
       // Add useful user info to req.user
       req.user.tenant_user_id = user.tenant_user_id;
       req.user.username = user.username;
+      req.user.email = user.email || null;
+      req.user.name = buildDisplayName(user) || user.email || null;
 
       // 🔴 GLOBAL TENANT STATUS CHECK
       const tenant = await findTenantByIdService(decoded.tenant_id);
