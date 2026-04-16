@@ -1,6 +1,7 @@
 import db from "../../../database/index.js";
 import { tableNames } from "../../../database/tableName.js";
 import { classifyForFaq } from "../questionUnderstandingAgent.js";
+import { getIO } from "../../../middlewares/socket/socket.js";
 
 /**
  * MISSING_KNOWLEDGE Tag Handler
@@ -24,6 +25,28 @@ import { classifyForFaq } from "../questionUnderstandingAgent.js";
 
 // How recently (in hours) the same question must have been asked to skip insert
 const DEDUPE_WINDOW_HOURS = 24;
+
+const emitFaqRealtimeUpdate = ({
+  tenant_id,
+  action,
+  faq_id = null,
+  status = null,
+  is_active = null,
+}) => {
+  try {
+    const io = getIO();
+    io.to(`tenant-${tenant_id}`).emit("faq-updated", {
+      tenant_id,
+      action,
+      faq_id,
+      status,
+      is_active,
+      emitted_at: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.warn(`[FAQ-SOCKET] Failed to emit ${action}:`, err.message);
+  }
+};
 
 export const execute = async (tagPayload, context, cleanMessage) => {
   const tenantId = context?.tenant_id;
@@ -77,7 +100,7 @@ export const execute = async (tagPayload, context, cleanMessage) => {
     }
 
     // ── Step 3: Insert pending_review row ─────────────────────────────────
-    await db.sequelize.query(
+    const [insertResult] = await db.sequelize.query(
       `INSERT INTO ${tableNames.FAQ_REVIEWS}
          (tenant_id, question, normalized_question, agent_category, agent_reason,
           whatsapp_number, status, add_to_kb, is_active, created_at, updated_at)
@@ -94,8 +117,21 @@ export const execute = async (tagPayload, context, cleanMessage) => {
       },
     );
 
+    const faqId =
+      insertResult && typeof insertResult.insertId === "number"
+        ? insertResult.insertId
+        : null;
+
+    emitFaqRealtimeUpdate({
+      tenant_id: tenantId,
+      action: "faq-created",
+      faq_id: faqId,
+      status: "pending_review",
+      is_active: true,
+    });
+
     console.log(
-      `[MISSING-KNOWLEDGE] ✓ FAQ pending_review created for tenant ${tenantId}: "${normalizedQ}"`,
+      `[MISSING-KNOWLEDGE] ✓ FAQ pending_review created for tenant ${tenantId}: "${normalizedQ}" (faq_id: ${faqId ?? "unknown"})`,
     );
   } catch (err) {
     // Handler errors must never crash the main message flow

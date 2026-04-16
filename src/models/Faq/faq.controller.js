@@ -12,6 +12,29 @@ import {
   editFaqKnowledgeEntryService,
   removeFaqKnowledgeEntryService,
 } from "./faq.service.js";
+import { getIO } from "../../middlewares/socket/socket.js";
+
+const emitFaqRealtimeUpdate = ({
+  tenant_id,
+  action,
+  faq_id = null,
+  status = null,
+  is_active = null,
+}) => {
+  try {
+    const io = getIO();
+    io.to(`tenant-${tenant_id}`).emit("faq-updated", {
+      tenant_id,
+      action,
+      faq_id,
+      status,
+      is_active,
+      emitted_at: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.warn(`[FAQ-SOCKET] Failed to emit ${action}:`, err.message);
+  }
+};
 
 // ─── List FAQ Reviews  GET /faq-reviews ──────────────────────────────────
 export const listFaqReviewsController = async (req, res) => {
@@ -71,6 +94,13 @@ export const saveFaqDraftController = async (req, res) => {
   try {
     const data = await saveFaqDraftService(id, tenant_id, question, doctor_answer);
     if (!data) return res.status(404).json({ message: "FAQ not found" });
+    emitFaqRealtimeUpdate({
+      tenant_id,
+      action: "faq-draft-saved",
+      faq_id: data.id,
+      status: data.status,
+      is_active: data.is_active,
+    });
     return res.status(200).json({ message: "Draft saved", data });
   } catch (err) {
     return res.status(500).json({ message: err.message });
@@ -87,6 +117,13 @@ export const publishFaqController = async (req, res) => {
   try {
     const data = await publishFaqService(id, tenant_id, reviewed_by, payload);
     if (!data) return res.status(404).json({ message: "FAQ not found" });
+    emitFaqRealtimeUpdate({
+      tenant_id,
+      action: "faq-published",
+      faq_id: data.id,
+      status: data.status,
+      is_active: data.is_active,
+    });
     return res.status(200).json({ message: "FAQ published", data });
   } catch (err) {
     if (err.message.includes("without a doctor answer")) {
@@ -110,6 +147,13 @@ export const createFaqController = async (req, res) => {
 
   try {
     const data = await createFaqService(tenant_id, created_by, question, answer);
+    emitFaqRealtimeUpdate({
+      tenant_id,
+      action: "faq-created",
+      faq_id: data?.id,
+      status: data?.status,
+      is_active: data?.is_active,
+    });
     return res.status(201).json({ 
       message: "FAQ created and published successfully", 
       data 
@@ -129,6 +173,13 @@ export const toggleFaqActiveController = async (req, res) => {
     if (!data) {
       return res.status(404).json({ message: "Published FAQ not found" });
     }
+    emitFaqRealtimeUpdate({
+      tenant_id,
+      action: "faq-toggled",
+      faq_id: data.id,
+      status: data.status,
+      is_active: data.is_active,
+    });
     return res.status(200).json({ message: "FAQ active status toggled", data });
   } catch (err) {
     return res.status(500).json({ message: err.message });
@@ -143,6 +194,13 @@ export const softDeleteFaqController = async (req, res) => {
   try {
     const deleted = await softDeleteFaqService(id, tenant_id);
     if (!deleted) return res.status(404).json({ message: "FAQ not found" });
+    emitFaqRealtimeUpdate({
+      tenant_id,
+      action: "faq-deleted",
+      faq_id: id,
+      status: "deleted",
+      is_active: false,
+    });
     return res.status(200).json({ message: "FAQ deleted" });
   } catch (err) {
     return res.status(500).json({ message: err.message });
