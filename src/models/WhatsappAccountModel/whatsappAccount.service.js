@@ -187,6 +187,7 @@ export const createOrUpdateWhatsappAccountService = async (
   phone_number_id,
   waba_id,
   access_token,
+  app_id,
 ) => {
   try {
     // 1️⃣ Check if this exact account (whatsapp_number or phone_number_id) is already registered by ANY tenant
@@ -213,13 +214,14 @@ export const createOrUpdateWhatsappAccountService = async (
     // 2️⃣ If no duplicates, proceed with Insert or Update
     const Query = `
     INSERT INTO ${tableNames.WHATSAPP_ACCOUNT}
-    (tenant_id, whatsapp_number, phone_number_id, waba_id, access_token, status)
-    VALUES (?, ?, ?, ?, ?, 'pending')
+    (tenant_id, whatsapp_number, phone_number_id, waba_id, access_token, app_id, status)
+    VALUES (?, ?, ?, ?, ?, ?, 'pending')
     ON DUPLICATE KEY UPDATE
       whatsapp_number = VALUES(whatsapp_number),
       phone_number_id = VALUES(phone_number_id),
       waba_id = VALUES(waba_id),
       access_token = VALUES(access_token),
+      app_id = VALUES(app_id),
       status = 'pending',
       last_error = NULL
   `;
@@ -231,6 +233,7 @@ export const createOrUpdateWhatsappAccountService = async (
         phone_number_id,
         waba_id,
         access_token,
+        app_id,
       ],
     });
   } catch (err) {

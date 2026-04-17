@@ -1,26 +1,96 @@
 import db from "../../database/index.js";
 import { tableNames } from "../../database/tableName.js";
-import { SEARCH_REFINE_PROMPT } from "../../utils/ai/prompts/index.js";
-import { callAI } from "../../utils/ai/coreAi.js";
+import {
+  cosineSimilarity,
+  generateTextEmbedding,
+  parseEmbedding,
+} from "../../utils/ai/embedding.js";
 
-/**
- * Uses a fast LLM to refine a user's question into optimized search keywords.
- */
-export const analyzeQuestionForSearch = async (question, tenant_id = null) => {
+const MAX_CANDIDATE_CHUNKS = Number(
+  process.env.KNOWLEDGE_SEARCH_MAX_CANDIDATES || 800,
+);
+const MAX_RETURNED_CHUNKS = Number(
+  process.env.KNOWLEDGE_SEARCH_TOP_K || 12,
+);
+const SIMILARITY_THRESHOLD = Number(
+  process.env.KNOWLEDGE_SEARCH_MIN_SIMILARITY || 0.12,
+);
+const MAX_EMBEDDING_BACKFILL_PER_QUERY = Number(
+  process.env.KNOWLEDGE_EMBEDDING_BACKFILL_LIMIT || 200,
+);
+
+const hydrateMissingEmbeddings = async (rows, tenant_id) => {
+  if (!Array.isArray(rows) || !rows.length) return rows;
+
+  let backfilledCount = 0;
+
+  for (const row of rows) {
+    const parsed = parseEmbedding(row.embedding);
+    if (parsed) {
+      row.embedding_vector = parsed;
+      continue;
+    }
+
+    if (backfilledCount >= MAX_EMBEDDING_BACKFILL_PER_QUERY) continue;
+
+    const generated = await generateTextEmbedding(row.chunk_text, tenant_id);
+    if (!generated) continue;
+
+    row.embedding_vector = generated;
+    row.embedding = generated;
+    backfilledCount += 1;
+
+    await db.sequelize.query(
+      `UPDATE ${tableNames.KNOWLEDGECHUNKS}
+       SET embedding = ?, updated_at = NOW()
+       WHERE id = ? AND tenant_id = ?`,
+      {
+        replacements: [JSON.stringify(generated), row.chunk_id, tenant_id],
+      },
+    );
+  }
+
+  return rows;
+};
+
+const fetchActiveCandidateChunks = async (tenant_id) => {
+  const baseQuery = `
+    SELECT kc.id AS chunk_id, kc.chunk_text, kc.embedding,
+           ks.id AS source_id, ks.title AS source_title, ks.type AS source_type
+    FROM ${tableNames.KNOWLEDGECHUNKS} kc
+    INNER JOIN ${tableNames.KNOWLEDGESOURCE} ks
+      ON ks.id = kc.source_id
+    WHERE ks.status = 'active'
+      AND ks.is_deleted = false
+      AND kc.is_deleted = false
+      AND ks.tenant_id = ?
+    LIMIT ?
+  `;
+
   try {
-    const prompt = SEARCH_REFINE_PROMPT.replace("{QUESTION}", question);
-
-    const result = await callAI({
-      messages: [{ role: "user", content: prompt }],
-      tenant_id,
-      source: "knowledge_search",
-      temperature: 0,
+    const [rows] = await db.sequelize.query(baseQuery, {
+      replacements: [tenant_id, MAX_CANDIDATE_CHUNKS],
     });
+    return rows;
+  } catch (queryErr) {
+    console.error("[KNOWLEDGE-SEARCH] Primary semantic query failed:", queryErr.message);
 
-    return result.content;
-  } catch (err) {
-    console.error("[AI-SEARCH-REFINE] Error:", err.message);
-    return "";
+    const fallbackQuery = `
+      SELECT kc.id AS chunk_id, kc.chunk_text, kc.embedding,
+             ks.id AS source_id, ks.title AS source_title, ks.type AS source_type
+      FROM ${tableNames.KNOWLEDGECHUNKS} kc
+      INNER JOIN ${tableNames.KNOWLEDGESOURCE} ks
+        ON ks.id = kc.source_id
+      WHERE ks.status = 'active'
+        AND ks.is_deleted = false
+        AND ks.tenant_id = ?
+      LIMIT ?
+    `;
+
+    const [rows] = await db.sequelize.query(fallbackQuery, {
+      replacements: [tenant_id, MAX_CANDIDATE_CHUNKS],
+    });
+    return rows;
   }
 };
 
@@ -28,99 +98,42 @@ export const searchKnowledgeChunks = async (tenant_id, question) => {
   if (!tenant_id || !question)
     return { chunks: [], resolvedLogs: [], sources: [] };
 
-  // Step 1: AI-Refined Keywords (Query Expansion)
-  const aiKeywords = await analyzeQuestionForSearch(question, tenant_id);
+  const questionEmbedding = await generateTextEmbedding(question, tenant_id);
+  if (!questionEmbedding) {
+    return { chunks: [], resolvedLogs: [], sources: [] };
+  }
 
-  // Step 2: Traditional Keyword Extraction
-  const STOP_WORDS = [
-    "who",
-    "what",
-    "is",
-    "are",
-    "the",
-    "this",
-    "that",
-    "about",
-    "tell",
-    "me",
-    "please",
-    "explain",
-  ];
+  const candidateRows = await fetchActiveCandidateChunks(tenant_id);
+  if (!candidateRows.length) {
+    return { chunks: [], resolvedLogs: [], sources: [] };
+  }
 
-  const manualKeywords = question
-    .toLowerCase()
-    .replace(/[^\w\s]/g, " ") // Replace punctuation with space to avoid merging words
-    .split(/\s+/) // Split by any whitespace
-    .filter((w) => w.length > 2 && !STOP_WORDS.includes(w));
+  const hydratedRows = await hydrateMissingEmbeddings(candidateRows, tenant_id);
 
-  const refinedKeywords = aiKeywords
-    ? aiKeywords
-        .toLowerCase()
-        .replace(/[^\w\s]/g, " ")
-        .split(/\s+/)
-        .filter((w) => w.length > 2)
-    : [];
+  const scoredRows = hydratedRows
+    .map((row) => {
+      const embedding = row.embedding_vector || parseEmbedding(row.embedding);
+      if (!embedding) return null;
 
-  // Combine both (favoring unique terms)
-  const keywords = [...new Set([...manualKeywords, ...refinedKeywords])];
+      return {
+        ...row,
+        similarity: cosineSimilarity(questionEmbedding, embedding),
+      };
+    })
+    .filter((row) => row && Number.isFinite(row.similarity))
+    .sort((a, b) => b.similarity - a.similarity);
 
-  if (!keywords.length) return { chunks: [], resolvedLogs: [], sources: [] };
+  const allRows = scoredRows
+    .filter((row) => row.similarity >= SIMILARITY_THRESHOLD)
+    .slice(0, MAX_RETURNED_CHUNKS);
 
-  const conditions = keywords.map(() => "kc.chunk_text LIKE ?").join(" OR ");
-  const values = keywords.map((k) => `%${k}%`);
-
-  /* 1️⃣ Search Main Knowledge Base */
-  const query = `
-    SELECT kc.chunk_text, ks.id as source_id, ks.title as source_title, ks.type as source_type
-    FROM ${tableNames.KNOWLEDGECHUNKS} kc
-    INNER JOIN ${tableNames.KNOWLEDGESOURCE} ks
-      ON ks.id = kc.source_id
-    WHERE ks.status = 'active'
-      AND ks.is_deleted = false
-      AND kc.is_deleted = false
-      AND ks.tenant_id IN (?)
-      AND (${conditions})
-    ORDER BY LENGTH(kc.chunk_text) ASC
-    LIMIT 10
-  `;
-
-  let knowledgeRows = [];
-  try {
-    const [rows] = await db.sequelize.query(query, {
-      replacements: [tenant_id, ...values],
-    });
-    knowledgeRows = rows;
-  } catch (queryErr) {
-    // Fallback: try without kc.is_deleted filter (column may not exist in older DBs)
-    console.error("[KNOWLEDGE-SEARCH] Primary query failed:", queryErr.message);
-    try {
-      const fallbackQuery = `
-        SELECT kc.chunk_text, ks.id as source_id, ks.title as source_title, ks.type as source_type
-        FROM ${tableNames.KNOWLEDGECHUNKS} kc
-        INNER JOIN ${tableNames.KNOWLEDGESOURCE} ks
-          ON ks.id = kc.source_id
-        WHERE ks.status = 'active'
-          AND ks.is_deleted = false
-          AND ks.tenant_id IN (?)
-          AND (${conditions})
-        ORDER BY LENGTH(kc.chunk_text) ASC
-        LIMIT 10
-      `;
-      const [rows] = await db.sequelize.query(fallbackQuery, {
-        replacements: [tenant_id, ...values],
-      });
-      knowledgeRows = rows;
-    } catch (fallbackErr) {
-      console.error(
-        "[KNOWLEDGE-SEARCH] Fallback query also failed:",
-        fallbackErr.message,
-      );
-    }
+  if (!allRows.length) {
+    return { chunks: [], resolvedLogs: [], sources: [] };
   }
 
   // Group chunks by source for UI transparency
   const sourceMap = new Map();
-  knowledgeRows.forEach((r) => {
+  allRows.forEach((r) => {
     if (!sourceMap.has(r.source_id)) {
       sourceMap.set(r.source_id, {
         id: r.source_id,
@@ -133,7 +146,7 @@ export const searchKnowledgeChunks = async (tenant_id, question) => {
   });
 
   return {
-    chunks: knowledgeRows.map((r) => r.chunk_text),
+    chunks: allRows.map((r) => r.chunk_text),
     resolvedLogs: [],
     sources: Array.from(sourceMap.values()),
   };

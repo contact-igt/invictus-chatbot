@@ -66,3 +66,10 @@ export const invoicePaymentRateLimiter = createRateLimiter(3, 60 * 1000);
 
 /** Billing query endpoints: 30 requests per minute per tenant */
 export const billingQueryRateLimiter = createRateLimiter(30, 60 * 1000);
+
+/**
+ * Admin billing mutation endpoints (force-unlock, manual-credit, change-mode, invoice-close).
+ * Stricter limit: 10 mutations per minute per admin IP/ID to prevent abuse
+ * if an admin account is compromised.
+ */
+export const adminBillingRateLimiter = createRateLimiter(10, 60 * 1000);

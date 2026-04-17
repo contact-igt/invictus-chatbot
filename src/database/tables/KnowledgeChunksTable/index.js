@@ -65,6 +65,11 @@ export const KnowledgeChunksTable = (sequelize, Sequelize) => {
           fields: ["source_id"],
         },
         {
+          // Composite index for the hot retrieval path: active chunks per source
+          name: "idx_chunk_active_lookup",
+          fields: ["tenant_id", "source_id", "is_deleted"],
+        },
+        {
           name: "idx_chunk_deleted",
           fields: ["is_deleted"],
         },

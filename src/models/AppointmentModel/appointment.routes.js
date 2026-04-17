@@ -1,6 +1,12 @@
 import express from "express";
 import * as AppointmentController from "./appointment.controller.js";
 import {
+  softDeleteAppointmentController,
+  hardDeleteAppointmentController,
+  restoreAppointmentController,
+  getDeletedAppointmentsController,
+} from "./appointment.lifecycle.js";
+import {
   authenticate,
   authorize,
 } from "../../middlewares/auth/authMiddlewares.js";
@@ -35,9 +41,29 @@ router.put(
   AppointmentController.updateAppointment,
 );
 router.delete(
-  "/appointment/:appointment_id",
+  "/appointment/:appointment_id/soft",
   ...tenantAuth,
-  AppointmentController.deleteAppointment,
+  softDeleteAppointmentController,
+);
+
+router.delete(
+  "/appointment/:appointment_id/permanent",
+  authenticate,
+  authorize({ user_type: "tenant", roles: ["tenant_admin"] }),
+  hardDeleteAppointmentController,
+);
+
+router.post(
+  "/appointment/:appointment_id/restore",
+  authenticate,
+  authorize({ user_type: "tenant", roles: ["tenant_admin"] }),
+  restoreAppointmentController,
+);
+
+router.get(
+  "/appointments/deleted/list",
+  ...tenantAuth,
+  getDeletedAppointmentsController,
 );
 
 export default router;

@@ -112,6 +112,20 @@ export const defineAssociations = (db) => {
     constraints: false,
   });
 
+  // Tenant → FaqReviews (One-to-Many)
+  db.Tenants.hasMany(db.FaqReviews, {
+    foreignKey: "tenant_id",
+    sourceKey: "tenant_id",
+    as: "faqReviews",
+    constraints: false,
+  });
+  db.FaqReviews.belongsTo(db.Tenants, {
+    foreignKey: "tenant_id",
+    targetKey: "tenant_id",
+    as: "tenant",
+    constraints: false,
+  });
+
   // Tenant → Leads (One-to-Many)
   db.Tenants.hasMany(db.Leads, {
     foreignKey: "tenant_id",
@@ -360,6 +374,31 @@ export const defineAssociations = (db) => {
     constraints: false,
   });
 
+  db.WhatsappCampaigns.hasMany(db.CampaignEvents, {
+    foreignKey: "campaign_id",
+    sourceKey: "campaign_id",
+    as: "events",
+    constraints: false,
+  });
+  db.CampaignEvents.belongsTo(db.WhatsappCampaigns, {
+    foreignKey: "campaign_id",
+    targetKey: "campaign_id",
+    as: "campaign",
+    constraints: false,
+  });
+  db.WhatsappCampaignRecipients.hasMany(db.CampaignEvents, {
+    foreignKey: "recipient_id",
+    sourceKey: "id",
+    as: "events",
+    constraints: false,
+  });
+  db.CampaignEvents.belongsTo(db.WhatsappCampaignRecipients, {
+    foreignKey: "recipient_id",
+    targetKey: "id",
+    as: "recipient",
+    constraints: false,
+  });
+
   // ========================================
   // CONTACT GROUP RELATIONSHIPS
   // ========================================
@@ -417,52 +456,6 @@ export const defineAssociations = (db) => {
   });
 
   // ========================================
-  // APPOINTMENT MODULE RELATIONSHIPS
-  // ========================================
-
-  // Tenant → Appointments (One-to-Many)
-  db.Tenants.hasMany(db.Appointments, {
-    foreignKey: "tenant_id",
-    sourceKey: "tenant_id",
-    as: "appointments",
-    constraints: false,
-  });
-  db.Appointments.belongsTo(db.Tenants, {
-    foreignKey: "tenant_id",
-    targetKey: "tenant_id",
-    as: "tenant",
-    constraints: false,
-  });
-
-  // Doctor → Appointments (One-to-Many)
-  db.Doctors.hasMany(db.Appointments, {
-    foreignKey: "doctor_id",
-    sourceKey: "doctor_id",
-    as: "appointments",
-    constraints: false,
-  });
-  db.Appointments.belongsTo(db.Doctors, {
-    foreignKey: "doctor_id",
-    targetKey: "doctor_id",
-    as: "doctor",
-    constraints: false,
-  });
-
-  // Contact → Appointments (One-to-Many)
-  db.Contacts.hasMany(db.Appointments, {
-    foreignKey: "contact_id",
-    sourceKey: "contact_id",
-    as: "appointments",
-    constraints: false,
-  });
-  db.Appointments.belongsTo(db.Contacts, {
-    foreignKey: "contact_id",
-    targetKey: "contact_id",
-    as: "contact",
-    constraints: false,
-  });
-
-  // ========================================
   // BILLING MODULE RELATIONSHIPS
   // ========================================
 
@@ -516,6 +509,20 @@ export const defineAssociations = (db) => {
     constraints: false,
   });
 
+  // AiTokenUsage → BillingLedger (One-to-One)
+  db.AiTokenUsage.hasOne(db.BillingLedger, {
+    foreignKey: "ai_token_usage_id",
+    sourceKey: "id",
+    as: "billingLedger",
+    constraints: false,
+  });
+  db.BillingLedger.belongsTo(db.AiTokenUsage, {
+    foreignKey: "ai_token_usage_id",
+    targetKey: "id",
+    as: "aiTokenUsage",
+    constraints: false,
+  });
+
   // ========================================
   // WALLET MODULE RELATIONSHIPS
   // ========================================
@@ -545,6 +552,66 @@ export const defineAssociations = (db) => {
     foreignKey: "tenant_id",
     targetKey: "tenant_id",
     as: "tenant",
+    constraints: false,
+  });
+
+  // ========================================
+  // MEDIA ASSET RELATIONSHIPS
+  // ========================================
+
+  // Tenant → MediaAsset (One-to-Many)
+  db.Tenants.hasMany(db.MediaAsset, {
+    foreignKey: "tenant_id",
+    sourceKey: "tenant_id",
+    as: "mediaAssets",
+    constraints: false,
+  });
+  db.MediaAsset.belongsTo(db.Tenants, {
+    foreignKey: "tenant_id",
+    targetKey: "tenant_id",
+    as: "tenant",
+    constraints: false,
+  });
+
+  // TenantUser → MediaAsset (One-to-Many)
+  db.TenantUsers.hasMany(db.MediaAsset, {
+    foreignKey: "uploaded_by",
+    sourceKey: "tenant_user_id",
+    as: "uploadedMedia",
+    constraints: false,
+  });
+  db.MediaAsset.belongsTo(db.TenantUsers, {
+    foreignKey: "uploaded_by",
+    targetKey: "tenant_user_id",
+    as: "uploader",
+    constraints: false,
+  });
+
+  // WhatsappTemplate → MediaAsset (Belongs-to)
+  db.WhatsappTemplates.belongsTo(db.MediaAsset, {
+    foreignKey: "media_asset_id",
+    targetKey: "media_asset_id",
+    as: "mediaAsset",
+    constraints: false,
+  });
+  db.MediaAsset.hasMany(db.WhatsappTemplates, {
+    foreignKey: "media_asset_id",
+    sourceKey: "media_asset_id",
+    as: "templates",
+    constraints: false,
+  });
+
+  // WhatsappCampaign → MediaAsset (Belongs-to)
+  db.WhatsappCampaigns.belongsTo(db.MediaAsset, {
+    foreignKey: "media_asset_id",
+    targetKey: "media_asset_id",
+    as: "mediaAsset",
+    constraints: false,
+  });
+  db.MediaAsset.hasMany(db.WhatsappCampaigns, {
+    foreignKey: "media_asset_id",
+    sourceKey: "media_asset_id",
+    as: "campaigns",
     constraints: false,
   });
 

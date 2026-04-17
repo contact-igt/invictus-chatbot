@@ -31,7 +31,31 @@ export const PaymentHistoryTable = (sequelize, Sequelize) => {
       amount: {
         type: Sequelize.DECIMAL(15, 2),
         allowNull: false,
-        comment: "Amount in INR",
+        comment: "Wallet credit amount in INR (base_amount for recharges — after GST deduction)",
+      },
+
+      gross_amount: {
+        type: Sequelize.DECIMAL(15, 2),
+        allowNull: true,
+        comment: "Total amount paid by tenant including GST (gross_amount = base + gst)",
+      },
+
+      base_amount: {
+        type: Sequelize.DECIMAL(15, 4),
+        allowNull: true,
+        comment: "Taxable value (gross / 1.18) — amount actually credited to wallet",
+      },
+
+      gst_amount: {
+        type: Sequelize.DECIMAL(15, 2),
+        allowNull: true,
+        comment: "GST deducted from gross (gross - base)",
+      },
+
+      is_intra_state: {
+        type: Sequelize.BOOLEAN,
+        allowNull: true,
+        comment: "True = CGST+SGST applied; False = IGST applied",
       },
 
       currency: {

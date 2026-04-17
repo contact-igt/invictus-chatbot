@@ -110,18 +110,37 @@ export const buildAiSystemPrompt = async (
 
   let knowledgeSection = "";
   if (requires.knowledge) {
+    const kbChunks = (sources || [])
+      .filter((source) => source?.type !== "faq")
+      .flatMap((source) => source?.chunks || []);
+
+    const faqChunks = (sources || [])
+      .filter((source) => source?.type === "faq")
+      .flatMap((source) => source?.chunks || []);
+
     const knowledgeContext =
-      chunks && chunks.length > 0
-        ? chunks.join("\n\n")
-        : "No relevant uploaded documents.";
+      kbChunks.length > 0
+        ? kbChunks.join("\n\n")
+        : "No relevant Knowledge Base documents.";
+
+    const faqKnowledgeContext =
+      faqChunks.length > 0
+        ? faqChunks.join("\n\n")
+        : "No relevant Doctor FAQ Knowledge entries.";
+
     const resolvedContext =
       resolvedLogs && resolvedLogs.length > 0 ? resolvedLogs.join("\n\n") : "";
 
     knowledgeSection = `
 ═══════════════════════════════
-UPLOADED KNOWLEDGE
+KNOWLEDGE BASE
 ═══════════════════════════════
 ${knowledgeContext}
+
+═══════════════════════════════
+DOCTOR FAQ KNOWLEDGE
+═══════════════════════════════
+${faqKnowledgeContext}
 ${
   resolvedContext
     ? `
@@ -206,10 +225,16 @@ ${resolvedContext}
 ═══════════════════════════════
 KNOWLEDGE BASE RULE
 ═══════════════════════════════
-- For factual questions (services, policies, prices, timings, etc.) → answer ONLY from the data sections below.
+- For factual questions (services, policies, prices, timings, etc.) → answer ONLY from KNOWLEDGE BASE and DOCTOR FAQ KNOWLEDGE.
+- STRICT SOURCE RULE (mandatory): check both KNOWLEDGE BASE and DOCTOR FAQ KNOWLEDGE before deciding information is missing.
+- If DOCTOR FAQ KNOWLEDGE has the same or very similar question, use that answer first.
 - Do NOT answer factual questions from chat history — it may be outdated.
-- If the answer is not found in any provided data section → say "Let me check with the team." + [MISSING_KNOWLEDGE: topic]
-- Never make up or guess factual information.`
+  - If the answer is not found in KNOWLEDGE BASE or DOCTOR FAQ KNOWLEDGE, you must:
+    1) mark as missing_info using [MISSING_KNOWLEDGEBASE_HOOK: topic]
+    2) not guess or invent details
+    3) send this exact fallback reply:
+      "Our team will get back to you shortly. Please feel free to ask any other questions in the meantime ?"
+  - Never make up or guess factual information.`
       : "";
 
   const systemPrompt = `

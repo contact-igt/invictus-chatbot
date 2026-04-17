@@ -36,6 +36,11 @@ export const WhatsappAccountTable = (sequelize, Sequelize) => {
         allowNull: false,
       },
 
+      app_id: {
+        type: Sequelize.STRING,
+        allowNull: true,
+      },
+
       provider: {
         type: Sequelize.ENUM("meta"),
         defaultValue: "meta",
@@ -47,6 +52,7 @@ export const WhatsappAccountTable = (sequelize, Sequelize) => {
           "verified", // verification successful
           "active", // ready to send messages
           "inactive", // manually disabled
+          "token_error", // Meta access token invalid or insufficient permissions
           "token_expired",
           "failed",
         ),
@@ -97,7 +103,7 @@ export const WhatsappAccountTable = (sequelize, Sequelize) => {
       createdAt: {
         type: Sequelize.DATE,
         allowNull: false,
-        defaultValue: Sequelize.literal("CURRENT_TIMESTAMP"),
+        defaultValue: sequelize.literal("CURRENT_TIMESTAMP"),
         field: "created_at",
       },
 

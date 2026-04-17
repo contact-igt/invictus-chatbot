@@ -8,6 +8,7 @@ const VALID_STATUSES = [
   "Noshow",
 ];
 
+
 export const createAppointment = async (req, res) => {
   try {
     const {

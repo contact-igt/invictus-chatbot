@@ -21,6 +21,8 @@ import cron from "node-cron";
 import { generateWhatsAppOTPService } from "../OtpVerificationModel/otpverification.service.js";
 import { canSendCampaign } from "../../utils/billing/walletGuard.js";
 import { estimateMetaCost } from "../../utils/billing/costEstimator.js";
+import { addCampaignUsageService } from "../GalleryModel/gallery.service.js";
+import { logger } from "../../utils/logger.js";
 
 /**
  * Creates a new campaign and populates its recipients.
@@ -40,7 +42,13 @@ export const createCampaignService = async (tenant_id, data, created_by) => {
       header_file_name,
       location_params,
       card_media_urls,
+      media_asset_id, // Gallery asset ID (optional)
+      media_handle, // Meta media handle from gallery (optional)
     } = data;
+    const scheduledAtUtc =
+      campaign_type === "scheduled" && scheduled_at
+        ? new Date(scheduled_at).toISOString()
+        : null;
 
     // 0. Check for duplicate campaign name
     const existingCampaign = await db.WhatsappCampaigns.findOne({
@@ -51,6 +59,45 @@ export const createCampaignService = async (tenant_id, data, created_by) => {
       throw new Error(
         `A campaign with the name "${campaign_name}" already exists.`,
       );
+    }
+
+    // Campaigns can only run with templates that are approved and active for this tenant
+    const template = await db.WhatsappTemplates.findOne({
+      where: { template_id, tenant_id, is_deleted: false },
+      attributes: ["template_id", "status"],
+    });
+    if (!template) {
+      throw new Error("Template not found");
+    }
+    if (String(template.status || "").toLowerCase() !== "approved") {
+      throw new Error(
+        "Only approved templates can be used to create campaigns",
+      );
+    }
+
+    // Block campaign send if media is soft-deleted or handle expired
+    if (media_asset_id) {
+      const mediaAsset = await db.MediaAsset.findOne({
+        where: { media_asset_id, tenant_id },
+      });
+      if (!mediaAsset) {
+        throw new Error("The media attached to this template does not exist.");
+      }
+      if (mediaAsset.is_deleted) {
+        const err = new Error(
+          "The media attached to this template has been deleted. Please update the template with active media before sending.",
+        );
+        err.error_code = "MEDIA_DELETED";
+        throw err;
+      }
+      if (
+        mediaAsset.handle_expires_at &&
+        new Date(mediaAsset.handle_expires_at) < new Date()
+      ) {
+        throw new Error(
+          "Media handle has expired. Please re-upload the file and update the template.",
+        );
+      }
     }
 
     // 1. Generate Campaign ID
@@ -200,13 +247,15 @@ export const createCampaignService = async (tenant_id, data, created_by) => {
         campaign_name,
         campaign_type,
         template_id,
-        status: campaign_type === "scheduled" ? "scheduled" : "active", // Changed from "draft" to "active" for Send Now
+        status: campaign_type === "scheduled" ? "scheduled" : "active",
         total_audience: recipients.length,
-        scheduled_at,
+        scheduled_at: scheduledAtUtc,
         header_media_url,
         header_file_name,
         location_params,
         card_media_urls,
+        media_asset_id: media_asset_id || null,
+        media_handle: media_handle || null,
         created_by,
       },
       { transaction },
@@ -226,6 +275,17 @@ export const createCampaignService = async (tenant_id, data, created_by) => {
     });
 
     await transaction.commit();
+
+    // 5. Track gallery asset usage (fire and forget, after commit)
+    if (media_asset_id) {
+      addCampaignUsageService(media_asset_id, campaign_id).catch((err) =>
+        console.error(
+          "[CAMPAIGN-CREATE] Failed to log gallery asset usage:",
+          err.message,
+        ),
+      );
+    }
+
     return campaign;
   } catch (err) {
     await transaction.rollback();
@@ -238,12 +298,17 @@ export const createCampaignService = async (tenant_id, data, created_by) => {
  */
 export const getCampaignListService = async (tenant_id, query = {}) => {
   try {
-    const { page = 1, limit = 10, status } = query;
+    const { page = 1, limit = 10, status, search } = query;
     const offset = (page - 1) * limit;
 
     const where = { tenant_id, is_deleted: false };
     if (status) {
-      where.status = status;
+      where.status = status === "running" ? "active" : status;
+    }
+    if (search) {
+      where.campaign_name = {
+        [db.Sequelize.Op.like]: `%${search}%`,
+      };
     }
 
     const { count, rows } = await db.WhatsappCampaigns.findAndCountAll({
@@ -321,7 +386,7 @@ export const executeCampaignBatchService = async (
       where: {
         campaign_id,
         tenant_id,
-        status: ["active", "scheduled", "paused"],
+        status: { [db.Sequelize.Op.in]: ["active", "scheduled", "paused"] },
       },
       include: [
         {
@@ -592,11 +657,24 @@ export const executeCampaignBatchService = async (
         // 2. Add Header Component (Media or Location)
         if (headerComponent) {
           const hFormat = headerComponent.header_format?.toUpperCase();
+          const mediaHandle = campaign.media_handle;
+          const mediaId = mediaHandle ? String(mediaHandle) : null;
+
           if (
             ["IMAGE", "VIDEO", "DOCUMENT"].includes(hFormat) &&
-            campaignHeaderMediaUrl
+            (mediaHandle || campaignHeaderMediaUrl)
           ) {
-            const mediaObj = { link: campaignHeaderMediaUrl };
+            let mediaObj = null;
+            if (mediaId) {
+              mediaObj = { id: mediaId };
+            } else if (campaignHeaderMediaUrl) {
+              mediaObj = { link: campaignHeaderMediaUrl };
+            } else {
+              throw new Error(
+                "Media header is configured, but no valid media ID or preview URL is available for sending.",
+              );
+            }
+
             if (hFormat === "DOCUMENT") {
               mediaObj.filename = campaign.header_file_name || "document.pdf";
             }
@@ -696,13 +774,72 @@ export const executeCampaignBatchService = async (
           }
         }
 
-        const result = await sendWhatsAppTemplate(
-          tenant_id,
-          recipient.mobile_number,
-          campaign.template.template_name,
-          campaign.template.language,
-          components,
-        );
+        let result;
+        try {
+          result = await sendWhatsAppTemplate(
+            tenant_id,
+            recipient.mobile_number,
+            campaign.template.template_name,
+            campaign.template.language,
+            components,
+          );
+        } catch (sendErr) {
+          const errMsg = String(sendErr?.message || "");
+          const hasInvalidMediaId =
+            errMsg.includes(
+              "is not a valid whatsapp business account media attachment ID",
+            ) ||
+            errMsg.includes(
+              "template['components'][0]['parameters'][0]['image']['id']",
+            );
+
+          // Auto-retry once with LINK if Meta rejects the media ID and we have a preview URL.
+          if (hasInvalidMediaId && campaignHeaderMediaUrl) {
+            const retryComponents = components.map((component) => {
+              if (
+                component?.type !== "header" ||
+                !Array.isArray(component.parameters)
+              ) {
+                return component;
+              }
+              const nextParams = component.parameters.map((param) => {
+                if (!param || typeof param !== "object") return param;
+                if (param.type === "image" && param.image?.id) {
+                  return { ...param, image: { link: campaignHeaderMediaUrl } };
+                }
+                if (param.type === "video" && param.video?.id) {
+                  return { ...param, video: { link: campaignHeaderMediaUrl } };
+                }
+                if (param.type === "document" && param.document?.id) {
+                  return {
+                    ...param,
+                    document: {
+                      link: campaignHeaderMediaUrl,
+                      ...(campaign.header_file_name
+                        ? { filename: campaign.header_file_name }
+                        : {}),
+                    },
+                  };
+                }
+                return param;
+              });
+              return { ...component, parameters: nextParams };
+            });
+
+            console.warn(
+              `[CAMPAIGN-SEND] Invalid media id for campaign ${campaign_id}. Retrying with link.`,
+            );
+            result = await sendWhatsAppTemplate(
+              tenant_id,
+              recipient.mobile_number,
+              campaign.template.template_name,
+              campaign.template.language,
+              retryComponents,
+            );
+          } else {
+            throw sendErr;
+          }
+        }
 
         await recipient.update({
           status: "sent",
@@ -830,9 +967,18 @@ export const executeCampaignBatchService = async (
           `Failed to send campaign message to ${recipient.mobile_number}:`,
           err.message,
         );
+        const currentRetryCount = Number(recipient.retry_count || 0);
+        const nextRetryCount = currentRetryCount + 1;
+        const backoffMinutes =
+          nextRetryCount === 1 ? 5 : nextRetryCount === 2 ? 15 : 45;
+        const nextRetryAt = new Date(Date.now() + backoffMinutes * 60 * 1000);
+
         await recipient.update({
-          status: "failed",
+          status: nextRetryCount >= 3 ? "permanently_failed" : "failed",
           error_message: err.message,
+          last_error: err.message,
+          retry_count: nextRetryCount,
+          next_retry_at: nextRetryCount >= 3 ? null : nextRetryAt,
         });
       }
     }
@@ -925,82 +1071,281 @@ export const permanentDeleteCampaignService = async (
  * Starts a cron job to handle scheduled and active campaigns.
  */
 export const startCampaignSchedulerService = () => {
-  console.log("🚀 WhatsApp Campaign Scheduler Started");
+  logger.info("[CAMPAIGN-SCHEDULER] Started");
 
   // Run every minute
   cron.schedule("* * * * *", async () => {
     try {
+      const now = new Date();
+
       // 1. Check for scheduled campaigns that need to be activated
-      const [scheduledToActive] = await db.sequelize.query(`
-        UPDATE ${tableNames.WHATSAPP_CAMPAIGN}
-        SET status = 'active'
-        WHERE status = 'scheduled' 
-          AND scheduled_at <= NOW() 
-          AND is_deleted = false
-      `);
+      const [scheduledToActiveCount] = await db.WhatsappCampaigns.update(
+        { status: "active" },
+        {
+          where: {
+            status: "scheduled",
+            scheduled_at: { [db.Sequelize.Op.lte]: now },
+            is_deleted: false,
+          },
+        },
+      );
+
+      if (scheduledToActiveCount > 0) {
+        logger.info(
+          `[CAMPAIGN-SCHEDULER] Activated ${scheduledToActiveCount} scheduled campaign(s) at ${now.toISOString()}`,
+        );
+      }
 
       const activeCampaigns = await db.WhatsappCampaigns.findAll({
         where: { status: "active", is_deleted: false },
       });
 
       for (const campaign of activeCampaigns) {
-        // Pre-execution billing check: verify tenant can afford at least 1 batch
         try {
-          const template = await db.WhatsappTemplates.findOne({
-            where: { template_id: campaign.template_id },
-            attributes: ["category"],
-            raw: true,
-          });
-          const category = (template?.category || "marketing").toLowerCase();
-          const tenantForBilling = await db.Tenants.findOne({
-            where: { tenant_id: campaign.tenant_id },
-            attributes: ["country", "owner_country_code", "timezone"],
-            raw: true,
-          });
-          const isIndia =
-            tenantForBilling?.owner_country_code === "91" ||
-            tenantForBilling?.timezone === "Asia/Kolkata";
-          const billingCountry =
-            tenantForBilling?.country || (isIndia ? "IN" : "Global");
-          const cost = await estimateMetaCost(category, billingCountry);
-          // Estimate cost for a single batch of 100 messages
-          const pendingCount = await db.WhatsappCampaignRecipients.count({
-            where: { campaign_id: campaign.campaign_id, status: "pending" },
-          });
-          const batchEstimate = Math.min(pendingCount, 100);
-          const batchCost = cost.totalCostInr * batchEstimate;
+          // Pre-execution billing check: verify tenant can afford at least 1 batch
+          try {
+            const template = await db.WhatsappTemplates.findOne({
+              where: { template_id: campaign.template_id },
+              attributes: ["category"],
+              raw: true,
+            });
+            const category = (template?.category || "marketing").toLowerCase();
+            const tenantForBilling = await db.Tenants.findOne({
+              where: { tenant_id: campaign.tenant_id },
+              attributes: ["country", "owner_country_code", "timezone"],
+              raw: true,
+            });
+            const isIndia =
+              tenantForBilling?.owner_country_code === "91" ||
+              tenantForBilling?.timezone === "Asia/Kolkata";
+            const billingCountry =
+              tenantForBilling?.country || (isIndia ? "IN" : "Global");
+            const cost = await estimateMetaCost(category, billingCountry);
+            const pendingCount = await db.WhatsappCampaignRecipients.count({
+              where: { campaign_id: campaign.campaign_id, status: "pending" },
+            });
+            const batchEstimate = Math.min(pendingCount, 100);
+            const batchCost = cost.totalCostInr * batchEstimate;
 
-          const billingCheck = await canSendCampaign(
-            campaign.tenant_id,
-            batchCost,
-          );
-
-          if (!billingCheck.allowed) {
-            console.warn(
-              `[CAMPAIGN-SCHEDULER] Skipping campaign ${campaign.campaign_id} — ${billingCheck.reason}`,
+            const billingCheck = await canSendCampaign(
+              campaign.tenant_id,
+              batchCost,
             );
-            await campaign.update({ status: "paused" });
-            continue; // Skip this campaign, move to next
-          }
-        } catch (billingErr) {
-          console.error(
-            `[CAMPAIGN-SCHEDULER] Billing check error for ${campaign.campaign_id}:`,
-            billingErr.message,
-          );
-          // Fail open — proceed with execution
-        }
 
-        // Execute a batch for each active campaign
-        await executeCampaignBatchService(
-          campaign.campaign_id,
-          campaign.tenant_id,
-          100,
-        );
+            if (!billingCheck.allowed) {
+              logger.warn(
+                `[CAMPAIGN-SCHEDULER] Skipping campaign ${campaign.campaign_id} - ${billingCheck.reason}`,
+              );
+              await campaign.update({ status: "paused" });
+              continue;
+            }
+          } catch (billingErr) {
+            logger.error(
+              `[CAMPAIGN-SCHEDULER] Billing check error for ${campaign.campaign_id}: ${billingErr.message}`,
+            );
+            // Fail open — proceed with execution
+          }
+
+          await executeCampaignBatchService(
+            campaign.campaign_id,
+            campaign.tenant_id,
+            100,
+          );
+        } catch (campaignErr) {
+          logger.error(
+            `[CAMPAIGN-SCHEDULER] Campaign ${campaign.campaign_id} execution error: ${campaignErr.message}`,
+          );
+        }
       }
     } catch (err) {
-      console.error("Campaign Scheduler Error:", err.message);
+      logger.error(`[CAMPAIGN-SCHEDULER] Worker error: ${err.message}`);
     }
   });
+
+  cron.schedule("*/5 * * * *", async () => {
+    try {
+      const failedRecipients = await db.WhatsappCampaignRecipients.findAll({
+        where: {
+          status: "failed",
+          is_deleted: false,
+          retry_count: { [db.Sequelize.Op.lt]: 3 },
+          [db.Sequelize.Op.or]: [
+            { next_retry_at: null },
+            { next_retry_at: { [db.Sequelize.Op.lte]: new Date() } },
+          ],
+        },
+        limit: 500,
+      });
+
+      const campaignIdsToResume = new Set();
+      for (const recipient of failedRecipients) {
+        await recipient.update({
+          status: "pending",
+        });
+        campaignIdsToResume.add(recipient.campaign_id);
+      }
+
+      for (const campaignId of campaignIdsToResume) {
+        const campaign = await db.WhatsappCampaigns.findOne({
+          where: { campaign_id: campaignId, is_deleted: false },
+        });
+        if (!campaign) continue;
+        if (["paused", "failed", "scheduled"].includes(campaign.status)) {
+          await campaign.update({ status: "active" });
+        }
+        await executeCampaignBatchService(campaignId, campaign.tenant_id, 100);
+      }
+    } catch (err) {
+      console.error("[CAMPAIGN-RETRY-WORKER] Error:", err.message);
+    }
+  });
+};
+
+const normalizeIncomingStatus = (status) => {
+  const s = String(status || "").toLowerCase();
+  if (s === "running") return "active";
+  return s;
+};
+
+const toTransitionLabel = (status) => {
+  if (status === "active") return "running";
+  return status;
+};
+
+export const updateCampaignStatusService = async (
+  campaign_id,
+  tenant_id,
+  nextStatusRaw,
+) => {
+  const campaign = await db.WhatsappCampaigns.findOne({
+    where: { campaign_id, tenant_id, is_deleted: false },
+  });
+  if (!campaign) throw new Error("Campaign not found");
+
+  const current = normalizeIncomingStatus(campaign.status);
+  const next = normalizeIncomingStatus(nextStatusRaw);
+  const allowed = new Set([
+    "draft->scheduled",
+    "scheduled->active",
+    "active->paused",
+    "paused->active",
+    "active->completed",
+  ]);
+
+  if (next === "cancelled") {
+    await campaign.update({ status: "cancelled" });
+    return campaign;
+  }
+
+  const key = `${current}->${next}`;
+  if (!allowed.has(key)) {
+    throw new Error(
+      `Invalid status transition: ${toTransitionLabel(current)} -> ${toTransitionLabel(next)}`,
+    );
+  }
+
+  await campaign.update({ status: next });
+  return campaign;
+};
+
+export const recordCampaignEventService = async (payload = {}) => {
+  const campaign_id = payload.campaign_id || payload.campaignId;
+  const recipient_id = payload.recipient_id || payload.recipientId;
+  const event_type = String(
+    payload.event_type || payload.eventType || "",
+  ).toLowerCase();
+  const meta_message_id = payload.meta_message_id || payload.metaMessageId;
+
+  if (!campaign_id || !["open", "click"].includes(event_type)) {
+    throw new Error("campaign_id and valid event_type are required");
+  }
+
+  let recipient = null;
+  if (recipient_id) {
+    recipient = await db.WhatsappCampaignRecipients.findOne({
+      where: { id: recipient_id, campaign_id, is_deleted: false },
+    });
+  } else if (meta_message_id) {
+    recipient = await db.WhatsappCampaignRecipients.findOne({
+      where: { campaign_id, meta_message_id, is_deleted: false },
+    });
+  }
+
+  if (!recipient) {
+    throw new Error("Recipient not found");
+  }
+
+  await db.CampaignEvents.create({
+    campaign_id,
+    recipient_id: recipient.id,
+    event_type,
+    occurred_at: new Date(),
+  });
+
+  if (event_type === "open" && !recipient.opened_at) {
+    await recipient.update({ opened_at: new Date() });
+  }
+  if (event_type === "click" && !recipient.clicked_at) {
+    await recipient.update({ clicked_at: new Date() });
+  }
+
+  return { campaign_id, recipient_id: recipient.id, event_type };
+};
+
+export const getCampaignStatsService = async (campaign_id, tenant_id) => {
+  const campaign = await db.WhatsappCampaigns.findOne({
+    where: { campaign_id, tenant_id, is_deleted: false },
+  });
+  if (!campaign) throw new Error("Campaign not found");
+
+  const total_sent = await db.WhatsappCampaignRecipients.count({
+    where: {
+      campaign_id,
+      is_deleted: false,
+      status: {
+        [db.Sequelize.Op.in]: ["sent", "delivered", "read", "replied"],
+      },
+    },
+  });
+
+  const total_delivered = await db.WhatsappCampaignRecipients.count({
+    where: {
+      campaign_id,
+      is_deleted: false,
+      status: { [db.Sequelize.Op.in]: ["delivered", "read", "replied"] },
+    },
+  });
+
+  const total_opened = await db.WhatsappCampaignRecipients.count({
+    where: {
+      campaign_id,
+      is_deleted: false,
+      opened_at: { [db.Sequelize.Op.ne]: null },
+    },
+  });
+
+  const total_clicked = await db.WhatsappCampaignRecipients.count({
+    where: {
+      campaign_id,
+      is_deleted: false,
+      clicked_at: { [db.Sequelize.Op.ne]: null },
+    },
+  });
+
+  const safeDenominator = total_sent || 1;
+  const open_rate = Number(((total_opened / safeDenominator) * 100).toFixed(2));
+  const click_rate = Number(
+    ((total_clicked / safeDenominator) * 100).toFixed(2),
+  );
+
+  return {
+    total_sent,
+    total_delivered,
+    total_opened,
+    total_clicked,
+    open_rate,
+    click_rate,
+  };
 };
 
 /**
@@ -1051,5 +1396,31 @@ export const restoreCampaignService = async (campaign_id, tenant_id) => {
     return { message: "Campaign restored successfully" };
   } catch (err) {
     throw err;
+  }
+};
+
+export const resolveRecipientCount = async (
+  tenant_id,
+  audience_type,
+  audience_data,
+) => {
+  const { default: db } = await import("../../database/index.js");
+
+  switch (audience_type) {
+    case "manual":
+      return Array.isArray(audience_data) ? audience_data.length : 0;
+    case "csv":
+      return Array.isArray(audience_data) ? audience_data.length : 0;
+    case "all_contacts":
+      return await db.Contacts.count({ where: { tenant_id, is_deleted: false } });
+    case "all_leads":
+      return await db.Leads.count({ where: { tenant_id, is_deleted: false } });
+    case "group":
+      if (Array.isArray(audience_data)) return audience_data.length; // Personalized group data provided as array
+      return await db.ContactGroupMembers.count({
+        where: { tenant_id, group_id: audience_data },
+      });
+    default:
+      return 0;
   }
 };

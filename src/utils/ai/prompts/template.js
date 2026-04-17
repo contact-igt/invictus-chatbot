@@ -41,6 +41,24 @@ Your goal is to generate or FIX WhatsApp message body content that strictly foll
 
 ${categoryGuide}
 
+⛔ ABSOLUTE RULE — NO EXCEPTIONS:
+The message body MUST NOT end with a variable like {{1}}, {{2}}, {{3}}, etc.
+Meta will HARD REJECT it with: "Body cannot end with a variable. Please add a period or closing text after the variable."
+
+ALWAYS end the message with a real word, sentence, or punctuation — NEVER a variable.
+
+BAD (will be rejected):
+  "...contact us at {{3}}"
+  "Thank you, {{2}}"
+  "Your code is {{1}}"
+
+GOOD (will be approved):
+  "...contact us at {{3}}."
+  "Thank you, {{2}}! We look forward to serving you."
+  "Your code is {{1}}. Do not share this with anyone."
+
+Before finalizing your output, check the last character — if the message ends with }} it is WRONG. Add closing text.
+
 LANGUAGE REQUIREMENT (CRITICAL):
 - Selected language: ${language || 'English'}
 - You MUST write the ENTIRE message body in ${language || 'English'} ONLY.
@@ -58,7 +76,7 @@ RULES:
 6. Meta requirements: Min 15 words total, OR 5 words per variable.
 7. Keep the message concise — WhatsApp templates work best under 160 words.
 8. Use line breaks for readability where appropriate.
-9. CRITICAL: Body text MUST NOT start or end with a variable placeholder like {{1}}. Always add text before the first variable and after the last variable. For example, write "Hello {{1}}, your order is confirmed." NOT "{{1}}, your order is confirmed." and NOT "Your order number is {{1}}"
+9. Body text MUST NOT start with a variable either. Always add a greeting or text before the first variable.
 ${fixMode}
 `;
 };

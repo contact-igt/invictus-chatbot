@@ -50,6 +50,66 @@ import {
   getLivechatByIdService,
   updateLiveChatTimestampService,
 } from "../LiveChatModel/livechat.service.js";
+import { markMediaAsApprovedService } from "../GalleryModel/gallery.service.js";
+import { tableNames } from "../../database/tableName.js";
+
+const FIXED_MISSING_INFO_FALLBACK =
+  "Our team will get back to you shortly. Please feel free to ask any other questions in the meantime ?";
+
+const MISSING_INFO_TAGS = new Set([
+  "MISSING_KNOWLEDGE",
+  "MISSING_KNOWLEDGEBASE_HOOK",
+  "MISSING_INFO",
+]);
+
+const MISSING_INFO_REPLY_PATTERN =
+  /(i\s*do\s*not|i\s*don't|i\s*cannot|i\s*can't|unable\s+to|not\s+enough\s+information|outside\s+(my|our)\s+(scope|knowledge)|our team will get back to you shortly|let me check with the team)/i;
+
+const normalizeRequestedTopic = (text = "") =>
+  String(text || "")
+    .replace(/\s+/g, " ")
+    .replace(/"/g, "'")
+    .trim()
+    .slice(0, 120) || "your question";
+
+const resolveAiReplyEnvelope = (aiResult, userText) => {
+  const finalReply = aiResult?.message;
+  const requestedTopic = normalizeRequestedTopic(userText);
+
+  const detectedTag = aiResult?.tagDetected || null;
+  const isMissingInfoTag = detectedTag
+    ? MISSING_INFO_TAGS.has(detectedTag)
+    : false;
+  const looksLikeMissingInfoReply = MISSING_INFO_REPLY_PATTERN.test(
+    finalReply || "",
+  );
+  const isMissingInfoSignal = isMissingInfoTag || looksLikeMissingInfoReply;
+
+  const tagToExecute =
+    detectedTag || (isMissingInfoSignal ? "MISSING_KNOWLEDGEBASE_HOOK" : null);
+  const tagPayloadToExecute =
+    aiResult?.tagPayload || (isMissingInfoSignal ? requestedTopic : null);
+
+  const fallback = isMissingInfoSignal
+    ? FIXED_MISSING_INFO_FALLBACK
+    : aiResult?.tagDetected
+      ? ""
+      : "Our team will review your message and contact you shortly.";
+
+  const messageToSend = isMissingInfoSignal
+    ? FIXED_MISSING_INFO_FALLBACK
+    : finalReply && finalReply.trim()
+      ? finalReply.trim()
+      : fallback;
+
+  return {
+    messageToSend,
+    tagToExecute,
+    tagPayloadToExecute,
+    isMissingInfoSignal,
+  };
+};
+
 
 export const verifyWebhook = async (req, res) => {
   try {
@@ -81,9 +141,105 @@ export const verifyWebhook = async (req, res) => {
 export const receiveMessage = async (req, res) => {
   const io = getIO();
   try {
-    const value = req.body?.entry?.[0]?.changes?.[0]?.value;
+    const change = req.body?.entry?.[0]?.changes?.[0];
+    const value = change?.value;
+    const field = change?.field;
     const msg = value?.messages?.[0];
     const statusUpdate = value?.statuses?.[0];
+
+    // 0. Handle Template Status Updates (Meta approval/rejection)
+    if (field === "message_template_status_update") {
+      const templateName = value.message_template_name;
+      const templateId = value.message_template_id;
+      const status = value.event; // e.g., "APPROVED", "REJECTED"
+      const wabaId = req.body?.entry?.[0]?.id;
+
+      console.log(
+        `[WEBHOOK] Template Status Update: ${templateName} (${status}) for WABA ${wabaId}`,
+      );
+
+      // Map Meta status to our local status
+      const STATUS_MAP = {
+        APPROVED: "approved",
+        REJECTED: "rejected",
+        PENDING: "pending",
+        PAUSED: "paused",
+        DISABLED: "disabled",
+      };
+
+      const mappedStatus = STATUS_MAP[status] || "pending";
+
+      try {
+        const [[account]] = await db.sequelize.query(
+          `
+          SELECT tenant_id
+          FROM ${tableNames.WHATSAPP_ACCOUNT}
+          WHERE waba_id = ?
+            AND is_deleted = false
+          LIMIT 1
+          `,
+          { replacements: [wabaId] },
+        );
+
+        if (!account?.tenant_id) {
+          console.warn(
+            `[WEBHOOK] No tenant found for template status update WABA ${wabaId}`,
+          );
+          return res.sendStatus(200);
+        }
+
+        // Update template status in DB
+        const [[template]] = await db.sequelize.query(
+          `
+          SELECT
+            t.template_id,
+            COALESCE(t.media_asset_id, c.media_asset_id) AS media_asset_id
+          FROM ${tableNames.WHATSAPP_TEMPLATE} t
+          LEFT JOIN ${tableNames.WHATSAPP_TEMPLATE_COMPONENTS} c
+            ON c.template_id = t.template_id
+           AND c.component_type = 'header'
+          WHERE t.tenant_id = ?
+            AND t.is_deleted = false
+            AND (t.meta_template_id = ? OR t.template_name = ?)
+          LIMIT 1
+          `,
+          { replacements: [account.tenant_id, templateId, templateName] },
+        );
+
+        if (template) {
+          await db.sequelize.query(
+            `
+            UPDATE ${tableNames.WHATSAPP_TEMPLATE}
+            SET status = ?
+            WHERE template_id = ?
+              AND tenant_id = ?
+            `,
+            {
+              replacements: [
+                mappedStatus,
+                template.template_id,
+                account.tenant_id,
+              ],
+            },
+          );
+
+          // If approved and has media, mark media as approved
+          if (status === "APPROVED" && template.media_asset_id) {
+            await markMediaAsApprovedService(template.media_asset_id);
+            console.log(
+              `[WEBHOOK] Gallery Asset ${template.media_asset_id} auto-approved via template ${templateName}`,
+            );
+          }
+        }
+      } catch (err) {
+        console.error(
+          "[WEBHOOK] Error processing template status update:",
+          err,
+        );
+      }
+
+      return res.sendStatus(200);
+    }
 
     // 1. Handle Status Updates (Sent/Delivered/Read)
     if (statusUpdate) {
@@ -636,12 +792,8 @@ export const receiveMessage = async (req, res) => {
           messagePreview: aiResult?.message?.substring(0, 200) || "N/A",
         });
 
-        const finalReply = aiResult?.message;
-        const fallback = aiResult?.tagDetected
-          ? ""
-          : "Our team will review your message and contact you shortly.";
-        const messageToSend =
-          finalReply && finalReply.trim() ? finalReply.trim() : fallback;
+        const { messageToSend, tagToExecute, tagPayloadToExecute } =
+          resolveAiReplyEnvelope(aiResult, text);
 
         // Send to WhatsApp FIRST — before saving the bot message.
         // This ensures that if the access token is invalid we do NOT create a
@@ -689,11 +841,15 @@ export const receiveMessage = async (req, res) => {
           contactsaved?.contact_id,
           phone_number_id,
           phone,
-          null,
+          botMsgResponse?.wamid || null,
           name,
           "bot",
           null,
           messageToSend,
+          "text",
+          null,
+          null,
+          botMsgResponse?.wamid ? "sent" : null,
         );
 
         const ioInstance = getIO();
@@ -719,42 +875,25 @@ export const receiveMessage = async (req, res) => {
           created_at: new Date(),
         });
 
-        // Update bot message with WAMID for status tracking
-        if (botMsgResponse?.wamid && savedBotMsg?.id) {
-          try {
-            await db.sequelize.query(
-              `UPDATE messages SET wamid = ?, status = 'sent' WHERE id = ?`,
-              { replacements: [botMsgResponse.wamid, savedBotMsg.id] },
-            );
-            console.log(
-              `[WEBHOOK] Bot message ${savedBotMsg.id} updated with wamid: ${botMsgResponse.wamid}`,
-            );
-          } catch (updateErr) {
-            console.error(
-              "[WEBHOOK] Failed to update bot message wamid:",
-              updateErr.message,
-            );
-          }
-        }
-
         // Execute tag handler AFTER sending the AI reply
         // This ensures correct message ordering (e.g., "Let me check..." before slots list)
-        if (aiResult?.tagDetected) {
+        if (tagToExecute) {
           console.log(
-            `[WEBHOOK] Executing tag handler: ${aiResult.tagDetected}, payload: ${aiResult.tagPayload?.substring(0, 100)}`,
+            `[WEBHOOK] Executing tag handler: ${tagToExecute}, payload: ${String(tagPayloadToExecute || "").substring(0, 100)}`,
           );
           const { executeTagHandler } =
             await import("../../utils/ai/aiTagHandlers/index.js");
           await executeTagHandler(
-            aiResult.tagDetected,
-            aiResult.tagPayload,
+            tagToExecute,
+            tagPayloadToExecute,
             {
               tenant_id,
               contact_id: contactsaved?.contact_id,
               phone,
               phone_number_id,
+              userMessage: text,
             },
-            messageToSend,
+            text,
           );
         }
       } catch (err) {
@@ -803,6 +942,9 @@ export const receiveMessage = async (req, res) => {
                   phone,
                   pending.messageId,
                 );
+
+                console.log("AI started for:", phone);
+
                 const aiResult = await getOpenAIReply(
                   tenant_id,
                   phone,
@@ -810,14 +952,11 @@ export const receiveMessage = async (req, res) => {
                   pending.contact_id,
                   phone_number_id,
                 );
-                const finalReply = aiResult?.message;
-                const fallback = aiResult?.tagDetected
-                  ? ""
-                  : "Our team will review your message and contact you shortly.";
-                const messageToSend =
-                  finalReply && finalReply.trim()
-                    ? finalReply.trim()
-                    : fallback;
+                const {
+                  messageToSend,
+                  tagToExecute: queuedTagToExecute,
+                  tagPayloadToExecute: queuedTagPayloadToExecute,
+                } = resolveAiReplyEnvelope(aiResult, pending.text);
 
                 if (messageToSend) {
                   // Send to WhatsApp FIRST — abort if token error
@@ -860,11 +999,15 @@ export const receiveMessage = async (req, res) => {
                     pending.contact_id,
                     phone_number_id,
                     phone,
-                    null,
+                    botMsgResponse?.wamid || null,
                     pending.contactsaved?.name || "Bot",
                     "bot",
                     null,
                     messageToSend,
+                    "text",
+                    null,
+                    null,
+                    botMsgResponse?.wamid ? "sent" : null,
                   );
 
                   const io = getIO();
@@ -888,15 +1031,38 @@ export const receiveMessage = async (req, res) => {
                     created_at: new Date(),
                   });
 
-                  if (botMsgResponse?.wamid && savedBotMsg?.id) {
-                    try {
-                      await db.sequelize.query(
-                        `UPDATE messages SET wamid = ?, status = 'sent' WHERE id = ?`,
-                        {
-                          replacements: [botMsgResponse.wamid, savedBotMsg.id],
-                        },
-                      );
-                    } catch (_) {}
+                  if (queuedTagToExecute) {
+                    const { executeTagHandler } =
+                      await import("../../utils/ai/aiTagHandlers/index.js");
+                    await executeTagHandler(
+                      queuedTagToExecute,
+                      queuedTagPayloadToExecute,
+                      {
+                        tenant_id,
+                        contact_id: pending.contact_id,
+                        phone,
+                        phone_number_id,
+                        userMessage: pending.text,
+                      },
+                      pending.text,
+                    );
+                  }
+
+                  if (queuedTagToExecute) {
+                    const { executeTagHandler } =
+                      await import("../../utils/ai/aiTagHandlers/index.js");
+                    await executeTagHandler(
+                      queuedTagToExecute,
+                      queuedTagPayloadToExecute,
+                      {
+                        tenant_id,
+                        contact_id: pending.contact_id,
+                        phone,
+                        phone_number_id,
+                        userMessage: pending.text,
+                      },
+                      pending.text,
+                    );
                   }
                 }
               } catch (qErr) {

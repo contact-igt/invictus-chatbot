@@ -1,5 +1,6 @@
 import db from "../../database/index.js";
 import { getIO } from "../../middlewares/socket/socket.js";
+import { logger } from "../logger.js";
 
 /**
  * Wallet Status Levels — NO grace/suspended, NO negative balance
@@ -83,9 +84,8 @@ export const checkWalletStatus = async (tenant_id) => {
       autoRechargeAmount: wallet.auto_recharge_amount || 500,
     };
   } catch (error) {
-    console.error(
-      "[WALLET-GUARD] Error checking wallet status:",
-      error.message,
+    logger.error(
+      `[WALLET-GUARD] Error checking wallet status: ${error.message}`,
     );
     return {
       status: WALLET_STATUS.HEALTHY,
@@ -369,16 +369,15 @@ export const deductWallet = async (
       if (isLockConflict(err) && retries < MAX_WALLET_RETRIES) {
         retries++;
         const delay = RETRY_BASE_DELAY * Math.pow(2, retries - 1);
-        console.warn(
+        logger.warn(
           `[WALLET-GUARD] Lock conflict for tenant ${tenant_id}, retry ${retries}/${MAX_WALLET_RETRIES} in ${delay}ms`,
         );
         await sleep(delay);
         continue;
       }
 
-      console.error(
-        `[WALLET-GUARD] Wallet deduction failed for tenant ${tenant_id}:`,
-        err.message,
+      logger.error(
+        `[WALLET-GUARD] Wallet deduction failed for tenant ${tenant_id}: ${err.message}`,
       );
       try {
         const io = getIO();
@@ -428,6 +427,6 @@ export const emitWalletWarning = async (tenant_id, status, balance) => {
       });
     }
   } catch (error) {
-    console.error("[WALLET-GUARD] Error emitting warning:", error.message);
+    logger.error(`[WALLET-GUARD] Error emitting warning: ${error.message}`);
   }
 };

@@ -107,10 +107,26 @@ export const MessagesTable = (sequelize, Sequelize) => {
         comment: "Delivery status for outgoing messages",
       },
 
+      billing_reconciliation_status: {
+        type: Sequelize.ENUM("resolved", "unresolved_billing"),
+        allowNull: true,
+        defaultValue: null,
+        comment:
+          "Set by reconciliation when outbound billing is missing or later resolved",
+      },
+
+      billing_reconciliation_checked_at: {
+        type: Sequelize.DATE,
+        allowNull: true,
+        comment:
+          "Last time reconciliation checked this message for missing billing",
+      },
+
       seen: {
         type: Sequelize.BOOLEAN,
         defaultValue: false,
       },
+
 
       is_deleted: {
         type: Sequelize.BOOLEAN,
@@ -162,6 +178,10 @@ export const MessagesTable = (sequelize, Sequelize) => {
         {
           name: "idx_msg_deleted",
           fields: ["is_deleted"],
+        },
+        {
+          name: "idx_msg_billing_reconciliation_status",
+          fields: ["billing_reconciliation_status"],
         },
       ],
     },

@@ -35,7 +35,94 @@ export const MonthlyInvoiceTable = (sequelize, Sequelize) => {
         type: Sequelize.DECIMAL(15, 4),
         allowNull: false,
         defaultValue: 0,
-        comment: "Total invoice amount in INR",
+        comment: "Total invoice amount in INR (base + GST)",
+      },
+
+      // ── Cost breakdown ──────────────────────────────────────────────────────
+      total_message_cost_inr: {
+        type: Sequelize.DECIMAL(15, 4),
+        allowNull: false,
+        defaultValue: 0,
+        comment: "Message billing sub-total for this cycle (INR)",
+      },
+
+      total_ai_cost_inr: {
+        type: Sequelize.DECIMAL(15, 4),
+        allowNull: false,
+        defaultValue: 0,
+        comment: "AI token billing sub-total for this cycle (INR)",
+      },
+
+      // ── GST breakdown ───────────────────────────────────────────────────────
+      base_amount: {
+        type: Sequelize.DECIMAL(15, 4),
+        allowNull: true,
+        comment: "Taxable value (usage cost before GST)",
+      },
+
+      gst_amount: {
+        type: Sequelize.DECIMAL(15, 4),
+        allowNull: true,
+        comment: "Total GST (18% of base_amount)",
+      },
+
+      total_amount: {
+        type: Sequelize.DECIMAL(15, 4),
+        allowNull: true,
+        comment: "base_amount + gst_amount (mirrors amount column, for explicit reference)",
+      },
+
+      cgst_amount: {
+        type: Sequelize.DECIMAL(15, 4),
+        allowNull: true,
+        defaultValue: 0,
+        comment: "CGST (9%) — only set for intra-state transactions",
+      },
+
+      sgst_amount: {
+        type: Sequelize.DECIMAL(15, 4),
+        allowNull: true,
+        defaultValue: 0,
+        comment: "SGST (9%) — only set for intra-state transactions",
+      },
+
+      igst_amount: {
+        type: Sequelize.DECIMAL(15, 4),
+        allowNull: true,
+        defaultValue: 0,
+        comment: "IGST (18%) — only set for inter-state transactions",
+      },
+
+      // ── GST jurisdiction ────────────────────────────────────────────────────
+      tenant_state: {
+        type: Sequelize.STRING(50),
+        allowNull: true,
+        comment: "Tenant state code at invoice generation time (e.g. TN)",
+      },
+
+      company_state: {
+        type: Sequelize.STRING(50),
+        allowNull: true,
+        comment: "Company state code at invoice generation time",
+      },
+
+      hsn_sac_code: {
+        type: Sequelize.STRING(20),
+        allowNull: true,
+        defaultValue: "998314",
+        comment: "HSN/SAC code for the service",
+      },
+
+      tenant_gstin: {
+        type: Sequelize.STRING(20),
+        allowNull: true,
+        comment: "Tenant GSTIN if provided (for B2B invoice)",
+      },
+
+      gst_rate: {
+        type: Sequelize.DECIMAL(5, 2),
+        allowNull: true,
+        comment: "GST % rate used at invoice generation time (snapshot — never changed retroactively)",
       },
 
       due_date: {
@@ -128,6 +215,11 @@ export const MonthlyInvoiceTable = (sequelize, Sequelize) => {
           name: "unique_tenant_billing_cycle",
           unique: true,
           fields: ["tenant_id", "billing_cycle_id"],
+        },
+        {
+          // Used by the overdue-invoice cron: WHERE status = 'unpaid' AND due_date < NOW()
+          name: "idx_monthly_invoices_status_due",
+          fields: ["status", "due_date"],
         },
       ],
     },

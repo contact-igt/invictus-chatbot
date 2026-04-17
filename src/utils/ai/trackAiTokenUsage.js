@@ -48,7 +48,7 @@ export const trackAiTokenUsage = async (tenant_id, source, response) => {
         prompt_tokens,
         completion_tokens,
       );
-      await db.AiTokenUsage.create({
+      const limitUsageRecord = await db.AiTokenUsage.create({
         tenant_id,
         model: costResult.model,
         source,
@@ -65,6 +65,19 @@ export const trackAiTokenUsage = async (tenant_id, source, response) => {
         final_cost_inr: Number(costResult.finalCostInr.toFixed(6)),
         pricing_version: costResult.pricingVersion,
         billed: false,
+      });
+      // Create BillingLedger entry so it appears in Transaction Ledger
+      await db.BillingLedger.create({
+        tenant_id,
+        entry_type: "ai",
+        ai_token_usage_id: limitUsageRecord.id,
+        category: "ai_usage",
+        total_cost_inr: 0,
+        markup_percent: costResult.pricingSnapshot.markup_percent,
+        usd_to_inr_rate: costResult.conversionRate,
+        conversion_rate_used: costResult.conversionRate,
+        pricing_version: costResult.pricingVersion,
+        billing_status: "insufficient_balance",
       });
       invalidateUsageCache(tenant_id);
       return;
@@ -126,9 +139,31 @@ export const trackAiTokenUsage = async (tenant_id, source, response) => {
         { transaction: t },
       );
 
+      if (estimatedCostInr <= 0) {
+        // Zero-cost call — still create a ledger entry for visibility
+        await db.BillingLedger.create(
+          {
+            tenant_id,
+            entry_type: "ai",
+            ai_token_usage_id: usageRecord.id,
+            category: "ai_usage",
+            total_cost_inr: 0,
+            markup_percent: appliedMarkup,
+            usd_to_inr_rate: usdToInr,
+            conversion_rate_used: usdToInr,
+            pricing_version: pricingVersion,
+            billing_status: "free",
+          },
+          { transaction: t },
+        );
+      }
+
       if (estimatedCostInr > 0) {
         if (billing_mode === "prepaid") {
           // PREPAID: Deduct from wallet with FOR UPDATE lock — NO grace, NO negative
+          let aiBillingStatus = "charged";
+          let deductNewBalance = null;
+
           const deductResult = await deductWallet(
             tenant_id,
             estimatedCostInr,
@@ -140,6 +175,7 @@ export const trackAiTokenUsage = async (tenant_id, source, response) => {
           if (!deductResult.success) {
             // Mark as unbilled — usage tracked but not charged
             await usageRecord.update({ billed: false }, { transaction: t });
+            aiBillingStatus = "insufficient_balance";
 
             console.warn(
               `[AI-TOKEN-TRACKER] Prepaid deduction failed for tenant ${tenant_id}: ${deductResult.error}`,
@@ -156,30 +192,31 @@ export const trackAiTokenUsage = async (tenant_id, source, response) => {
                 message: "Insufficient balance for AI usage. Please recharge.",
               });
             } catch (_) {}
-            return;
+          } else {
+            deductNewBalance = deductResult.newBalance;
+
+            // Emit real-time update
+            try {
+              const io = getIO();
+              io.to(`tenant-${tenant_id}`).emit("billing-update", {
+                type: "AI_TOKEN_USAGE",
+                tenant_id,
+                model,
+                source,
+                totalTokens: total_tokens,
+                costInr: estimatedCostInr,
+                currentBalance: deductResult.newBalance,
+                lowBalance: deductResult.newBalance < 100,
+                timestamp: new Date(),
+              });
+            } catch (_) {}
+
+            console.log(
+              `[AI-TOKEN-TRACKER] PREPAID billed ${model} for tenant ${tenant_id}: ₹${estimatedCostInr.toFixed(6)} (${total_tokens} tokens). Balance: ₹${deductResult.newBalance.toFixed(4)}`,
+            );
           }
 
-          // Emit real-time update
-          try {
-            const io = getIO();
-            io.to(`tenant-${tenant_id}`).emit("billing-update", {
-              type: "AI_TOKEN_USAGE",
-              tenant_id,
-              model,
-              source,
-              totalTokens: total_tokens,
-              costInr: estimatedCostInr,
-              currentBalance: deductResult.newBalance,
-              lowBalance: deductResult.newBalance < 100,
-              timestamp: new Date(),
-            });
-          } catch (_) {}
-
-          console.log(
-            `[AI-TOKEN-TRACKER] PREPAID billed ${model} for tenant ${tenant_id}: ₹${estimatedCostInr.toFixed(6)} (${total_tokens} tokens). Balance: ₹${deductResult.newBalance.toFixed(4)}`,
-          );
-
-          // Create BillingLedger record for AI usage
+          // Always create BillingLedger record (even on deduction failure)
           await db.BillingLedger.create(
             {
               tenant_id,
@@ -191,6 +228,7 @@ export const trackAiTokenUsage = async (tenant_id, source, response) => {
               usd_to_inr_rate: usdToInr,
               conversion_rate_used: usdToInr,
               pricing_version: pricingVersion,
+              billing_status: aiBillingStatus,
             },
             { transaction: t },
           );
@@ -259,6 +297,7 @@ export const trackAiTokenUsage = async (tenant_id, source, response) => {
               usd_to_inr_rate: usdToInr,
               conversion_rate_used: usdToInr,
               pricing_version: pricingVersion,
+              billing_status: "charged",
             },
             { transaction: t },
           );

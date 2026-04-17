@@ -1,6 +1,7 @@
 import db from "../../database/index.js";
 import { Op } from "sequelize";
 import { recordHealthEvent } from "./billingHealthMonitor.js";
+import { logger } from "../logger.js";
 
 /**
  * Reconcile a single tenant's wallet balance against WalletTransactions.
@@ -62,16 +63,15 @@ export const reconcileWalletBalance = async (tenant_id) => {
         { expected, actual, difference, totalCredits, totalDebits },
       );
 
-      console.warn(
+      logger.warn(
         `[RECONCILER] Mismatch for tenant ${tenant_id}: expected=${expected.toFixed(4)}, actual=${actual.toFixed(4)}, diff=${difference.toFixed(4)}`,
       );
     }
 
     return { tenant_id, expected, actual, difference, balanced };
   } catch (err) {
-    console.error(
-      `[RECONCILER] Error reconciling tenant ${tenant_id}:`,
-      err.message,
+    logger.error(
+      `[RECONCILER] Error reconciling tenant ${tenant_id}: ${err.message}`,
     );
     await recordHealthEvent("reconciliation_mismatch", tenant_id, err.message, {
       stack: err.stack,
@@ -114,7 +114,7 @@ export const runFullWalletReconciliation = async () => {
     }
   }
 
-  console.log(
+  logger.info(
     `[RECONCILER] Completed: ${results.tenants_checked} checked, ${results.wallets_balanced} balanced, ${results.wallet_mismatches.length} mismatches`,
   );
 

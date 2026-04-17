@@ -196,6 +196,7 @@ export const getWeeklySummaryService = async (tenantId) => {
 
       // Generate AI summary based on metrics
       const summary = await generateWeeklySummary({
+        tenantId,
         weekNumber: week.weekNumber,
         totalChats,
         newLeads,
@@ -233,6 +234,7 @@ export const getWeeklySummaryService = async (tenantId) => {
  */
 const generateWeeklySummary = async (metrics) => {
   const {
+    tenantId,
     weekNumber,
     totalChats,
     newLeads,
@@ -270,7 +272,12 @@ Rules:
 Summary:`;
 
   try {
-    const aiSummary = await AiService("system", prompt, null, "weekly_summary");
+    const aiSummary = await AiService(
+      "system",
+      prompt,
+      tenantId,
+      "weekly_summary",
+    );
     return aiSummary?.trim() || buildFallbackSummary(metrics);
   } catch (err) {
     console.error(
@@ -417,6 +424,7 @@ export const getContactWeeklySummaryService = async (
 
       // Generate AI-powered contact-specific summary
       const summary = await generateContactSummary({
+        tenantId,
         contactName: contactInfo?.name || "Contact",
         messageCount,
         sentiment,
@@ -443,14 +451,14 @@ export const getContactWeeklySummaryService = async (
       });
     }
 
+    const activeWeeks = summaries.filter((w) => w.messageCount > 0);
     return {
       contact: contactInfo || { phone: contactPhone },
       totalMessages: summaries.reduce((sum, w) => sum + w.messageCount, 0),
-      avgEngagement: Math.round(
-        summaries.reduce((sum, w) => sum + w.engagementScore, 0) /
-          summaries.length,
-      ),
-      totalWeeks: summaries.filter((w) => w.messageCount > 0).length,
+      avgEngagement: activeWeeks.length > 0
+        ? Math.round(activeWeeks.reduce((sum, w) => sum + w.engagementScore, 0) / activeWeeks.length)
+        : 0,
+      totalWeeks: activeWeeks.length,
       totalActionItems: summaries.reduce(
         (sum, w) => sum + w.actionItems.length,
         0,
@@ -623,6 +631,8 @@ const extractActionItems = (messages) => {
 
 /**
  * Calculate engagement score (0-100)
+ * Returns 0 when there are no messages — a base score only applies
+ * when there is actual conversation activity.
  */
 const calculateEngagementScore = ({
   messageCount,
@@ -630,7 +640,10 @@ const calculateEngagementScore = ({
   botMessages,
   actionItems,
 }) => {
-  let score = 50; // Base score
+  // No messages = no engagement. Never show a non-zero score for empty weeks.
+  if (messageCount === 0) return 0;
+
+  let score = 50; // Base score (only applied when conversation exists)
 
   // Message volume contribution (0-25 points)
   score += Math.min(25, messageCount * 2);
@@ -648,6 +661,7 @@ const calculateEngagementScore = ({
  * Generate AI-powered contact-specific summary narrative
  */
 const generateContactSummary = async ({
+  tenantId,
   contactName,
   messageCount,
   sentiment,
@@ -684,7 +698,7 @@ Summary:`;
     const aiSummary = await AiService(
       "system",
       prompt,
-      null,
+      tenantId,
       "contact_weekly_summary",
     );
     return (

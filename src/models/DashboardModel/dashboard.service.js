@@ -71,6 +71,7 @@ export const getDashboardStatsService = async (tenantId, period = "30days") => {
     // === 1.b. WABA limit rolling analytics ===
     const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 
     const [usedConversations24hRow] = await db.sequelize.query(
       `
@@ -103,6 +104,20 @@ export const getDashboardStatsService = async (tenantId, period = "30days") => {
       },
     );
 
+    const [thirtyDayUniqueRow] = await db.sequelize.query(
+      `
+            SELECT COUNT(DISTINCT contact_id) as unique_users
+            FROM messages
+            WHERE tenant_id = :tenantId
+              AND sender IN ('bot', 'admin')
+              AND created_at >= :targetTime
+        `,
+      {
+        replacements: { tenantId, targetTime: thirtyDaysAgo.toISOString() },
+        type: db.sequelize.QueryTypes.SELECT,
+      },
+    );
+
     if (wabaInfo) {
       wabaInfo.rolling24hUsed = parseInt(
         usedConversations24hRow?.used || 0,
@@ -110,6 +125,10 @@ export const getDashboardStatsService = async (tenantId, period = "30days") => {
       );
       wabaInfo.sevenDayUnique = parseInt(
         sevenDayUniqueRow?.unique_users || 0,
+        10,
+      );
+      wabaInfo.thirtyDayUnique = parseInt(
+        thirtyDayUniqueRow?.unique_users || 0,
         10,
       );
     }
@@ -476,16 +495,21 @@ export const getDashboardStatsService = async (tenantId, period = "30days") => {
     const msgDateFilter = periodStart
       ? { created_at: { [Op.gte]: periodStart } }
       : {};
-    const periodDays = period === "7days" ? 7 : period === "30days" ? 30 : 90; // alltime caps at 90 for averages
 
     // Previous period for trend comparison
     const msgPrevFilter = periodStartPrev
       ? { created_at: { [Op.gte]: periodStartPrev, [Op.lt]: periodStart } }
       : {};
 
-    // Chart always uses last 7 days
-    const chartStart = new Date(todayAtStart);
-    chartStart.setDate(chartStart.getDate() - 6);
+    // Chart uses the same date window as the selected period
+    let chartStart = new Date(todayAtStart);
+    if (period === '7days') {
+      chartStart.setDate(chartStart.getDate() - 6);
+    } else if (period === '30days') {
+      chartStart.setDate(chartStart.getDate() - 29);
+    } else {
+      chartStart = new Date('2020-01-01'); // Safe past date for 'all time'
+    }
 
     const [
       totalMsgsInPeriod,
@@ -522,7 +546,7 @@ export const getDashboardStatsService = async (tenantId, period = "30days") => {
           status: { [Op.in]: ["delivered", "read"] },
         },
       }),
-      // Daily volume chart — always last 7 days
+      // Daily volume chart — uses the selected period window
       db.sequelize.query(
         `
                 SELECT
@@ -542,26 +566,139 @@ export const getDashboardStatsService = async (tenantId, period = "30days") => {
       ),
     ]);
 
-    // Build full 7-day chart array (fill missing days with 0)
-    const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
     const dailyVolumeMap = {};
     dailyVolumeRaw.forEach((r) => {
       dailyVolumeMap[r.day] = r;
     });
 
-    const dailyVolume = Array.from({ length: 7 }, (_, i) => {
-      const d = new Date(chartStart);
-      d.setDate(d.getDate() + i);
-      const dateStr = d.toISOString().split("T")[0];
-      const dayLabel = days[d.getDay() === 0 ? 6 : d.getDay() - 1];
-      const row = dailyVolumeMap[dateStr] || {};
-      return {
-        day: dayLabel,
-        date: dateStr,
-        total: parseInt(row.total || 0),
-        aiHandled: parseInt(row.ai_handled || 0),
-      };
-    });
+    let dailyVolume = [];
+
+    if (period === '7days') {
+      // 7 Days: Show Daily (Mon, Tue...)
+      const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+      dailyVolume = Array.from({ length: 7 }, (_, i) => {
+        const d = new Date(chartStart);
+        d.setDate(d.getDate() + i);
+        const dateStr = d.toISOString().split("T")[0];
+        const dayLabel = days[d.getDay() === 0 ? 6 : d.getDay() - 1];
+        const row = dailyVolumeMap[dateStr] || {};
+        return {
+          day: dayLabel,
+          date: dateStr,
+          total: parseInt(row.total || 0),
+          aiHandled: parseInt(row.ai_handled || 0),
+        };
+      });
+    } else if (period === '30days') {
+      // 30 Days: Show Weekly (Week 1, Week 2...)
+      // Group the 30 days into 4-5 weeks, ending on today.
+      const weeks = [];
+      let currentWeekData = { total: 0, aiHandled: 0 };
+      
+      for (let i = 0; i < 30; i++) {
+        const d = new Date(chartStart);
+        d.setDate(d.getDate() + i);
+        const dateStr = d.toISOString().split("T")[0];
+        const row = dailyVolumeMap[dateStr] || {};
+        
+        currentWeekData.total += parseInt(row.total || 0);
+        currentWeekData.aiHandled += parseInt(row.ai_handled || 0);
+        
+        // Push every 7 days or on the final day
+        if ((i + 1) % 7 === 0 || i === 29) {
+          const weekNumber = Math.ceil((i + 1) / 7);
+          weeks.push({
+            day: `Week ${weekNumber}`,
+            date: dateStr,
+            total: currentWeekData.total,
+            aiHandled: currentWeekData.aiHandled,
+          });
+          currentWeekData = { total: 0, aiHandled: 0 }; // Reset for next week
+        }
+      }
+      dailyVolume = weeks;
+    } else {
+      // All Time: Dynamically group by Year or Month based on org creation date
+      let groupBy = 'month';
+      const todayDate = new Date();
+      
+      const tenantRow = await db.sequelize.query(
+        `SELECT created_at FROM tenants WHERE tenant_id = :tenantId`,
+        { replacements: { tenantId }, type: db.sequelize.QueryTypes.SELECT }
+      );
+
+      let oldestDate = tenantRow && tenantRow.length > 0 && tenantRow[0].created_at 
+        ? new Date(tenantRow[0].created_at) 
+        : new Date();
+
+      const daysDiff = (todayDate - oldestDate) / (1000 * 60 * 60 * 24);
+      if (daysDiff > 365) {
+        groupBy = 'year';
+        // Ensure at least 3 years of data to draw a healthy line chart (prevents 1 or 2 dot charts)
+        if (daysDiff < 1095) {
+            oldestDate = new Date();
+            oldestDate.setFullYear(oldestDate.getFullYear() - 2);
+        }
+      } else {
+        // Ensure at least 6 months of data to draw a healthy line chart (prevents a 1-dot chart for brand new orgs)
+        if (daysDiff < 150) {
+            oldestDate = new Date();
+            oldestDate.setMonth(oldestDate.getMonth() - 5);
+        }
+      }
+
+      const groupedMap = {};
+      const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+      // 1. Pre-fill the groupedMap with 0s for every period from oldestDate to today
+      let iterDate = new Date(oldestDate);
+      iterDate.setDate(1); 
+      if (groupBy === 'year') {
+        iterDate.setMonth(0);
+      }
+
+      while (iterDate <= todayDate) {
+        let label;
+        let sortKey;
+        if (groupBy === 'year') {
+          label = iterDate.getFullYear().toString();
+          sortKey = label;
+        } else {
+          label = monthNames[iterDate.getMonth()] + " " + iterDate.getFullYear().toString().slice(-2); // "Mar 24"
+          sortKey = iterDate.getFullYear() + "-" + String(iterDate.getMonth() + 1).padStart(2, '0');
+        }
+        
+        if (!groupedMap[sortKey]) {
+            groupedMap[sortKey] = { day: label, date: sortKey, total: 0, aiHandled: 0 };
+        }
+
+        if (groupBy === 'year') {
+          iterDate.setFullYear(iterDate.getFullYear() + 1);
+        } else {
+          iterDate.setMonth(iterDate.getMonth() + 1);
+        }
+      }
+
+      // 2. Populate actual data into the map
+      dailyVolumeRaw.forEach((r) => {
+        const date = new Date(r.day);
+        let sortKey;
+        if (groupBy === 'year') {
+          sortKey = date.getFullYear().toString();
+        } else {
+          sortKey = date.getFullYear() + "-" + String(date.getMonth() + 1).padStart(2, '0');
+        }
+
+        if (groupedMap[sortKey]) {
+          groupedMap[sortKey].total += parseInt(r.total || 0);
+          groupedMap[sortKey].aiHandled += parseInt(r.ai_handled || 0);
+        }
+      });
+      
+      dailyVolume = Object.keys(groupedMap)
+        .sort((a, b) => a.localeCompare(b))
+        .map(k => groupedMap[k]);
+    }
 
     // Outgoing messages in period for rate calculations
     const outgoingInPeriod = deliveredMsgsInPeriod + failedMsgsInPeriod;
@@ -589,6 +726,16 @@ export const getDashboardStatsService = async (tenantId, period = "30days") => {
         : 0;
 
     // Avg per day & per hour
+    let periodDays = period === "7days" ? 7 : period === "30days" ? 30 : 90;
+    if (period === "alltime") {
+        const tr = await db.sequelize.query(
+            `SELECT created_at FROM tenants WHERE tenant_id = :tenantId`,
+            { replacements: { tenantId }, type: db.sequelize.QueryTypes.SELECT }
+        );
+        const orgCreatedAt = tr && tr.length > 0 && tr[0].created_at ? new Date(tr[0].created_at) : new Date();
+        const daysDiff = Math.ceil((new Date() - orgCreatedAt) / (1000 * 60 * 60 * 24));
+        periodDays = daysDiff > 0 ? daysDiff : 1;
+    }
     const avgPerDay = Math.round(totalMsgsInPeriod / periodDays);
     const msgsPerHour = Math.round(totalMsgsInPeriod / (periodDays * 24));
 

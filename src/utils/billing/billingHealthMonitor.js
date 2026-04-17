@@ -1,6 +1,7 @@
 import db from "../../database/index.js";
 import { Op } from "sequelize";
 import { getIO } from "../../middlewares/socket/socket.js";
+import { logger } from "../logger.js";
 
 /**
  * Record a billing system health event.
@@ -25,14 +26,13 @@ export const recordHealthEvent = async (
       resolved: false,
     });
 
-    console.error(
+    logger.error(
       `[BILLING-HEALTH] ${event_type} | tenant=${tenant_id || "system"} | ${error_message}`,
     );
   } catch (err) {
     // Health monitor itself must never crash the caller
-    console.error(
-      "[BILLING-HEALTH] Failed to record health event:",
-      err.message,
+    logger.error(
+      `[BILLING-HEALTH] Failed to record health event: ${err.message}`,
     );
   }
 };
@@ -73,7 +73,7 @@ export const getHealthSummary = async () => {
       generated_at: new Date().toISOString(),
     };
   } catch (err) {
-    console.error("[BILLING-HEALTH] getHealthSummary failed:", err.message);
+    logger.error(`[BILLING-HEALTH] getHealthSummary failed: ${err.message}`);
     return {
       period: "last_24h",
       events: {},
@@ -160,21 +160,20 @@ export const checkHealthAlerts = async () => {
     if (alerts.length > 0) {
       try {
         const io = getIO();
-        io.emit("billing-health-alert", {
+        io.to("management-room").emit("billing-health-alert", {
           alerts,
           timestamp: new Date().toISOString(),
         });
       } catch (_) {}
 
-      console.warn(
-        "[BILLING-HEALTH] Alerts triggered:",
-        JSON.stringify(alerts),
+      logger.warn(
+        `[BILLING-HEALTH] Alerts triggered: ${JSON.stringify(alerts)}`,
       );
     }
 
     return alerts;
   } catch (err) {
-    console.error("[BILLING-HEALTH] checkHealthAlerts failed:", err.message);
+    logger.error(`[BILLING-HEALTH] checkHealthAlerts failed: ${err.message}`);
     return [];
   }
 };
@@ -189,7 +188,7 @@ export const resolveHealthEvent = async (eventId) => {
       { where: { id: eventId } },
     );
   } catch (err) {
-    console.error("[BILLING-HEALTH] resolveHealthEvent failed:", err.message);
+    logger.error(`[BILLING-HEALTH] resolveHealthEvent failed: ${err.message}`);
   }
 };
 
@@ -206,7 +205,7 @@ export const getUnresolvedEvents = async (limit = 50) => {
     });
     return events;
   } catch (err) {
-    console.error("[BILLING-HEALTH] getUnresolvedEvents failed:", err.message);
+    logger.error(`[BILLING-HEALTH] getUnresolvedEvents failed: ${err.message}`);
     return [];
   }
 };

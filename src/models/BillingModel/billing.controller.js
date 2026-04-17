@@ -15,6 +15,7 @@ import {
   addManualCreditService,
   getWalletStatusService,
 } from "./billing.service.js";
+import { logger } from "../../utils/logger.js";
 
 export const getBillingKpiController = async (req, res) => {
   try {
@@ -29,7 +30,7 @@ export const getBillingKpiController = async (req, res) => {
       message: "Billing KPIs fetched successfully",
     });
   } catch (error) {
-    console.error("Error in getBillingKpiController:", error);
+    logger.error("Error in getBillingKpiController:", error);
     return res.status(500).json({
       success: false,
       message: "Failed to fetch billing KPIs",
@@ -57,7 +58,7 @@ export const getBillingLedgerController = async (req, res) => {
       data: ledgerData,
     });
   } catch (error) {
-    console.error("Error in getBillingLedgerController:", error);
+    logger.error("Error in getBillingLedgerController:", error);
     return res.status(500).json({
       success: false,
       message: "Failed to fetch billing ledger",
@@ -82,7 +83,7 @@ export const getBillingSpendChartController = async (req, res) => {
       data: spendChartData,
     });
   } catch (error) {
-    console.error("Error in getBillingSpendChartController:", error);
+    logger.error("Error in getBillingSpendChartController:", error);
     return res.status(500).json({
       success: false,
       message: "Failed to fetch spend chart data",
@@ -93,7 +94,18 @@ export const getBillingSpendChartController = async (req, res) => {
 
 export const getWalletBalanceController = async (req, res) => {
   try {
-    const { tenant_id } = req.user;
+    const isManagement = req.user.user_type === "management";
+    const tenant_id = isManagement
+      ? req.query.tenant_id || null
+      : req.user.tenant_id;
+
+    if (!tenant_id) {
+      return res.status(400).json({
+        success: false,
+        message: "tenant_id is required",
+      });
+    }
+
     const balanceData = await getWalletBalanceService(tenant_id);
 
     return res.status(200).json({
@@ -101,7 +113,7 @@ export const getWalletBalanceController = async (req, res) => {
       data: balanceData,
     });
   } catch (error) {
-    console.error("Error in getWalletBalanceController:", error);
+    logger.error("Error in getWalletBalanceController:", error);
     return res.status(500).json({
       success: false,
       message: "Failed to fetch wallet balance",
@@ -112,7 +124,18 @@ export const getWalletBalanceController = async (req, res) => {
 
 export const getWalletTransactionsController = async (req, res) => {
   try {
-    const { tenant_id } = req.user;
+    const isManagement = req.user.user_type === "management";
+    const tenant_id = isManagement
+      ? req.query.tenant_id || null
+      : req.user.tenant_id;
+
+    if (!tenant_id) {
+      return res.status(400).json({
+        success: false,
+        message: "tenant_id is required",
+      });
+    }
+
     const { page, limit, startDate, endDate } = req.query;
     const data = await getWalletTransactionsService(
       tenant_id,
@@ -126,7 +149,7 @@ export const getWalletTransactionsController = async (req, res) => {
       data: data,
     });
   } catch (error) {
-    console.error("Error in getWalletTransactionsController:", error);
+    logger.error("Error in getWalletTransactionsController:", error);
     return res.status(500).json({
       success: false,
       message: "Failed to fetch wallet transactions",
@@ -143,7 +166,7 @@ export const getPricingTableController = async (req, res) => {
       data: pricingData,
     });
   } catch (error) {
-    console.error("Error in getPricingTableController:", error);
+    logger.error("Error in getPricingTableController:", error);
     return res.status(500).json({
       success: false,
       message: "Failed to fetch pricing table",
@@ -163,7 +186,7 @@ export const updatePricingController = async (req, res) => {
       message: "Pricing updated successfully",
     });
   } catch (error) {
-    console.error("Error in updatePricingController:", error);
+    logger.error("Error in updatePricingController:", error);
     return res.status(400).json({
       success: false,
       message: "Failed to update pricing",
@@ -209,7 +232,7 @@ export const getAiTokenUsageController = async (req, res) => {
     const data = await getAiTokenUsageService(tenant_id, startDate, endDate);
     return res.status(200).json({ success: true, data });
   } catch (error) {
-    console.error("Error in getAiTokenUsageController:", error);
+    logger.error("Error in getAiTokenUsageController:", error);
     return res.status(500).json({
       success: false,
       message: "Failed to fetch AI token usage",
@@ -224,7 +247,7 @@ export const getAutoRechargeSettingsController = async (req, res) => {
     const data = await getAutoRechargeSettingsService(tenant_id);
     return res.status(200).json({ success: true, data });
   } catch (error) {
-    console.error("Error in getAutoRechargeSettingsController:", error);
+    logger.error("Error in getAutoRechargeSettingsController:", error);
     return res.status(500).json({
       success: false,
       message: "Failed to fetch auto-recharge settings",
@@ -243,7 +266,7 @@ export const updateAutoRechargeSettingsController = async (req, res) => {
       message: "Auto-recharge settings updated successfully",
     });
   } catch (error) {
-    console.error("Error in updateAutoRechargeSettingsController:", error);
+    logger.error("Error in updateAutoRechargeSettingsController:", error);
     return res.status(400).json({
       success: false,
       message: error.message || "Failed to update auto-recharge settings",
@@ -256,7 +279,7 @@ export const getAvailableAiModelsController = async (req, res) => {
     const data = await getAvailableAiModelsService();
     return res.status(200).json({ success: true, data });
   } catch (error) {
-    console.error("Error in getAvailableAiModelsController:", error);
+    logger.error("Error in getAvailableAiModelsController:", error);
     return res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -290,7 +313,7 @@ export const addManualCreditController = async (req, res) => {
       message: "Credit added successfully",
     });
   } catch (error) {
-    console.error("Error in addManualCreditController:", error);
+    logger.error("Error in addManualCreditController:", error);
     return res.status(400).json({
       success: false,
       message: error.message || "Failed to add credit",
@@ -319,7 +342,7 @@ export const getWalletStatusController = async (req, res) => {
       data: status,
     });
   } catch (error) {
-    console.error("Error in getWalletStatusController:", error);
+    logger.error("Error in getWalletStatusController:", error);
     return res.status(500).json({
       success: false,
       message: error.message || "Failed to get wallet status",
@@ -340,7 +363,7 @@ export const getOwnWalletStatusController = async (req, res) => {
       data: status,
     });
   } catch (error) {
-    console.error("Error in getOwnWalletStatusController:", error);
+    logger.error("Error in getOwnWalletStatusController:", error);
     return res.status(500).json({
       success: false,
       message: error.message || "Failed to get wallet status",

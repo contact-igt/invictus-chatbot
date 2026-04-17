@@ -125,6 +125,7 @@ export const BookingSessionTable = (sequelize, Sequelize) => {
     {
       tableName: tableNames.BOOKING_SESSIONS,
       timestamps: true,
+      underscored: true,
       indexes: [
         {
           name: "idx_session_id",

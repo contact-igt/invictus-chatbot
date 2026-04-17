@@ -15,7 +15,7 @@ export const KnowledgeSourcesTable = (sequelize, Sequelize) => {
       },
 
       type: {
-        type: Sequelize.ENUM("file", "text", "url"),
+        type: Sequelize.ENUM("file", "text", "url", "faq"),
         allowNull: false,
       },
 
@@ -69,6 +69,11 @@ export const KnowledgeSourcesTable = (sequelize, Sequelize) => {
       timestamps: true,
       underscored: true,
       indexes: [
+        {
+          name: "uq_ks_tenant_type",
+          unique: true,
+          fields: ["tenant_id", "type"],
+        },
         {
           name: "idx_ks_status",
           fields: ["tenant_id", "status", "is_deleted"],

@@ -16,7 +16,7 @@ export const PricingTable = (sequelize, Sequelize) => {
           "marketing",
           "utility",
           "authentication",
-          "service",
+          "service"
         ),
         allowNull: false,
       },
@@ -41,7 +41,8 @@ export const PricingTable = (sequelize, Sequelize) => {
         type: Sequelize.INTEGER,
         allowNull: false,
         defaultValue: 1,
-        comment: "Incremented on every rate/markup update",
+        comment:
+          "Incremented on every rate/markup update — enables historical pricing support",
       },
 
       createdAt: {
@@ -62,13 +63,14 @@ export const PricingTable = (sequelize, Sequelize) => {
       tableName: tableNames.PRICING_TABLE,
       timestamps: true,
       underscored: true,
+
       indexes: [
         {
-          name: "idx_pricing_category_country",
+          name: "idx_pricing_category_country_version",
           unique: true,
-          fields: ["category", "country"],
+          fields: ["category", "country", "pricing_version"],
         },
       ],
-    },
+    }
   );
 };

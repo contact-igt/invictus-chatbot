@@ -21,6 +21,7 @@ import { WhatsappTemplateSyncLogTable } from "./tables/WhatsappTemplateSyncLogsT
 import { WhatsappAccountTable } from "./tables/WhatsappAccountTable/index.js";
 import { WhatsappCampaignTable } from "./tables/WhatsappCampaignTable/index.js";
 import { WhatsappCampaignRecipientTable } from "./tables/WhatsappCampaignRecipientTable/index.js";
+import { CampaignEventsTable } from "./tables/CampaignEventsTable/index.js";
 import { ContactGroupTable } from "./tables/ContactGroupTable/index.js";
 import { ContactGroupMemberTable } from "./tables/ContactGroupMemberTable/index.js";
 import { SequencesTable } from "./tables/SequencesTable/index.js";
@@ -29,7 +30,6 @@ import { DoctorsTable } from "./tables/DoctorsTable/index.js";
 import { DoctorAvailabilityTable } from "./tables/DoctorAvailabilityTable/index.js";
 import { SpecializationsTable } from "./tables/SpecializationsTable/index.js";
 import { DoctorSpecializationsTable } from "./tables/DoctorSpecializationsTable/index.js";
-import { AppointmentTable } from "./tables/AppointmentTable/index.js";
 import { PricingTable } from "./tables/PricingTableTable/index.js";
 import { MessageUsageTable } from "./tables/MessageUsageTable/index.js";
 import { BillingLedgerTable } from "./tables/BillingLedgerTable/index.js";
@@ -47,14 +47,22 @@ import { BillingSystemHealthTable } from "./tables/BillingSystemHealthTable/inde
 import { DailyUsageSummaryTable } from "./tables/DailyUsageSummaryTable/index.js";
 import { MonthlyUsageSummaryTable } from "./tables/MonthlyUsageSummaryTable/index.js";
 import { CronExecutionLogTable } from "./tables/CronExecutionLogTable/index.js";
+import { FaqReviewsTable } from "./tables/FaqTable/index.js";
+import { FaqKnowledgeSourceTable } from "./tables/FaqKnowledgeSourceTable/index.js";
 import { defineAssociations } from "./associations.js";
+import { MediaAssetTable } from "./tables/MediaAssetTable/index.js";
+import { AppointmentTable } from "./tables/AppointmentTable/index.js";
+import { SavedPaymentMethodTable } from "./tables/SavedPaymentMethod/SavedPaymentMethod.js";
+import { TaxSettingsTable } from "./tables/TaxSettingsTable/index.js";
 
 const dbconfig =
   ServerEnvironmentConfig?.server?.line === "production"
     ? DatabaseEnvironmentConfig?.live
     : ServerEnvironmentConfig?.server?.line === "development"
       ? DatabaseEnvironmentConfig?.development
-      : DatabaseEnvironmentConfig?.local;
+      : ServerEnvironmentConfig?.server?.line === "stage"
+        ? DatabaseEnvironmentConfig?.stage
+        : DatabaseEnvironmentConfig?.local;
 
 const sequelize = new Sequelize(
   dbconfig?.databse,
@@ -106,6 +114,7 @@ db.WhatsappCampaignRecipients = WhatsappCampaignRecipientTable(
   sequelize,
   Sequelize,
 );
+db.CampaignEvents = CampaignEventsTable(sequelize, Sequelize);
 
 db.Whatsappaccount = WhatsappAccountTable(sequelize, Sequelize);
 db.KnowledgeSources = KnowledgeSourcesTable(sequelize, Sequelize);
@@ -125,7 +134,6 @@ db.Doctors = DoctorsTable(sequelize, Sequelize);
 db.DoctorAvailability = DoctorAvailabilityTable(sequelize, Sequelize);
 db.Specializations = SpecializationsTable(sequelize, Sequelize);
 db.DoctorSpecializations = DoctorSpecializationsTable(sequelize, Sequelize);
-db.Appointments = AppointmentTable(sequelize, Sequelize);
 db.PricingTable = PricingTable(sequelize, Sequelize);
 db.MessageUsage = MessageUsageTable(sequelize, Sequelize);
 db.BillingLedger = BillingLedgerTable(sequelize, Sequelize);
@@ -142,11 +150,13 @@ db.BillingSystemHealth = BillingSystemHealthTable(sequelize, Sequelize);
 db.DailyUsageSummary = DailyUsageSummaryTable(sequelize, Sequelize);
 db.MonthlyUsageSummary = MonthlyUsageSummaryTable(sequelize, Sequelize);
 db.CronExecutionLog = CronExecutionLogTable(sequelize, Sequelize);
-// db.BookingSession = BookingSessionTable(sequelize, Sequelize);
+db.FaqReviews = FaqReviewsTable(sequelize, Sequelize);
+db.FaqKnowledgeSource = FaqKnowledgeSourceTable(sequelize, Sequelize);
+db.MediaAsset = MediaAssetTable(sequelize, Sequelize);
+db.Appointments = AppointmentTable(sequelize, Sequelize);
+db.SavedPaymentMethod = SavedPaymentMethodTable(sequelize, Sequelize);
+db.TaxSettings = TaxSettingsTable(sequelize, Sequelize);
 
-// ========================================
-// IMPORT AND DEFINE ASSOCIATIONS
-// ========================================
 defineAssociations(db);
 
 export default db;

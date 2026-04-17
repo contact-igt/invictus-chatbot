@@ -4,7 +4,5 @@ export * from "./search.js";
 export * from "./admin.js";
 export * from "./lead.js";
 export * from "./template.js";
-export * from "./appointmentContext.js";
 
-export const DEFAULT_SYSTEM_PROMPT =
-  "You are a helpful team member. Answer questions briefly. No emojis. 1-2 sentences max.";
+export const DEFAULT_SYSTEM_PROMPT = "You are a helpful team member. Answer questions briefly. No emojis. 1-2 sentences max.";

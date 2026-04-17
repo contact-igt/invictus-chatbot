@@ -1,6 +1,7 @@
 import db from "../../database/index.js";
 import { DEFAULT_MARKUP_PERCENT } from "../../config/billing.config.js";
 import { getConversionRate } from "./currencyService.js";
+import { logger } from "../logger.js";
 
 // Hardcoded fallback rates per message (USD) — used when no DB pricing exists
 const DEFAULT_META_RATES = {
@@ -75,9 +76,8 @@ const getAiPricingRules = async () => {
       return pricing;
     }
   } catch (err) {
-    console.error(
-      "[COST-ESTIMATOR] Failed to fetch AI pricing from DB:",
-      err.message,
+    logger.error(
+      `[COST-ESTIMATOR] Failed to fetch AI pricing from DB: ${err.message}`,
     );
   }
 
