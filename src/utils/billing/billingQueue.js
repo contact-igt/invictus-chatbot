@@ -17,6 +17,14 @@ const REDIS_CONNECT_TIMEOUT_MS = Number(
   process.env.BILLING_QUEUE_CONNECT_TIMEOUT_MS || 1200,
 );
 
+const parseBooleanEnv = (value, defaultValue = true) => {
+  if (value === undefined || value === null || value === "") return defaultValue;
+  const normalized = String(value).trim().toLowerCase();
+  if (["1", "true", "yes", "y", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "n", "off"].includes(normalized)) return false;
+  return defaultValue;
+};
+
 const logQueueDisabledOnce = (message, detail) => {
   if (queueDisableLogged) return;
   queueDisableLogged = true;
@@ -126,12 +134,23 @@ export const initBillingQueue = async () => {
   queueDisabling = false;
 
   try {
+    const queueEnabled = parseBooleanEnv(
+      process.env.BILLING_QUEUE_ENABLED,
+      true,
+    );
+    if (!queueEnabled) {
+      billingQueue = null;
+      queueAvailable = false;
+      logger.info("[BILLING-QUEUE] Disabled via BILLING_QUEUE_ENABLED=false");
+      return;
+    }
+
     const redisUrl = process.env.REDIS_URL || DEFAULT_REDIS_URL;
 
     const redisStatus = await checkRedisReachability(redisUrl);
     if (!redisStatus.ok) {
       await disableQueue(
-        "[BILLING-QUEUE] Redis not reachable — queue disabled, using sync processing.",
+        "[BILLING-QUEUE] Redis not reachable - queue disabled, using sync processing.",
         redisStatus.reason,
       );
       return;
@@ -179,7 +198,7 @@ export const initBillingQueue = async () => {
 
       if (isRedisConnectionError(error)) {
         void disableQueue(
-          "[BILLING-QUEUE] Redis connection lost — queue disabled, using sync processing.",
+          "[BILLING-QUEUE] Redis connection lost - queue disabled, using sync processing.",
           error,
         );
         return;
@@ -188,7 +207,7 @@ export const initBillingQueue = async () => {
     });
   } catch (err) {
     await disableQueue(
-      "[BILLING-QUEUE] Redis not available — queue disabled, using sync processing.",
+      "[BILLING-QUEUE] Redis not available - queue disabled, using sync processing.",
       err,
     );
   }

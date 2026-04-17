@@ -201,15 +201,6 @@ export const TenantsTable = (sequelize, Sequelize) => {
       ai_settings: {
         type: Sequelize.JSON,
         allowNull: true,
-        defaultValue: {
-          auto_responder: true,
-          smart_reply: true,
-          neural_summary: true,
-          content_generation: true,
-          input_model: "gpt-4o-mini",
-          output_model: "gpt-4o",
-          openai_api_key: "",
-        },
       },
 
       createdAt: {
