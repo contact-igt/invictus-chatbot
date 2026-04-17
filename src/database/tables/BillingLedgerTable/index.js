@@ -19,6 +19,7 @@ export const BillingLedgerTable = (sequelize, Sequelize) => {
       message_usage_id: {
         type: Sequelize.INTEGER,
         allowNull: true,
+        unique: "idx_billing_ledger_message_usage",
         comment:
           "Unique constraint prevents duplicate billing for the same message (NULL for AI entries)",
       },
@@ -26,6 +27,7 @@ export const BillingLedgerTable = (sequelize, Sequelize) => {
       ai_token_usage_id: {
         type: Sequelize.INTEGER,
         allowNull: true,
+        unique: "idx_billing_ledger_ai_token_usage",
         comment:
           "FK to ai_token_usage — set for AI billing entries (NULL for message entries)",
       },
@@ -161,18 +163,8 @@ export const BillingLedgerTable = (sequelize, Sequelize) => {
           fields: ["created_at"],
         },
         {
-          name: "idx_billing_ledger_message_usage",
-          unique: true,
-          fields: ["message_usage_id"],
-        },
-        {
           name: "idx_billing_ledger_category",
           fields: ["category"],
-        },
-        {
-          name: "idx_billing_ledger_ai_token_usage",
-          unique: true,
-          fields: ["ai_token_usage_id"],
         },
         {
           name: "idx_billing_ledger_entry_type",

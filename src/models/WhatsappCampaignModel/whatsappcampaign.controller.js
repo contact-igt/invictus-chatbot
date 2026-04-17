@@ -43,7 +43,7 @@ export const estimateCampaignCostController = async (req, res) => {
       attributes: ["country", "owner_country_code", "timezone"],
       raw: true,
     });
-    
+
     // Auto-detect India based on timezone or country code
     const isIndia = (tenant?.owner_country_code === "91" || tenant?.timezone === "Asia/Kolkata");
     const country = req.body.country || tenant?.country || (isIndia ? "IN" : "Global");
@@ -177,7 +177,7 @@ export const createCampaignController = async (req, res) => {
           raw: true,
         });
         const category = (template?.category || "marketing").toLowerCase();
-        
+
         // Look up tenant's country and timezone
         const tenant = await db.Tenants.findOne({
           where: { tenant_id },
@@ -186,7 +186,7 @@ export const createCampaignController = async (req, res) => {
         });
         const isIndia = (tenant?.owner_country_code === "91" || tenant?.timezone === "Asia/Kolkata");
         const country = req.body.country || tenant?.country || (isIndia ? "IN" : "Global");
-        
+
         const cost = await estimateMetaCost(category, country);
         const estimated_cost = cost.totalCostInr * recipientCount;
 

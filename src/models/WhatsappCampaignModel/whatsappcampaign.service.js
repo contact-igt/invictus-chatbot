@@ -1398,3 +1398,29 @@ export const restoreCampaignService = async (campaign_id, tenant_id) => {
     throw err;
   }
 };
+
+export const resolveRecipientCount = async (
+  tenant_id,
+  audience_type,
+  audience_data,
+) => {
+  const { default: db } = await import("../../database/index.js");
+
+  switch (audience_type) {
+    case "manual":
+      return Array.isArray(audience_data) ? audience_data.length : 0;
+    case "csv":
+      return Array.isArray(audience_data) ? audience_data.length : 0;
+    case "all_contacts":
+      return await db.Contacts.count({ where: { tenant_id, is_deleted: false } });
+    case "all_leads":
+      return await db.Leads.count({ where: { tenant_id, is_deleted: false } });
+    case "group":
+      if (Array.isArray(audience_data)) return audience_data.length; // Personalized group data provided as array
+      return await db.ContactGroupMembers.count({
+        where: { tenant_id, group_id: audience_data },
+      });
+    default:
+      return 0;
+  }
+};
