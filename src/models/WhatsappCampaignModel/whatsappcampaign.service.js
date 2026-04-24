@@ -24,6 +24,9 @@ import { estimateMetaCost } from "../../utils/billing/costEstimator.js";
 import { addCampaignUsageService } from "../GalleryModel/gallery.service.js";
 import { logger } from "../../utils/logger.js";
 
+// In-memory lock to prevent concurrent execution of the same campaign
+const runningCampaigns = new Set();
+
 /**
  * Creates a new campaign and populates its recipients.
  * Supports three audience types: manual, group, csv
@@ -381,6 +384,11 @@ export const executeCampaignBatchService = async (
   tenant_id,
   batchSize = 50,
 ) => {
+  if (runningCampaigns.has(campaign_id)) {
+    logger.warn(`[CAMPAIGN-LOCK] Campaign ${campaign_id} already executing, skipping concurrent run`);
+    return { finished: false, skipped: true };
+  }
+  runningCampaigns.add(campaign_id);
   try {
     const campaign = await db.WhatsappCampaigns.findOne({
       where: {
@@ -791,6 +799,13 @@ export const executeCampaignBatchService = async (
         }
 
         let result;
+        // Atomic check: skip if another execution already claimed this recipient
+        const stillPending = await db.WhatsappCampaignRecipients.findOne({
+          where: { id: recipient.id, status: "pending" },
+          attributes: ["id"],
+        });
+        if (!stillPending) continue;
+
         try {
           result = await sendWhatsAppTemplate(
             tenant_id,
@@ -1004,6 +1019,8 @@ export const executeCampaignBatchService = async (
     return { finished: false, processedCount: recipients.length };
   } catch (err) {
     throw err;
+  } finally {
+    runningCampaigns.delete(campaign_id);
   }
 };
 

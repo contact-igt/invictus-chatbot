@@ -31,7 +31,7 @@ export const createUserMessageService = async (
   template_name = null,
   media_filename = null,
 ) => {
-  const Query = `INSERT INTO ${tableNames?.MESSAGES} (  
+  const Query = `INSERT IGNORE INTO ${tableNames?.MESSAGES} (  
   tenant_id,
   contact_id,
   phone_number_id,
@@ -102,13 +102,14 @@ export const getChatListService = async (tenant_id, limit = 200) => {
   INNER JOIN (
     SELECT
       contact_id,
-      MAX(created_at) AS last_message_time
+      MAX(created_at) AS last_message_time,
+      MAX(id) AS last_message_id
     FROM messages
     WHERE tenant_id = ? AND is_deleted = false
     GROUP BY contact_id
   ) lm
     ON m.contact_id = lm.contact_id
-   AND m.created_at = lm.last_message_time
+   AND m.id = lm.last_message_id
   JOIN contacts c
     ON c.contact_id = m.contact_id
   LEFT JOIN ${tableNames.LIVECHAT} lc
