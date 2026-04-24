@@ -665,18 +665,34 @@ export const executeCampaignBatchService = async (
             (mediaHandle || campaignHeaderMediaUrl)
           ) {
             let mediaObj = null;
-            if (mediaId) {
-              mediaObj = { id: mediaId };
-            } else if (campaignHeaderMediaUrl) {
-              mediaObj = { link: campaignHeaderMediaUrl };
-            } else {
-              throw new Error(
-                "Media header is configured, but no valid media ID or preview URL is available for sending.",
-              );
-            }
 
             if (hFormat === "DOCUMENT") {
+              // Meta Cloud API schema requires document.id to be [integer, null].
+              // The resumable-upload handle ("4::...") is a string and fails that
+              // schema check. Always prefer link for documents; only use id when
+              // the value is a pure numeric string (a real Media ID).
+              const isNumericId = mediaId && /^\d+$/.test(mediaId);
+              if (campaignHeaderMediaUrl) {
+                mediaObj = { link: campaignHeaderMediaUrl };
+              } else if (isNumericId) {
+                mediaObj = { id: mediaId };
+              } else {
+                throw new Error(
+                  "Document header requires a public media URL. No valid URL is available for sending.",
+                );
+              }
               mediaObj.filename = campaign.header_file_name || "document.pdf";
+            } else {
+              // IMAGE / VIDEO: Meta accepts string handles as id — id-first is fine.
+              if (mediaId) {
+                mediaObj = { id: mediaId };
+              } else if (campaignHeaderMediaUrl) {
+                mediaObj = { link: campaignHeaderMediaUrl };
+              } else {
+                throw new Error(
+                  "Media header is configured, but no valid media ID or preview URL is available for sending.",
+                );
+              }
             }
             components.push({
               type: "header",
@@ -791,7 +807,9 @@ export const executeCampaignBatchService = async (
             ) ||
             errMsg.includes(
               "template['components'][0]['parameters'][0]['image']['id']",
-            );
+            ) ||
+            // JSON schema type error: document.id / image.id / video.id expected integer
+            (errMsg.includes("JSON schema constraint") && errMsg.includes(".id"));
 
           // Auto-retry once with LINK if Meta rejects the media ID and we have a preview URL.
           if (hasInvalidMediaId && campaignHeaderMediaUrl) {

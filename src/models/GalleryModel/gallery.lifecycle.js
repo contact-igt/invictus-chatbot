@@ -136,19 +136,30 @@ export const restoreMediaAssetController = lifecycleHandler(async (req, res) => 
   const { asset_id } = req.params;
   const { tenant_id } = req.user;
   const data = await restoreMediaAssetWithCheck(asset_id, tenant_id);
-  return res.status(200).json({ message: "Media asset restored", data });
+  return res.status(200).json({
+    success: true,
+    message: "Media asset restored",
+    data,
+  });
 });
 
 export const hardDeleteMediaAssetController = lifecycleHandler(async (req, res) => {
   const { asset_id } = req.params;
   const { tenant_id } = req.user;
   await hardDeleteMediaAsset(asset_id, tenant_id);
-  return res.status(200).json({ message: "Media asset permanently deleted and file purged from storage" });
+  return res.status(200).json({
+    success: true,
+    message: "Media asset permanently deleted and file purged from storage",
+  });
 });
 
 export const getDeletedMediaAssetsController = lifecycleHandler(async (req, res) => {
   const { tenant_id } = req.user;
   const { page = 1, limit = 20 } = req.query;
   const data = await getDeletedMediaAssets(tenant_id, parseInt(page), Math.min(parseInt(limit), 100));
-  return res.status(200).json({ message: "success", data });
+  return res.status(200).json({
+    success: true,
+    message: "success",
+    data,
+  });
 });

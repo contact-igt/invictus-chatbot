@@ -43,6 +43,7 @@ import {
 
 import { getComprehensiveWebhookStatusService } from "../WhatsappAccountModel/whatsappAccount.service.js";
 import { encrypt, decrypt, maskApiKey } from "../../utils/encryption.js";
+import { storeSecret, getSecret } from "../TenantSecretsModel/tenantSecrets.service.js";
 import OpenAI from "openai";
 
 export const createTenantController = async (req, res) => {
@@ -135,9 +136,8 @@ export const createTenantController = async (req, res) => {
         (() => {
           if (!ai_settings) return null;
           const settings = { ...ai_settings };
-          if (settings.openai_api_key) {
-            settings.openai_api_key = encrypt(settings.openai_api_key);
-          }
+          // Never store the raw key in the JSON column — storeSecret handles it after tenant is created
+          delete settings.openai_api_key;
           return settings;
         })(),
         t, // transaction
@@ -164,6 +164,11 @@ export const createTenantController = async (req, res) => {
         t, // transaction
       );
     });
+
+    // Store OpenAI key in tenant_secrets after transaction commits (outside tx — no rollback risk)
+    if (ai_settings?.openai_api_key) {
+      await storeSecret(tenant_id, "openai", ai_settings.openai_api_key);
+    }
 
     // Send invitation email OUTSIDE the transaction — tenant is already saved,
     // so a transient SMTP failure won't roll back the entire registration.
@@ -314,13 +319,17 @@ export const updateTenantController = async (req, res) => {
       (() => {
         if (!ai_settings) return ai_settings;
         const settings = { ...ai_settings };
-        if (settings.openai_api_key) {
-          settings.openai_api_key = encrypt(settings.openai_api_key);
-        }
+        // Never store the raw key in the JSON column — storeSecret handles it below
+        delete settings.openai_api_key;
         return settings;
       })(),
       id,
     );
+
+    // Store OpenAI key in tenant_secrets if provided via this path
+    if (ai_settings?.openai_api_key) {
+      await storeSecret(id, "openai", ai_settings.openai_api_key);
+    }
 
     // Sync changes to the primary tenant admin user
     const tenantAdmin = await findTenantAdminService(id);
@@ -475,7 +484,7 @@ export const deleteTenantController = async (req, res) => {
     const { id } = req.params;
     await deleteTenantService(id);
     return res.status(200).send({
-      message: "Tenant removed successfully",
+      message: "Organization deleted successfully",
     });
   } catch (err) {
     res.status(500).send({ error: err.message });
@@ -590,26 +599,26 @@ export const getOnboardedTenantListController = async (req, res) => {
 export const getTenantSettingsController = async (req, res) => {
   try {
     const tenant_id = req.user.tenant_id;
-    console.log(`[SETTINGS GET] tenant_id=${tenant_id}`);
     const settings = await getTenantSettingsService(tenant_id);
     if (!settings) return res.status(404).json({ message: "Tenant not found" });
 
-    // NEVER send raw or encrypted key to frontend — only masked status
+    // Resolve masked key — prefer tenant_secrets (GCM), fall back to legacy CBC in ai_settings
     if (settings.ai_settings) {
-      const encryptedKey = settings.ai_settings.openai_api_key;
-      if (encryptedKey) {
-        try {
-          const rawKey = decrypt(encryptedKey);
-          settings.ai_settings.openai_api_key_masked = maskApiKey(rawKey);
-          settings.ai_settings.has_openai_key = true;
-        } catch {
-          settings.ai_settings.openai_api_key_masked = "••••••••";
-          settings.ai_settings.has_openai_key = true;
-        }
+      let rawKey = await getSecret(tenant_id, "openai");
+
+      // Legacy fallback: old CBC-encrypted key still in ai_settings JSON
+      if (!rawKey && settings.ai_settings.openai_api_key) {
+        try { rawKey = decrypt(settings.ai_settings.openai_api_key); } catch { /* ignore */ }
+      }
+
+      if (rawKey) {
+        settings.ai_settings.openai_api_key_masked = maskApiKey(rawKey);
+        settings.ai_settings.has_openai_key = true;
       } else {
         settings.ai_settings.openai_api_key_masked = "";
         settings.ai_settings.has_openai_key = false;
       }
+      // Never send raw or encrypted key to frontend
       delete settings.ai_settings.openai_api_key;
     }
 
@@ -661,9 +670,11 @@ export const updateTenantAiSettingsController = async (req, res) => {
       }
     }
 
-    // Encrypt the API key before storing
+    // Store OpenAI key in tenant_secrets (AES-256-GCM, per-tenant key).
+    // Never persist it in the ai_settings JSON column.
     if (ai_settings?.openai_api_key) {
-      ai_settings.openai_api_key = encrypt(ai_settings.openai_api_key);
+      await storeSecret(tenant_id, "openai", ai_settings.openai_api_key);
+      delete ai_settings.openai_api_key;
     }
 
     await updateTenantAiSettingsService(tenant_id, ai_settings);
@@ -671,16 +682,16 @@ export const updateTenantAiSettingsController = async (req, res) => {
     // Return refreshed settings with masked key so frontend cache stays consistent
     const refreshed = await getTenantSettingsService(tenant_id);
     if (refreshed?.ai_settings) {
-      const encryptedKey = refreshed.ai_settings.openai_api_key;
-      if (encryptedKey) {
-        try {
-          const rawKey = decrypt(encryptedKey);
-          refreshed.ai_settings.openai_api_key_masked = maskApiKey(rawKey);
-          refreshed.ai_settings.has_openai_key = true;
-        } catch {
-          refreshed.ai_settings.openai_api_key_masked = "••••••••";
-          refreshed.ai_settings.has_openai_key = true;
-        }
+      let rawKey = await getSecret(tenant_id, "openai");
+
+      // Legacy fallback for tenants not yet migrated
+      if (!rawKey && refreshed.ai_settings.openai_api_key) {
+        try { rawKey = decrypt(refreshed.ai_settings.openai_api_key); } catch { /* ignore */ }
+      }
+
+      if (rawKey) {
+        refreshed.ai_settings.openai_api_key_masked = maskApiKey(rawKey);
+        refreshed.ai_settings.has_openai_key = true;
       } else {
         refreshed.ai_settings.openai_api_key_masked = "";
         refreshed.ai_settings.has_openai_key = false;

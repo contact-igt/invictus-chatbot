@@ -4,6 +4,7 @@ import {
   getWhatsappAccountByTenantService,
   updateWhatsappAccountStatusService,
   updateAccessTokenService,
+  updateWhatsappAccountService,
   softDeleteWhatsappAccountService,
   permanentDeleteWhatsappAccountService,
   syncWabaMetaInfoService,
@@ -246,6 +247,34 @@ export const testWhatsappAccountController = async (req, res) => {
 //   }
 // };
 
+export const updateWhatsappAccountController = async (req, res) => {
+  try {
+    const tenant_id = req.user.tenant_id;
+    const { waba_id, phone_number_id, whatsapp_number, app_id, access_token } = req.body;
+
+    if (!waba_id && !phone_number_id && !whatsapp_number && !app_id && !access_token) {
+      return res.status(400).send({ message: "No fields provided to update." });
+    }
+
+    if (access_token && access_token.length < 50) {
+      return res.status(400).send({ message: "Access token is too short. Please enter a valid token." });
+    }
+
+    const account = await getWhatsappAccountByTenantService(tenant_id);
+    if (!account) {
+      return res.status(404).send({ message: "WhatsApp account not found" });
+    }
+
+    await updateWhatsappAccountService(tenant_id, { waba_id, phone_number_id, whatsapp_number, app_id, access_token });
+
+    return res.status(200).send({
+      message: "WhatsApp account updated successfully. Please test connection to verify.",
+    });
+  } catch (err) {
+    return res.status(500).send({ message: err.message });
+  }
+};
+
 export const updateAccessTokenController = async (req, res) => {
   try {
     const tenant_id = req.user.tenant_id;
@@ -338,18 +367,17 @@ export const getWhatsappAccountController = async (req, res) => {
     }
 
     // Non-blocking: refresh quality & tier from Meta in background
-    // so next dashboard load always has up-to-date values
     syncWabaMetaInfoService(tenant_id).catch((e) =>
       console.error("[WABA Sync] Background sync failed:", e.message),
     );
 
-    return res.status(200).send({
-      data: account,
-    });
+    // Never expose the raw token to the frontend
+    const { access_token, ...safeAccount } = account;
+    safeAccount.has_access_token = !!access_token;
+
+    return res.status(200).send({ data: safeAccount });
   } catch (err) {
-    return res.status(500).send({
-      error: err.message,
-    });
+    return res.status(500).send({ error: err.message });
   }
 };
 

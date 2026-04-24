@@ -298,44 +298,15 @@ export const softDeleteTenantService = async (tenant_id) => {
   const transaction = await db.sequelize.transaction();
 
   try {
-    // ── Soft-delete tables (have is_deleted column) ──
-    const softDeleteTables = [
-      tableNames.TENANTS,
-      tableNames.TENANT_USERS,
-      tableNames.CONTACTS,
-      tableNames.CONTACT_GROUPS,
-      tableNames.DOCTORS,
-      tableNames.SPECIALIZATIONS,
-      tableNames.WHATSAPP_TEMPLATE,
-      tableNames.KNOWLEDGESOURCE,
-      tableNames.KNOWLEDGECHUNKS,
-      tableNames.AIPROMPT,
-      tableNames.APPOINTMENTS,
-      tableNames.LEADS,
-      tableNames.LIVECHAT,
-    ];
-
-    for (const table of softDeleteTables) {
-      await db.sequelize.query(
-        `UPDATE ${table} SET is_deleted = 1, deleted_at = NOW() WHERE tenant_id = ? AND is_deleted = 0`,
-        { replacements: [tenant_id], transaction },
-      );
-    }
-
-    // ── Hard-delete child records that have no is_deleted (orphan prevention) ──
-    // NOTE: These child records are left intact during soft-delete.
-    // Their parent records (templates, campaigns, doctors, contacts) are soft-deleted,
-    // making these children unreachable. They are only hard-deleted on permanent delete.
-    // This ensures full data recovery on restore.
-
-    // Now soft-delete tenant-scoped tables without is_deleted (mark via parent)
-    // Campaigns and WhatsApp accounts are soft-deleted via tenant scope
+    // Mark tenant as deleted (moves to trash)
     await db.sequelize.query(
-      `UPDATE ${tableNames.WHATSAPP_CAMPAIGN} SET is_deleted = 1, deleted_at = NOW() WHERE tenant_id = ? AND is_deleted = 0`,
+      `UPDATE ${tableNames.TENANTS} SET is_deleted = 1, deleted_at = NOW() WHERE tenant_id = ? AND is_deleted = 0`,
       { replacements: [tenant_id], transaction },
     );
+
+    // Disable all tenant user logins so they cannot authenticate while in trash
     await db.sequelize.query(
-      `UPDATE ${tableNames.WHATSAPP_ACCOUNT} SET is_deleted = 1, deleted_at = NOW() WHERE tenant_id = ? AND is_deleted = 0`,
+      `UPDATE ${tableNames.TENANT_USERS} SET is_deleted = 1, deleted_at = NOW() WHERE tenant_id = ? AND is_deleted = 0`,
       { replacements: [tenant_id], transaction },
     );
 
@@ -389,6 +360,18 @@ export const deleteTenantService = async (tenant_id) => {
       { replacements: [tenant_id], transaction },
     );
 
+    // Campaign events → via campaign_id (no tenant_id column)
+    await db.sequelize.query(
+      `DELETE FROM ${tableNames.CAMPAIGN_EVENTS} WHERE campaign_id IN (SELECT campaign_id FROM ${tableNames.WHATSAPP_CAMPAIGN} WHERE tenant_id = ?)`,
+      { replacements: [tenant_id], transaction },
+    );
+
+    // Delete OTP records BEFORE tenant_users and tenants are deleted (subquery depends on them)
+    await db.sequelize.query(
+      `DELETE FROM ${tableNames.OTP_VERIFICATIONS} WHERE email IN (SELECT email FROM ${tableNames.TENANT_USERS} WHERE tenant_id = ?) OR email IN (SELECT owner_email FROM ${tableNames.TENANTS} WHERE tenant_id = ?)`,
+      { replacements: [tenant_id, tenant_id], transaction },
+    );
+
     // ── Delete all tenant-scoped tables ──
     const allTenantTables = [
       tableNames.MESSAGES,
@@ -413,6 +396,10 @@ export const deleteTenantService = async (tenant_id) => {
       tableNames.WALLET_TRANSACTIONS,
       tableNames.WALLETS,
       tableNames.TENANT_INVITATIONS,
+      tableNames.MEDIA_ASSETS,
+      tableNames.FAQ_REVIEWS,
+      tableNames.SAVE_PAYMENT_METHOD,
+      tableNames.TENANT_SECRETS, // hard-delete secrets (no is_deleted column)
       tableNames.TENANT_USERS,
       tableNames.TENANTS, // Delete tenant last
     ];
@@ -423,12 +410,6 @@ export const deleteTenantService = async (tenant_id) => {
         transaction,
       });
     }
-
-    // Delete OTP records by matching tenant user emails (otp_verifications has no tenant_id)
-    await db.sequelize.query(
-      `DELETE FROM ${tableNames.OTP_VERIFICATIONS} WHERE email IN (SELECT email FROM ${tableNames.TENANT_USERS} WHERE tenant_id = ? AND is_deleted = 0) OR email IN (SELECT owner_email FROM ${tableNames.TENANTS} WHERE tenant_id = ?)`,
-      { replacements: [tenant_id, tenant_id], transaction },
-    );
 
     await transaction.commit();
     return true;
@@ -570,7 +551,7 @@ export const getTenantInvitationListService = async () => {
       FROM ${tableNames.TENANT_INVITATIONS}
       GROUP BY tenant_user_id
     ) AND t.is_deleted = ?
-      AND ti.status IN ('pending', 'accepted')
+      AND ti.status IN ('pending', 'accepted', 'completed', 'revoked', 'expired')
     ORDER BY ti.invited_at DESC`;
 
   try {

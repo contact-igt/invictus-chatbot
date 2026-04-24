@@ -19,17 +19,32 @@ const STATUS_MAP = {
   DISABLED: "disabled",
 };
 
+const resolveMediaUrl = async (media_url, media_asset_id, transaction = null) => {
+  if (media_url) return media_url;
+  if (!media_asset_id) return null;
+  const [[asset]] = await db.sequelize.query(
+    `SELECT preview_url FROM ${tableNames.MEDIA_ASSETS} WHERE media_asset_id = ? AND is_deleted = false LIMIT 1`,
+    { replacements: [media_asset_id], transaction },
+  );
+  return asset?.preview_url || null;
+};
+
 const getTemplateLinkedMediaAssetId = async (
   templateId,
   transaction = null,
 ) => {
   const [[templateMedia]] = await db.sequelize.query(
     `
-    SELECT COALESCE(t.media_asset_id, c.media_asset_id) AS media_asset_id
+    SELECT COALESCE(
+      t.media_asset_id,
+      (SELECT c2.media_asset_id
+       FROM ${tableNames.WHATSAPP_TEMPLATE_COMPONENTS} c2
+       WHERE c2.template_id = t.template_id
+         AND c2.component_type = 'header'
+         AND c2.media_asset_id IS NOT NULL
+       LIMIT 1)
+    ) AS media_asset_id
     FROM ${tableNames.WHATSAPP_TEMPLATE} t
-    LEFT JOIN ${tableNames.WHATSAPP_TEMPLATE_COMPONENTS} c
-      ON c.template_id = t.template_id
-     AND c.component_type = 'header'
     WHERE t.template_id = ?
       AND t.is_deleted = false
     LIMIT 1
@@ -558,6 +573,8 @@ export const createWhatsappTemplateService = async (
         throw new Error("Header type is required");
       }
 
+      const resolvedMediaUrl = await resolveMediaUrl(media_url, media_asset_id, transaction);
+
       await db.sequelize.query(
         `
     INSERT INTO ${tableNames.WHATSAPP_TEMPLATE_COMPONENTS}
@@ -567,9 +584,9 @@ export const createWhatsappTemplateService = async (
         {
           replacements: [
             template_id,
-            headerFormat, // header_format
-            text ? text : null, // header text (only if type=text)
-            media_url ? media_url : null, // media only for image/video/doc
+            headerFormat,
+            text ? text : null,
+            resolvedMediaUrl,
             media_asset_id || null,
             media_handle || null,
           ],
@@ -821,7 +838,8 @@ export const syncWhatsappTemplateStatusService = async ({
       throw new Error("Template not submitted to Meta");
     }
 
-    // ✅ Meta API (ONLY status is supported)
+    // ✅ Meta API — single template endpoint only supports "status" field.
+    // "rejection_reason" is NOT available here; it comes from webhooks or the bulk list API.
     const metaRes = await axios.get(
       `https://graph.facebook.com/v23.0/${template.meta_template_id}`,
       {
@@ -835,13 +853,17 @@ export const syncWhatsappTemplateStatusService = async ({
     const metaStatus = metaRes.data.status;
     const mappedStatus = STATUS_MAP[metaStatus] || "pending";
 
+    // Update main table.
+    // If status is moving OUT of rejected, clear the stored rejection_reason.
+    // If still rejected, preserve the existing rejection_reason (set by webhook/bulk-pull).
+    const clearRejectionReason = mappedStatus !== "rejected";
+    const updateQuery = clearRejectionReason
+      ? `UPDATE ${tableNames.WHATSAPP_TEMPLATE} SET status = ?, rejection_reason = NULL WHERE template_id = ? AND is_deleted = false`
+      : `UPDATE ${tableNames.WHATSAPP_TEMPLATE} SET status = ? WHERE template_id = ? AND is_deleted = false`;
+
     // Update main table
     await db.sequelize.query(
-      `
-      UPDATE ${tableNames.WHATSAPP_TEMPLATE}
-      SET status = ?
-      WHERE template_id = ? AND is_deleted = false
-      `,
+      updateQuery,
       {
         replacements: [mappedStatus, template.template_id],
         transaction,
@@ -963,7 +985,13 @@ export const getTemplateListService = async (tenant_id) => {
 
     if (templateIds.length > 0) {
       [allComponents] = await db.sequelize.query(
-        `SELECT * FROM ${tableNames.WHATSAPP_TEMPLATE_COMPONENTS} WHERE template_id IN (?)`,
+        `SELECT c.*,
+                COALESCE(c.media_url, ma.preview_url) AS media_url,
+                ma.file_name AS asset_file_name
+         FROM ${tableNames.WHATSAPP_TEMPLATE_COMPONENTS} c
+         LEFT JOIN ${tableNames.MEDIA_ASSETS} ma
+           ON ma.media_asset_id = c.media_asset_id AND ma.is_deleted = false
+         WHERE c.template_id IN (?)`,
         { replacements: [templateIds] },
       );
 
@@ -1015,7 +1043,13 @@ export const getTemplateByIdService = async (template_id, tenant_id) => {
     if (!template) return null;
 
     const [components] = await db.sequelize.query(
-      `SELECT * FROM ${tableNames.WHATSAPP_TEMPLATE_COMPONENTS} WHERE template_id = ?`,
+      `SELECT c.*,
+              COALESCE(c.media_url, ma.preview_url) AS media_url,
+              ma.file_name AS asset_file_name
+       FROM ${tableNames.WHATSAPP_TEMPLATE_COMPONENTS} c
+       LEFT JOIN ${tableNames.MEDIA_ASSETS} ma
+         ON ma.media_asset_id = c.media_asset_id AND ma.is_deleted = false
+       WHERE c.template_id = ?`,
       { replacements: [template_id] },
     );
 
@@ -1063,7 +1097,7 @@ export const pullTemplatesFromMetaService = async (tenant_id) => {
 
     // 1. Fetch templates from Meta
     let allTemplates = [];
-    let nextUrl = `https://graph.facebook.com/v23.0/${whatsappAccount.waba_id}/message_templates?fields=id,name,status,category,language,components&limit=100`;
+    let nextUrl = `https://graph.facebook.com/v23.0/${whatsappAccount.waba_id}/message_templates?fields=id,name,status,rejection_reason,category,language,components&limit=100`;
 
     // Pagination loop
     while (nextUrl) {
@@ -1096,10 +1130,11 @@ export const pullTemplatesFromMetaService = async (tenant_id) => {
 
         // Update status if changed
         if (existing.status !== localStatus || !existing.meta_template_id) {
+          const rejectionReason = localStatus === "rejected" ? (metaT.rejection_reason || null) : null;
           await db.sequelize.query(
-            `UPDATE ${tableNames.WHATSAPP_TEMPLATE} SET status = ?, meta_template_id = ? WHERE template_id = ?`,
+            `UPDATE ${tableNames.WHATSAPP_TEMPLATE} SET status = ?, rejection_reason = ?, meta_template_id = ? WHERE template_id = ?`,
             {
-              replacements: [localStatus, metaT.id, existing.template_id],
+              replacements: [localStatus, rejectionReason, metaT.id, existing.template_id],
               transaction,
             },
           );
@@ -1584,10 +1619,18 @@ export const updateWhatsappTemplateService = async (
           },
         );
 
-        nextStatus = await getMappedMetaTemplateStatus(
-          template.meta_template_id,
-          whatsappAccount,
-        );
+        // For rejected/paused templates: always set pending after a successful edit.
+        // Meta does NOT instantly reflect IN_REVIEW on their GET endpoint — querying
+        // immediately returns stale REJECTED/PAUSED status. The webhook will update us later.
+        // For approved templates: query Meta so we respect any edge-case status change.
+        if (template.status === "rejected" || template.status === "paused") {
+          nextStatus = "pending";
+        } else {
+          nextStatus = await getMappedMetaTemplateStatus(
+            template.meta_template_id,
+            whatsappAccount,
+          );
+        }
 
         // ── Post-success: persist edit-limit tracking fields (approved only) ─
         if (template.status === "approved") {
@@ -1712,6 +1755,12 @@ export const updateWhatsappTemplateService = async (
 
     // Insert header if provided
     if (components.header) {
+      const resolvedMediaUrl = await resolveMediaUrl(
+        components.header.media_url,
+        components.header.media_asset_id,
+        transaction,
+      );
+
       await db.sequelize.query(
         `
         INSERT INTO ${tableNames.WHATSAPP_TEMPLATE_COMPONENTS}
@@ -1727,7 +1776,7 @@ export const updateWhatsappTemplateService = async (
               "text"
             ).toLowerCase(),
             components.header.text || null,
-            components.header.media_url || null,
+            resolvedMediaUrl,
             components.header.media_asset_id || null,
             components.header.media_handle || null,
           ],

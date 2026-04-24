@@ -150,8 +150,9 @@ export const receiveMessage = async (req, res) => {
     // 0. Handle Template Status Updates (Meta approval/rejection)
     if (field === "message_template_status_update") {
       const templateName = value.message_template_name;
-      const templateId = value.message_template_id;
+      const templateId = String(value.message_template_id);
       const status = value.event; // e.g., "APPROVED", "REJECTED"
+      const rejectionReason = value.reason || null; // Only present on REJECTED events
       const wabaId = req.body?.entry?.[0]?.id;
 
       console.log(
@@ -193,11 +194,16 @@ export const receiveMessage = async (req, res) => {
           `
           SELECT
             t.template_id,
-            COALESCE(t.media_asset_id, c.media_asset_id) AS media_asset_id
+            COALESCE(
+              t.media_asset_id,
+              (SELECT c2.media_asset_id
+               FROM ${tableNames.WHATSAPP_TEMPLATE_COMPONENTS} c2
+               WHERE c2.template_id = t.template_id
+                 AND c2.component_type = 'header'
+                 AND c2.media_asset_id IS NOT NULL
+               LIMIT 1)
+            ) AS media_asset_id
           FROM ${tableNames.WHATSAPP_TEMPLATE} t
-          LEFT JOIN ${tableNames.WHATSAPP_TEMPLATE_COMPONENTS} c
-            ON c.template_id = t.template_id
-           AND c.component_type = 'header'
           WHERE t.tenant_id = ?
             AND t.is_deleted = false
             AND (t.meta_template_id = ? OR t.template_name = ?)
@@ -210,13 +216,14 @@ export const receiveMessage = async (req, res) => {
           await db.sequelize.query(
             `
             UPDATE ${tableNames.WHATSAPP_TEMPLATE}
-            SET status = ?
+            SET status = ?, rejection_reason = ?
             WHERE template_id = ?
               AND tenant_id = ?
             `,
             {
               replacements: [
                 mappedStatus,
+                mappedStatus === 'rejected' ? rejectionReason : null,
                 template.template_id,
                 account.tenant_id,
               ],

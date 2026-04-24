@@ -5,6 +5,7 @@ import {
   testWhatsappAccountController,
   activateWhatsappAccountController,
   updateAccessTokenController,
+  updateWhatsappAccountController,
   getWhatsappAccountController,
   getTierLimitController,
   softDeleteWhatsappAccountController,
@@ -53,6 +54,13 @@ router.post(
   authenticate,
   authorize({ user_type: "tenant", roles: ["tenant_admin"] }),
   testWhatsappAccountController,
+);
+
+router.put(
+  "/whatsapp-account",
+  authenticate,
+  authorize({ user_type: "tenant", roles: ["tenant_admin"] }),
+  updateWhatsappAccountController,
 );
 
 router.put(

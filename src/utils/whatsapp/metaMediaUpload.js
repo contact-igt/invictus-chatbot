@@ -39,6 +39,7 @@ export const uploadMediaToMetaForTemplate = async (tenant_id, mediaUrl, format) 
     // Safety overrides
     if (format === "VIDEO" && !fileType.startsWith("video/")) { fileType = "video/mp4"; }
     if (format === "IMAGE" && !fileType.startsWith("image/")) { fileType = "image/jpeg"; }
+    if (format === "DOCUMENT" && !fileType.startsWith("application/")) { fileType = "application/pdf"; }
 
     const fileLength = buffer.length;
 
@@ -83,8 +84,10 @@ export const uploadMediaToMetaForTemplate = async (tenant_id, mediaUrl, format) 
         headers: {
             Authorization: `OAuth ${accessToken}`,
             "Content-Type": "application/octet-stream", // Meta requires octet-stream for the raw upload stream
-            file_offset: 0
-        }
+            file_offset: "0"
+        },
+        maxBodyLength: Infinity,
+        maxContentLength: Infinity,
       }
     );
 

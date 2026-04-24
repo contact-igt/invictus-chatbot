@@ -28,7 +28,14 @@ import {
   getDeletedTenantUserListService,
   restoreTenantUserService,
   findTenantUserByIdIgnoringDeleteService,
+  countActiveTenantUsersService,
+  updateTenantPasswordService,
 } from "./tenantuser.service.js";
+import {
+  generateOTPService,
+  verifyOTPService,
+  checkOTPVerificationService,
+} from "../OtpVerificationModel/otpverification.service.js";
 import bcrypt from "bcrypt";
 import { generatePassword } from "../../utils/helpers/generatePassword.js";
 import crypto from "crypto";
@@ -313,6 +320,15 @@ export const createTenantUserController = async (req, res) => {
   if (!getloginuserDetails) {
     return res.status(400).send({
       message: "Tenant details required",
+    });
+  }
+
+  // Enforce max_users limit
+  const maxUsers = getloginuserDetails.max_users ?? 10;
+  const currentUserCount = await countActiveTenantUsersService(tenant_id);
+  if (currentUserCount >= maxUsers) {
+    return res.status(400).send({
+      message: `User limit reached. Your plan allows a maximum of ${maxUsers} users. Please upgrade your plan to add more users.`,
     });
   }
 
@@ -682,13 +698,6 @@ export const restoreTenantUserController = async (req, res) => {
 };
 
 // --- Password Reset Controllers ---
-
-import {
-  generateOTPService,
-  verifyOTPService,
-  checkOTPVerificationService,
-} from "../OtpVerificationModel/otpverification.service.js";
-import { updateTenantPasswordService } from "./tenantuser.service.js";
 
 export const forgotTenantPasswordController = async (req, res) => {
   try {

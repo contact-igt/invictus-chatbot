@@ -11,6 +11,7 @@ import {
   updateMediaTagsService,
   restoreMediaAssetService,
   getMediaStatsService,
+  syncPendingMediaApprovalsService,
 } from "./gallery.service.js";
 import { getWhatsappAccountByTenantService } from "../WhatsappAccountModel/whatsappAccount.service.js";
 import { logger } from "../../utils/logger.js";
@@ -189,6 +190,11 @@ export const listMediaAssetsController = async (req, res) => {
       page: page || 1,
       limit: limit || 20,
     };
+
+    // Fire-and-forget: sync any pending media whose linked templates are now approved
+    syncPendingMediaApprovalsService(tenant_id).catch((err) =>
+      logger.error("[GALLERY] syncPendingMediaApprovalsService failed:", err),
+    );
 
     const result = await listMediaAssetsService(tenant_id, filters, pagination);
 

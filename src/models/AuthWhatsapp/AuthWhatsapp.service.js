@@ -2,6 +2,7 @@ import axios from "axios";
 import https from "https";
 import db from "../../database/index.js";
 import { tableNames } from "../../database/tableName.js";
+import { getSecret } from "../TenantSecretsModel/tenantSecrets.service.js";
 import { buildAiSystemPrompt } from "../../utils/ai/aiFlowHelper.js";
 import { getConversationMemory } from "../Messages/messages.memory.js";
 import { detectLanguageAI } from "../../utils/ai/detectLanguageStyle.js";
@@ -74,13 +75,8 @@ export const sendWhatsAppMessage = async (tenant_id, to, message) => {
     if (!message || !message.trim()) return;
 
     const [rows] = await db.sequelize.query(
-      `
-    SELECT phone_number_id, access_token
-    FROM ${tableNames.WHATSAPP_ACCOUNT}
-    WHERE tenant_id = ?
-      AND status IN ('active', 'verified')
-    LIMIT 1
-    `,
+      `SELECT phone_number_id FROM ${tableNames.WHATSAPP_ACCOUNT}
+       WHERE tenant_id = ? AND status IN ('active', 'verified') LIMIT 1`,
       { replacements: [tenant_id] },
     );
 
@@ -88,12 +84,11 @@ export const sendWhatsAppMessage = async (tenant_id, to, message) => {
       throw new Error("No active WhatsApp account for tenant");
     }
 
-    const { phone_number_id, access_token } = rows[0];
+    const { phone_number_id } = rows[0];
+    const access_token = await getSecret(tenant_id, "whatsapp");
+    if (!access_token) throw new Error("WhatsApp access token not found");
 
     const META_API_VERSION = process.env.META_API_VERSION || "v23.0";
-    console.log(
-      `[SEND-MSG] Using Meta API version: ${META_API_VERSION}, phone_number_id: ${phone_number_id}, to: ${to}`,
-    );
 
     let wamid = null;
     try {
@@ -169,15 +164,17 @@ export const sendWhatsAppMessage = async (tenant_id, to, message) => {
 
 export const sendWhatsAppLocation = async (tenant_id, to, locationParams) => {
   const [rows] = await db.sequelize.query(
-    `SELECT phone_number_id, access_token FROM ${tableNames.WHATSAPP_ACCOUNT} WHERE tenant_id = ? AND status = 'active' LIMIT 1`,
+    `SELECT phone_number_id FROM ${tableNames.WHATSAPP_ACCOUNT}
+     WHERE tenant_id = ? AND status = 'active' LIMIT 1`,
     { replacements: [tenant_id] },
   );
 
-  if (!rows.length) {
-    throw new Error("No active WhatsApp account for tenant");
-  }
+  if (!rows.length) throw new Error("No active WhatsApp account for tenant");
 
-  const { phone_number_id, access_token } = rows[0];
+  const { phone_number_id } = rows[0];
+  const access_token = await getSecret(tenant_id, "whatsapp");
+  if (!access_token) throw new Error("WhatsApp access token not found");
+
   const META_API_VERSION = process.env.META_API_VERSION || "v23.0";
 
   const payload = {
@@ -234,21 +231,16 @@ export const sendWhatsAppTemplate = async (
   components,
 ) => {
   const [rows] = await db.sequelize.query(
-    `
-    SELECT phone_number_id, access_token
-    FROM ${tableNames.WHATSAPP_ACCOUNT}
-    WHERE tenant_id = ?
-      AND status IN ('active', 'verified')
-    LIMIT 1
-    `,
+    `SELECT phone_number_id FROM ${tableNames.WHATSAPP_ACCOUNT}
+     WHERE tenant_id = ? AND status IN ('active', 'verified') LIMIT 1`,
     { replacements: [tenant_id] },
   );
 
-  if (!rows.length) {
-    throw new Error("No active WhatsApp account for tenant");
-  }
+  if (!rows.length) throw new Error("No active WhatsApp account for tenant");
 
-  const { phone_number_id, access_token } = rows[0];
+  const { phone_number_id } = rows[0];
+  const access_token = await getSecret(tenant_id, "whatsapp");
+  if (!access_token) throw new Error("WhatsApp access token not found");
   console.log("components", JSON.stringify(components, null, 2));
 
   // Guard against null/empty language code — default to "en" as safe fallback
@@ -311,38 +303,19 @@ export const sendWhatsAppTemplate = async (
   }
 };
 
-export const sendReadReceipt = async (
-  tenant_id,
-  phone_number_id,
-  message_id,
-) => {
+export const sendReadReceipt = async (tenant_id, phone_number_id, message_id) => {
   try {
-    const [rows] = await db.sequelize.query(
-      `
-    SELECT access_token
-    FROM ${tableNames.WHATSAPP_ACCOUNT}
-    WHERE tenant_id = ?
-      AND phone_number_id = ?
-      AND status IN ('active', 'verified')
-    LIMIT 1
-    `,
-      { replacements: [tenant_id, phone_number_id] },
-    );
-
-    if (!rows.length) return;
+    const access_token = await getSecret(tenant_id, "whatsapp");
+    if (!access_token) return;
 
     const META_API_VERSION = process.env.META_API_VERSION || "v23.0";
     try {
       await axios.post(
         `https://graph.facebook.com/${META_API_VERSION}/${phone_number_id}/messages`,
-        {
-          messaging_product: "whatsapp",
-          status: "read",
-          message_id,
-        },
+        { messaging_product: "whatsapp", status: "read", message_id },
         {
           headers: {
-            Authorization: `Bearer ${rows[0].access_token}`,
+            Authorization: `Bearer ${access_token}`,
             "Content-Type": "application/json",
           },
         },
@@ -354,7 +327,7 @@ export const sendReadReceipt = async (
       );
     }
   } catch (err) {
-    console.error("[READ-RECEIPT] Database Error:", err.message);
+    console.error("[READ-RECEIPT] Error:", err.message);
   }
 };
 
@@ -382,26 +355,13 @@ export const sendTypingIndicator = async (
       console.error("[TYPING] Socket Emit Error:", socketErr.message);
     }
 
-    // 2. Fetch token and send typing indicator to Meta
+    // 2. Fetch token from secrets and send typing indicator to Meta
     if (!message_id) return;
 
-    const [rows] = await db.sequelize.query(
-      `
-    SELECT access_token
-    FROM ${tableNames.WHATSAPP_ACCOUNT}
-    WHERE tenant_id = ?
-      AND phone_number_id = ?
-      AND status IN ('active', 'verified')
-    LIMIT 1
-    `,
-      { replacements: [tenant_id, phone_number_id] },
-    );
-
-    if (!rows.length) return;
+    const access_token = await getSecret(tenant_id, "whatsapp");
+    if (!access_token) return;
 
     const META_API_VERSION = process.env.META_API_VERSION || "v23.0";
-    const access_token = rows[0]?.access_token;
-    if (!access_token) return;
 
     try {
       await axios.post(

@@ -54,6 +54,7 @@ import { MediaAssetTable } from "./tables/MediaAssetTable/index.js";
 import { AppointmentTable } from "./tables/AppointmentTable/index.js";
 import { SavedPaymentMethodTable } from "./tables/SavedPaymentMethod/SavedPaymentMethod.js";
 import { TaxSettingsTable } from "./tables/TaxSettingsTable/index.js";
+import { TenantSecretsTable } from "./tables/TenantSecretsTable/index.js";
 
 const dbconfig =
   ServerEnvironmentConfig?.server?.line === "production"
@@ -156,6 +157,7 @@ db.MediaAsset = MediaAssetTable(sequelize, Sequelize);
 db.Appointments = AppointmentTable(sequelize, Sequelize);
 db.SavedPaymentMethod = SavedPaymentMethodTable(sequelize, Sequelize);
 db.TaxSettings = TaxSettingsTable(sequelize, Sequelize);
+db.TenantSecrets = TenantSecretsTable(sequelize, Sequelize);
 
 defineAssociations(db);
 

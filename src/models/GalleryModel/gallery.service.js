@@ -383,7 +383,6 @@ export const deleteMediaAssetService = async (assetId, tenantId) => {
     // preview_url and media_handle are preserved for potential restore
     // Set HARD_DELETE_STORAGE=true in .env to also purge from storage
     mediaAsset.is_deleted = true;
-    mediaAsset.is_active = false; // ADD THIS
     mediaAsset.deleted_at = new Date();
     await mediaAsset.save();
 
@@ -533,6 +532,82 @@ export const restoreMediaAssetService = async (assetId, tenantId) => {
   } catch (error) {
     logger.error("Error in restoreMediaAssetService:", error);
     throw error;
+  }
+};
+
+/**
+/**
+ * Sync pending media approvals on gallery refresh. Two cases:
+ *   1. Media linked to an approved template → approve it (template approval path)
+ *   2. Media with NO template link at all → approve it (standalone upload, nothing to wait for)
+ * DB-only check — no Meta API calls.
+ * @param {string} tenantId
+ * @returns {Promise<number>} Count of media assets that were approved
+ */
+export const syncPendingMediaApprovalsService = async (tenantId) => {
+  try {
+    const [rows] = await db.sequelize.query(
+      `SELECT ma.media_asset_id
+       FROM ${tableNames.MEDIA_ASSETS} ma
+       WHERE ma.tenant_id = ?
+         AND ma.is_approved = false
+         AND ma.is_deleted = false
+         AND (
+           -- Case 1: linked to an approved template
+           EXISTS (
+             SELECT 1 FROM ${tableNames.WHATSAPP_TEMPLATE} t
+             WHERE t.tenant_id = ?
+               AND t.status = 'approved'
+               AND t.is_deleted = false
+               AND (
+                 t.media_asset_id = ma.media_asset_id
+                 OR EXISTS (
+                   SELECT 1 FROM ${tableNames.WHATSAPP_TEMPLATE_COMPONENTS} c
+                   WHERE c.template_id = t.template_id
+                     AND c.component_type = 'header'
+                     AND c.media_asset_id = ma.media_asset_id
+                 )
+               )
+           )
+           OR
+           -- Case 2: not linked to any template at all (standalone upload)
+           NOT EXISTS (
+             SELECT 1 FROM ${tableNames.WHATSAPP_TEMPLATE} t2
+             WHERE t2.tenant_id = ?
+               AND t2.is_deleted = false
+               AND (
+                 t2.media_asset_id = ma.media_asset_id
+                 OR EXISTS (
+                   SELECT 1 FROM ${tableNames.WHATSAPP_TEMPLATE_COMPONENTS} c2
+                   WHERE c2.template_id = t2.template_id
+                     AND c2.component_type = 'header'
+                     AND c2.media_asset_id = ma.media_asset_id
+                 )
+               )
+           )
+         )`,
+      { replacements: [tenantId, tenantId, tenantId] },
+    );
+
+    if (rows.length === 0) return 0;
+
+    const assetIds = rows.map((r) => r.media_asset_id);
+    await db.sequelize.query(
+      `UPDATE ${tableNames.MEDIA_ASSETS}
+       SET is_approved = true
+       WHERE media_asset_id IN (?)
+         AND tenant_id = ?`,
+      { replacements: [assetIds, tenantId] },
+    );
+
+    logger.info(
+      `[GALLERY-SYNC] Approved ${assetIds.length} pending media asset(s) for tenant ${tenantId}`,
+    );
+    return assetIds.length;
+  } catch (error) {
+    logger.error("Error in syncPendingMediaApprovalsService:", error);
+    // Non-fatal — caller should fire-and-forget
+    return 0;
   }
 };
 
