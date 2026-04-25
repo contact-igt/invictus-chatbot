@@ -741,6 +741,7 @@ export const executeCampaignBatchService = async (
       where: {
         campaign_id,
         tenant_id,
+        is_deleted: false,
         status: {
           [db.Sequelize.Op.in]: [
             "draft",
@@ -775,7 +776,7 @@ export const executeCampaignBatchService = async (
     );
 
     const recipients = await db.WhatsappCampaignRecipients.findAll({
-      where: { campaign_id, status: "pending" },
+      where: { campaign_id, status: "pending", is_deleted: false },
       limit: batchSize,
     });
 
@@ -918,6 +919,14 @@ export const executeCampaignBatchService = async (
       recipientIndex++;
       // Define dynamicVariables outside try block so it's available in catch
       let dynamicVariables = recipient.dynamic_variables || [];
+
+      console.log(
+        `[CAMPAIGN-SEND] Processing recipient ${recipientIndex}/${recipients.length}: ${recipient.mobile_number}`,
+      );
+      console.log(
+        `[CAMPAIGN-SEND] Recipient dynamicVariables:`,
+        JSON.stringify(dynamicVariables),
+      );
 
       // Mid-batch pause check every 5 recipients — re-read DB status so user
       // can stop the campaign without waiting for the full batch to finish.
@@ -1290,7 +1299,23 @@ export const executeCampaignBatchService = async (
           where: { id: recipient.id, status: "pending" },
           attributes: ["id"],
         });
-        if (!stillPending) continue;
+        if (!stillPending) {
+          console.log(
+            `[CAMPAIGN-SEND] Recipient ${recipient.mobile_number} no longer pending, skipping`,
+          );
+          continue;
+        }
+
+        console.log(
+          `[CAMPAIGN-SEND] Calling sendWhatsAppTemplate for ${formattedPhone}`,
+        );
+        console.log(
+          `[CAMPAIGN-SEND] Template: ${campaign.template.template_name}, Language: ${campaign.template.language}`,
+        );
+        console.log(
+          `[CAMPAIGN-SEND] Components:`,
+          JSON.stringify(components, null, 2),
+        );
 
         try {
           result = await sendWhatsAppTemplate(
@@ -1300,7 +1325,15 @@ export const executeCampaignBatchService = async (
             campaign.template.language,
             components,
           );
+          console.log(
+            `[CAMPAIGN-SEND] sendWhatsAppTemplate SUCCESS for ${formattedPhone}:`,
+            JSON.stringify(result),
+          );
         } catch (sendErr) {
+          console.error(
+            `[CAMPAIGN-SEND] sendWhatsAppTemplate FAILED for ${formattedPhone}:`,
+            sendErr.message,
+          );
           const errMsg = String(sendErr?.message || "");
 
           // --- Unhealthy API: pause 30s then retry once ---
