@@ -718,6 +718,10 @@ export const executeCampaignBatchService = async (
   tenant_id,
   batchSize = 15,
 ) => {
+  console.log(
+    `[CAMPAIGN-BATCH-ENTRY] executeCampaignBatchService called: campaign_id=${campaign_id}, tenant_id=${tenant_id}, batchSize=${batchSize}`,
+  );
+
   if (runningCampaigns.has(campaign_id)) {
     logger.warn(
       `[CAMPAIGN-LOCK] Campaign ${campaign_id} already executing, skipping concurrent run`,
@@ -725,6 +729,10 @@ export const executeCampaignBatchService = async (
     return { finished: false, skipped: true };
   }
   runningCampaigns.add(campaign_id);
+  console.log(
+    `[CAMPAIGN-BATCH] Lock acquired for campaign ${campaign_id}. runningCampaigns size: ${runningCampaigns.size}`,
+  );
+
   logger.info(
     `[CAMPAIGN-BATCH] Executing batch for campaign ${campaign_id} (tenant=${tenant_id}, batchSize=${batchSize})`,
   );
@@ -751,6 +759,10 @@ export const executeCampaignBatchService = async (
       ],
     });
 
+    console.log(
+      `[CAMPAIGN-BATCH] Campaign query result: ${campaign ? `found (status=${campaign.status})` : "NOT FOUND"}`,
+    );
+
     if (!campaign) {
       logger.error(
         `[CAMPAIGN-BATCH] Campaign ${campaign_id} not found or not in executable state`,
@@ -767,15 +779,25 @@ export const executeCampaignBatchService = async (
       limit: batchSize,
     });
 
+    console.log(
+      `[CAMPAIGN-BATCH] Pending recipients query: found ${recipients.length} recipients`,
+    );
+
     logger.info(
       `[CAMPAIGN-BATCH] Found ${recipients.length} pending recipients for campaign ${campaign_id}`,
     );
 
     if (!campaign.template) {
-      console.error(`Campaign ${campaign_id} has no template details`);
+      console.error(
+        `[CAMPAIGN-BATCH] Campaign ${campaign_id} has no template details - marking as failed`,
+      );
       await campaign.update({ status: "failed" });
       return { finished: true };
     }
+
+    console.log(
+      `[CAMPAIGN-BATCH] Template check passed: ${campaign.template.template_name}`,
+    );
 
     // Fetch Template Components (Body, Header, Footer, Buttons)
     const [components_data] = await db.sequelize.query(
