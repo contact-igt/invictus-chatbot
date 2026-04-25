@@ -239,6 +239,7 @@ export const createCampaignController = async (req, res) => {
           console.error(
             `[Campaign Immediate Exec] Error for campaign ${campaign.campaign_id}:`,
             err.message,
+            err.stack,
           );
         }
       });
@@ -410,6 +411,33 @@ export const exportCampaignRecipientsCsvController = async (req, res) => {
 export const triggerCampaignExecutionController = async (req, res) => {
   const { campaign_id } = req.params;
   const tenant_id = req.user.tenant_id;
+  const { default: db } = await import("../../database/index.js");
+
+  const campaign = await db.WhatsappCampaigns.findOne({
+    where: { campaign_id, tenant_id, is_deleted: false },
+    attributes: ["campaign_id", "status"],
+  });
+
+  if (!campaign) {
+    return res.status(404).send({ message: "Campaign not found" });
+  }
+
+  if (["completed", "cancelled"].includes(campaign.status)) {
+    return res.status(422).send({
+      message: `Campaign cannot be executed from ${campaign.status} state`,
+    });
+  }
+
+  if (campaign.status === "paused") {
+    return res.status(422).send({
+      message: "Paused campaigns must be resumed before execution.",
+    });
+  }
+
+  if (campaign.status !== "active") {
+    await campaign.update({ status: "active" });
+  }
+
   // Fire-and-forget: respond immediately, run batch in background
   setImmediate(async () => {
     try {

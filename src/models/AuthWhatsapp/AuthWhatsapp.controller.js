@@ -113,7 +113,6 @@ const resolveAiReplyEnvelope = (aiResult, userText) => {
   };
 };
 
-
 export const verifyWebhook = async (req, res) => {
   try {
     const { tenantId } = req.params;
@@ -354,17 +353,54 @@ export const receiveMessage = async (req, res) => {
             read: 3,
             replied: 4,
             failed: 5,
+            permanently_failed: 6,
           };
 
-          if (statusPriority[status] > (statusPriority[oldStatus] || 0)) {
-            await recipient.update(
-              {
-                status: status,
-                error_message:
-                  status === "failed" ? statusUpdate.errors?.[0]?.title : null,
-              },
-              { transaction: t },
-            );
+          // Determine if this is a permanent failure from Meta error message
+          let effectiveStatus = status;
+          if (status === "failed") {
+            const errorTitle = String(
+              statusUpdate.errors?.[0]?.title || "",
+            ).toLowerCase();
+            const errorMessage = String(
+              statusUpdate.errors?.[0]?.message || "",
+            ).toLowerCase();
+            const combinedError = errorTitle + " " + errorMessage;
+
+            const isPermanentMetaError =
+              combinedError.includes("healthy ecosystem") ||
+              combinedError.includes("not delivered") ||
+              combinedError.includes("spam") ||
+              combinedError.includes("blocked") ||
+              combinedError.includes("recipient not on whatsapp") ||
+              combinedError.includes("incapable of receiving") ||
+              combinedError.includes("re-engage") ||
+              combinedError.includes("user is not in allowed list");
+
+            if (isPermanentMetaError) {
+              effectiveStatus = "permanently_failed";
+            }
+          }
+
+          if (
+            statusPriority[effectiveStatus] > (statusPriority[oldStatus] || 0)
+          ) {
+            const updateData = {
+              status: effectiveStatus,
+              error_message:
+                effectiveStatus === "failed" ||
+                effectiveStatus === "permanently_failed"
+                  ? statusUpdate.errors?.[0]?.title
+                  : null,
+            };
+
+            // Mark as max retries if permanently failed
+            if (effectiveStatus === "permanently_failed") {
+              updateData.retry_count = 3;
+              updateData.next_retry_at = null;
+            }
+
+            await recipient.update(updateData, { transaction: t });
 
             if (recipient.campaign) {
               if (status === "delivered" && oldStatus === "sent") {
@@ -386,12 +422,76 @@ export const receiveMessage = async (req, res) => {
               campaignUpdatePayload = {
                 campaign_id: recipient.campaign_id,
                 tenant_id: recipient.campaign.tenant_id,
-                status,
+                status: effectiveStatus,
               };
             }
           }
         }
       });
+
+      // After webhook status update, check if campaign should be marked completed/failed
+      if (
+        campaignUpdatePayload &&
+        (campaignUpdatePayload.status === "failed" ||
+          campaignUpdatePayload.status === "permanently_failed")
+      ) {
+        setImmediate(async () => {
+          try {
+            const campaign_id = campaignUpdatePayload.campaign_id;
+
+            // Count remaining pending recipients
+            const pendingCount = await db.WhatsappCampaignRecipients.count({
+              where: { campaign_id, status: "pending", is_deleted: false },
+            });
+
+            // If no pending recipients, check final status
+            if (pendingCount === 0) {
+              const successCount = await db.WhatsappCampaignRecipients.count({
+                where: {
+                  campaign_id,
+                  is_deleted: false,
+                  status: {
+                    [db.Sequelize.Op.in]: [
+                      "sent",
+                      "delivered",
+                      "read",
+                      "replied",
+                    ],
+                  },
+                },
+              });
+
+              const retryableFailedCount =
+                await db.WhatsappCampaignRecipients.count({
+                  where: {
+                    campaign_id,
+                    is_deleted: false,
+                    status: "failed",
+                    retry_count: { [db.Sequelize.Op.lt]: 3 },
+                  },
+                });
+
+              // Only update if no retryable failures pending
+              if (retryableFailedCount === 0) {
+                const newStatus = successCount > 0 ? "completed" : "failed";
+                await db.WhatsappCampaigns.update(
+                  { status: newStatus },
+                  { where: { campaign_id, status: "active" } },
+                );
+                console.log(
+                  `[WEBHOOK] Campaign ${campaign_id} marked as ${newStatus} — success=${successCount}`,
+                );
+              }
+            }
+          } catch (err) {
+            console.error(
+              "[WEBHOOK] Campaign status update error:",
+              err.message,
+            );
+          }
+        });
+      }
+
       if (campaignUpdatePayload) {
         try {
           const io = getIO();
@@ -409,7 +509,7 @@ export const receiveMessage = async (req, res) => {
 
       // Also update the regular messages table status using wamid
       try {
-        const allowedMsgStatuses = ["sent", "delivered", "read"];
+        const allowedMsgStatuses = ["sent", "delivered", "read", "failed"];
         if (allowedMsgStatuses.includes(status)) {
           const [msgRows] = await db.sequelize.query(
             `SELECT id, tenant_id, contact_id, phone, status FROM messages WHERE wamid = ? LIMIT 1`,
@@ -417,12 +517,27 @@ export const receiveMessage = async (req, res) => {
           );
           if (msgRows.length > 0) {
             const msgRow = msgRows[0];
-            const statusPriority = { sent: 1, delivered: 2, read: 3 };
-            const currentPriority = statusPriority[msgRow.status] || 0;
-            if (statusPriority[status] > currentPriority) {
+            const statusPriority = {
+              sent: 1,
+              delivered: 2,
+              read: 3,
+              failed: 0,
+            };
+            const currentPriority = statusPriority[msgRow.status] ?? -1;
+
+            // For failed status, always update if current status is "sent" (message never delivered)
+            // For other statuses, use priority system
+            const shouldUpdate =
+              (status === "failed" && msgRow.status === "sent") ||
+              (status !== "failed" && statusPriority[status] > currentPriority);
+
+            if (shouldUpdate) {
               await db.sequelize.query(
                 `UPDATE messages SET status = ? WHERE id = ?`,
                 { replacements: [status, msgRow.id] },
+              );
+              console.log(
+                `[WEBHOOK] Updated message ${msgRow.id} status to ${status}`,
               );
               try {
                 io.to(`tenant-${msgRow.tenant_id}`).emit(

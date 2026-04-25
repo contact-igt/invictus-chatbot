@@ -24,6 +24,9 @@ import { estimateMetaCost } from "../../utils/billing/costEstimator.js";
 import { addCampaignUsageService } from "../GalleryModel/gallery.service.js";
 import { logger } from "../../utils/logger.js";
 
+// In-memory lock to prevent concurrent batch executions for the same campaign
+const runningCampaigns = new Set();
+
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const getUniquePlaceholderCount = (text = "") => {
@@ -514,7 +517,10 @@ export const getCampaignListService = async (tenant_id, query = {}) => {
   try {
     const { page, limit, status, search } = query;
     const pageNum = Math.max(1, parseInt(page ?? 1, 10) || 1);
-    const limitNum = Math.max(1, Math.min(100, parseInt(limit ?? 10, 10) || 10));
+    const limitNum = Math.max(
+      1,
+      Math.min(100, parseInt(limit ?? 10, 10) || 10),
+    );
     const offset = (pageNum - 1) * limitNum;
 
     const where = { tenant_id, is_deleted: false };
@@ -713,16 +719,29 @@ export const executeCampaignBatchService = async (
   batchSize = 15,
 ) => {
   if (runningCampaigns.has(campaign_id)) {
-    logger.warn(`[CAMPAIGN-LOCK] Campaign ${campaign_id} already executing, skipping concurrent run`);
+    logger.warn(
+      `[CAMPAIGN-LOCK] Campaign ${campaign_id} already executing, skipping concurrent run`,
+    );
     return { finished: false, skipped: true };
   }
   runningCampaigns.add(campaign_id);
+  logger.info(
+    `[CAMPAIGN-BATCH] Executing batch for campaign ${campaign_id} (tenant=${tenant_id}, batchSize=${batchSize})`,
+  );
   try {
     const campaign = await db.WhatsappCampaigns.findOne({
       where: {
         campaign_id,
         tenant_id,
-        status: { [db.Sequelize.Op.in]: ["active", "scheduled", "paused"] },
+        status: {
+          [db.Sequelize.Op.in]: [
+            "draft",
+            "active",
+            "scheduled",
+            "paused",
+            "failed",
+          ],
+        },
       },
       include: [
         {
@@ -733,13 +752,24 @@ export const executeCampaignBatchService = async (
     });
 
     if (!campaign) {
+      logger.error(
+        `[CAMPAIGN-BATCH] Campaign ${campaign_id} not found or not in executable state`,
+      );
       throw new Error("Campaign not found or not in executable state");
     }
+
+    logger.info(
+      `[CAMPAIGN-BATCH] Found campaign ${campaign_id} with status=${campaign.status}, template=${campaign.template?.template_name || "N/A"}`,
+    );
 
     const recipients = await db.WhatsappCampaignRecipients.findAll({
       where: { campaign_id, status: "pending" },
       limit: batchSize,
     });
+
+    logger.info(
+      `[CAMPAIGN-BATCH] Found ${recipients.length} pending recipients for campaign ${campaign_id}`,
+    );
 
     if (!campaign.template) {
       console.error(`Campaign ${campaign_id} has no template details`);
@@ -1493,12 +1523,25 @@ export const executeCampaignBatchService = async (
         // retrying them will never succeed, so mark immediately as permanently_failed.
         const isPermanentValidation =
           err.validation === true && err.permanent === true;
+        // Missing media is also permanent — retrying won't help until media is fixed
         const isMissingMedia =
           err.validation === true && err.permanent === false;
+        // Meta policy blocks are permanent — user hasn't opted in or is rate-limited
+        const errLower = (err.message || "").toLowerCase();
+        const isMetaPolicyBlock =
+          errLower.includes("healthy ecosystem") ||
+          errLower.includes("not delivered") ||
+          errLower.includes("spam") ||
+          errLower.includes("blocked") ||
+          errLower.includes("recipient not on whatsapp") ||
+          errLower.includes("incapable of receiving") ||
+          errLower.includes("re-engage");
+        const isActuallyPermanent =
+          isPermanentValidation || isMissingMedia || isMetaPolicyBlock;
 
         const currentRetryCount = Number(recipient.retry_count || 0);
         const nextRetryCount = currentRetryCount + 1;
-        const isPermanent = isPermanentValidation || nextRetryCount >= 3;
+        const isPermanent = isActuallyPermanent || nextRetryCount >= 3;
         const backoffMinutes =
           nextRetryCount === 1 ? 5 : nextRetryCount === 2 ? 15 : 45;
         const nextRetryAt = new Date(Date.now() + backoffMinutes * 60 * 1000);
@@ -1512,6 +1555,10 @@ export const executeCampaignBatchService = async (
           logger.error(
             `[CAMPAIGN-BATCH] MEDIA MISSING — campaign ${campaign_id} has no usable media. All recipients will fail until media is fixed:\n${JSON.stringify(diagContext, null, 2)}`,
           );
+        } else if (isMetaPolicyBlock) {
+          logger.warn(
+            `[CAMPAIGN-BATCH] META POLICY BLOCK (permanent) — recipient hasn't opted in or is rate-limited:\n${JSON.stringify(diagContext, null, 2)}`,
+          );
         } else {
           logger.warn(
             `[CAMPAIGN-BATCH] Send failed (attempt=${nextRetryCount}/3, permanent=${isPermanent}):\n${JSON.stringify(diagContext, null, 2)}`,
@@ -1522,7 +1569,7 @@ export const executeCampaignBatchService = async (
           status: isPermanent ? "permanently_failed" : "failed",
           error_message: err.message,
           last_error: err.message,
-          retry_count: isPermanentValidation ? 3 : nextRetryCount,
+          retry_count: isActuallyPermanent ? 3 : nextRetryCount,
           next_retry_at: isPermanent ? null : nextRetryAt,
         });
       }
@@ -1684,7 +1731,7 @@ export const startCampaignSchedulerService = () => {
             const pendingCount = await db.WhatsappCampaignRecipients.count({
               where: { campaign_id: campaign.campaign_id, status: "pending" },
             });
-            const batchEstimate = Math.min(pendingCount, 100);
+            const batchEstimate = Math.min(pendingCount, 15);
             const batchCost = cost.totalCostInr * batchEstimate;
 
             const billingCheck = await canSendCampaign(
@@ -1745,8 +1792,66 @@ export const startCampaignSchedulerService = () => {
         limit: 30,
       });
 
+      const campaignIds = [
+        ...new Set(failedRecipients.map((recipient) => recipient.campaign_id)),
+      ];
+      const campaigns = await db.WhatsappCampaigns.findAll({
+        where: {
+          campaign_id: { [db.Sequelize.Op.in]: campaignIds },
+          is_deleted: false,
+        },
+        attributes: ["campaign_id", "tenant_id", "status"],
+      });
+      const campaignById = new Map(
+        campaigns.map((campaign) => [campaign.campaign_id, campaign]),
+      );
+
       const campaignIdsToResume = new Set();
       for (const recipient of failedRecipients) {
+        const campaign = campaignById.get(recipient.campaign_id);
+        if (!campaign) continue;
+
+        // Skip cancelled or completed campaigns — retrying them is pointless
+        if (["cancelled", "completed"].includes(campaign.status)) {
+          logger.info(
+            `[CAMPAIGN-RETRY] Campaign ${recipient.campaign_id} is ${campaign.status} — skipping recipient ${recipient.id}`,
+          );
+          continue;
+        }
+
+        if (campaign.status === "paused") {
+          logger.info(
+            `[CAMPAIGN-RETRY] Campaign ${recipient.campaign_id} is paused — keeping recipient ${recipient.id} in failed state until resume`,
+          );
+          continue;
+        }
+
+        // Skip recipients whose error indicates a non-retryable issue (media missing, validation, Meta policy)
+        const errorMsg = String(recipient.error_message || "").toLowerCase();
+        const isNonRetryableError =
+          errorMsg.includes("missing media") ||
+          errorMsg.includes("no valid url") ||
+          errorMsg.includes("variable mismatch") ||
+          errorMsg.includes("invalid phone") ||
+          errorMsg.includes("healthy ecosystem") ||
+          errorMsg.includes("not delivered") ||
+          errorMsg.includes("spam") ||
+          errorMsg.includes("blocked") ||
+          errorMsg.includes("recipient not on whatsapp") ||
+          errorMsg.includes("incapable of receiving") ||
+          errorMsg.includes("re-engage");
+        if (isNonRetryableError) {
+          logger.info(
+            `[CAMPAIGN-RETRY] Recipient ${recipient.id} has non-retryable error — marking permanently_failed`,
+          );
+          await recipient.update({
+            status: "permanently_failed",
+            retry_count: 3,
+            next_retry_at: null,
+          });
+          continue;
+        }
+
         await recipient.update({
           status: "pending",
         });
@@ -1754,13 +1859,11 @@ export const startCampaignSchedulerService = () => {
       }
 
       for (const campaignId of campaignIdsToResume) {
-        const campaign = await db.WhatsappCampaigns.findOne({
-          where: { campaign_id: campaignId, is_deleted: false },
-        });
+        const campaign = campaignById.get(campaignId);
         if (!campaign) continue;
         // Only auto-resume campaigns that failed — 'scheduled' campaigns must
         // not be activated early (they have a scheduled_at time to honour).
-        if (campaign.status === "failed") {
+        if (["failed", "completed"].includes(campaign.status)) {
           await campaign.update({ status: "active" });
         }
         logger.info(
@@ -1846,6 +1949,19 @@ export const updateCampaignStatusService = async (
     logger.info(
       `[CAMPAIGN-STATUS] Campaign ${campaign_id} resumed by ${acted_by} at ${new Date().toISOString()} — ${pendingCount} recipients remaining`,
     );
+
+    // Trigger immediate batch execution so user doesn't wait for scheduler
+    if (pendingCount > 0) {
+      setImmediate(async () => {
+        try {
+          await executeCampaignBatchService(campaign_id, tenant_id, 15);
+        } catch (err) {
+          logger.error(
+            `[CAMPAIGN-STATUS] Immediate batch after resume failed for ${campaign_id}: ${err.message}`,
+          );
+        }
+      });
+    }
   }
 
   return campaign;
@@ -1988,6 +2104,17 @@ export const getCampaignStatsService = async (campaign_id, tenant_id) => {
     ((total_clicked / safeDenominator) * 100).toFixed(2),
   );
 
+  // Fetch the latest failed recipient error message for UI display
+  let latest_failed_error = null;
+  if (failedCount > 0) {
+    const latestFailed = await db.WhatsappCampaignRecipients.findOne({
+      where: buildRecipientStatusWhere(campaign_id, "failed"),
+      attributes: ["error_message"],
+      order: [["updatedAt", "DESC"]],
+    });
+    latest_failed_error = latestFailed?.error_message?.trim() || null;
+  }
+
   return {
     total_sent,
     total_delivered,
@@ -1995,6 +2122,7 @@ export const getCampaignStatsService = async (campaign_id, tenant_id) => {
     total_clicked,
     open_rate,
     click_rate,
+    latest_failed_error,
     status_counts: {
       all: totalCount,
       pending: pendingCount,
