@@ -916,6 +916,9 @@ export const executeCampaignBatchService = async (
 
     for (const recipient of recipients) {
       recipientIndex++;
+      // Define dynamicVariables outside try block so it's available in catch
+      let dynamicVariables = recipient.dynamic_variables || [];
+
       // Mid-batch pause check every 5 recipients — re-read DB status so user
       // can stop the campaign without waiting for the full batch to finish.
       if (recipientIndex % 5 === 0) {
@@ -969,7 +972,7 @@ export const executeCampaignBatchService = async (
 
         let components = [];
 
-        let dynamicVariables = recipient.dynamic_variables || [];
+        // Parse dynamicVariables if string
         if (typeof dynamicVariables === "string") {
           try {
             dynamicVariables = JSON.parse(dynamicVariables);
