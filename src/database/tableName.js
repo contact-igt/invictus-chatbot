@@ -15,6 +15,7 @@ export const tableNames = {
   KNOWLEDGESOURCE: "knowledge_sources",
   KNOWLEDGECHUNKS: "knowledge_chunks",
   AIPROMPT: "ai_prompts",
+  APPOINTMENTS: "appointments", // NEW
   CONTACTS: "contacts",
   CONTACT_GROUPS: "contact_groups",
   CONTACT_GROUP_MEMBERS: "contact_group_members",

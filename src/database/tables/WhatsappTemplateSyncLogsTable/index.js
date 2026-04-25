@@ -17,7 +17,7 @@ export const WhatsappTemplateSyncLogTable = (sequelize, Sequelize) => {
       },
 
       action: {
-        type: Sequelize.ENUM("submit", "sync", "update", "soft_delete"),
+        type: Sequelize.ENUM("submit", "sync", "update", "edit", "soft_delete"),
         allowNull: false,
       },
 
@@ -33,7 +33,14 @@ export const WhatsappTemplateSyncLogTable = (sequelize, Sequelize) => {
 
       
       meta_status: {
-        type: Sequelize.ENUM("approved", "rejected", "pending", "failed"),
+        type: Sequelize.ENUM(
+          "draft",
+          "pending",
+          "approved",
+          "rejected",
+          "paused",
+          "disabled",
+        ),
         allowNull: true,
       },
 

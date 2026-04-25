@@ -379,7 +379,7 @@ const purgeExpiredOtps = async () => {
 };
 
 const purgeOldProcessedMessages = async () => {
-  const cutoff = CUTOFF_7D();
+  const cutoff = CUTOFF_30D();
   const n = await execDelete(
     `DELETE FROM ${tableNames.PROCESSEDMESSAGE} WHERE created_at < ?`,
     [cutoff],

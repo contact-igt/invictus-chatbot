@@ -9,6 +9,8 @@ import {
   addTemplateUsageService,
   markMediaAsApprovedService,
 } from "../GalleryModel/gallery.service.js";
+import { validateTemplateHeaderMedia } from "../../utils/mediaValidation.js";
+import { logger } from "../../utils/logger.js";
 
 const STATUS_MAP = {
   IN_REVIEW: "pending",
@@ -19,7 +21,54 @@ const STATUS_MAP = {
   DISABLED: "disabled",
 };
 
-const resolveMediaUrl = async (media_url, media_asset_id, transaction = null) => {
+const VALID_LOCAL_META_STATUSES = new Set([
+  "draft",
+  "pending",
+  "approved",
+  "rejected",
+  "paused",
+  "disabled",
+]);
+
+const resolveRestoredTemplateStatus = (previousStatus) => {
+  const normalizedStatus = String(previousStatus || "")
+    .trim()
+    .toLowerCase();
+
+  if (!VALID_LOCAL_META_STATUSES.has(normalizedStatus)) {
+    return "draft";
+  }
+
+  return normalizedStatus === "approved" ? "paused" : normalizedStatus;
+};
+
+export const mapMetaStatusToLocal = (metaStatus) => {
+  const normalizedMetaStatus = String(metaStatus || "")
+    .trim()
+    .toUpperCase();
+
+  const mappedStatus = STATUS_MAP[normalizedMetaStatus] || "pending";
+
+  return VALID_LOCAL_META_STATUSES.has(mappedStatus) ? mappedStatus : "pending";
+};
+
+const ensureValidLocalMetaStatus = (status) => {
+  const normalizedStatus = String(status || "")
+    .trim()
+    .toLowerCase();
+
+  if (VALID_LOCAL_META_STATUSES.has(normalizedStatus)) {
+    return normalizedStatus;
+  }
+
+  return "pending";
+};
+
+const resolveMediaUrl = async (
+  media_url,
+  media_asset_id,
+  transaction = null,
+) => {
   if (media_url) return media_url;
   if (!media_asset_id) return null;
   const [[asset]] = await db.sequelize.query(
@@ -144,7 +193,194 @@ const getMappedMetaTemplateStatus = async (metaTemplateId, whatsappAccount) => {
     },
   );
 
-  return STATUS_MAP[metaRes.data.status] || "pending";
+  return mapMetaStatusToLocal(metaRes.data.status);
+};
+
+const getHeaderMediaAssetMetadata = async ({
+  tenantId,
+  mediaAssetId,
+  mediaHandle,
+  transaction = null,
+}) => {
+  if (!tenantId || (!mediaAssetId && !mediaHandle)) {
+    return null;
+  }
+
+  const lookupField = mediaAssetId ? "media_asset_id" : "media_handle";
+  const lookupValue = mediaAssetId || mediaHandle;
+
+  const [[asset]] = await db.sequelize.query(
+    `
+    SELECT media_asset_id, file_name, file_type, mime_type, media_handle, preview_url
+    FROM ${tableNames.MEDIA_ASSETS}
+    WHERE tenant_id = ?
+      AND ${lookupField} = ?
+      AND is_deleted = false
+    LIMIT 1
+    `,
+    {
+      replacements: [tenantId, lookupValue],
+      transaction,
+    },
+  );
+
+  return asset || null;
+};
+
+const sanitizeTemplateHeaderMediaReferences = async ({
+  tenantId,
+  header,
+  transaction = null,
+}) => {
+  if (!header) {
+    return { header: null, assetMetadata: null, hadTypeMismatch: false };
+  }
+
+  const normalizedHeaderFormat = String(
+    header.header_format || header.format || header.type || "text",
+  )
+    .trim()
+    .toLowerCase();
+
+  if (!["image", "video", "document"].includes(normalizedHeaderFormat)) {
+    return {
+      header: {
+        ...header,
+        media_asset_id: null,
+        media_handle: null,
+        media_url: null,
+      },
+      assetMetadata: null,
+      hadTypeMismatch: false,
+    };
+  }
+
+  const assetMetadata = await getHeaderMediaAssetMetadata({
+    tenantId,
+    mediaAssetId: header.media_asset_id,
+    mediaHandle: header.media_handle,
+    transaction,
+  });
+
+  const hadTypeMismatch =
+    !!assetMetadata && assetMetadata.file_type !== normalizedHeaderFormat;
+
+  const mediaUrlLooksStale =
+    hadTypeMismatch &&
+    !!header.media_url &&
+    header.media_url === assetMetadata.preview_url;
+
+  return {
+    header: {
+      ...header,
+      media_asset_id: hadTypeMismatch
+        ? null
+        : header.media_asset_id || assetMetadata?.media_asset_id || null,
+      media_handle: hadTypeMismatch
+        ? null
+        : header.media_handle || assetMetadata?.media_handle || null,
+      media_url: mediaUrlLooksStale
+        ? null
+        : header.media_url ||
+          (!hadTypeMismatch ? assetMetadata?.preview_url || null : null),
+    },
+    assetMetadata: hadTypeMismatch ? null : assetMetadata,
+    hadTypeMismatch,
+  };
+};
+
+const validateTemplateHeaderMediaBeforeMetaSubmit = async ({
+  template,
+  header,
+  transaction = null,
+}) => {
+  if (!header) {
+    return { header: null, assetMetadata: null, hadTypeMismatch: false };
+  }
+
+  const headerFormat = String(header.header_format || "")
+    .trim()
+    .toLowerCase();
+
+  if (!["image", "video", "document"].includes(headerFormat)) {
+    return { header, assetMetadata: null, hadTypeMismatch: false };
+  }
+
+  const {
+    header: sanitizedHeader,
+    assetMetadata,
+    hadTypeMismatch,
+  } = await sanitizeTemplateHeaderMediaReferences({
+    tenantId: template?.tenant_id,
+    header,
+    transaction,
+  });
+
+  if (!assetMetadata && !sanitizedHeader?.media_url) {
+    return {
+      header: sanitizedHeader,
+      assetMetadata: null,
+      hadTypeMismatch,
+    };
+  }
+
+  const validation = validateTemplateHeaderMedia({
+    expectedType: headerFormat,
+    fileType: assetMetadata?.file_type || "",
+    mimeType: assetMetadata?.mime_type || null,
+    fileName:
+      assetMetadata?.file_name ||
+      sanitizedHeader?.media_url ||
+      assetMetadata?.preview_url ||
+      null,
+  });
+
+  if (!validation.valid) {
+    const error = new Error(validation.error);
+    error.errorCode = "UNSUPPORTED_TEMPLATE_MEDIA";
+    throw error;
+  }
+
+  return {
+    header: sanitizedHeader,
+    assetMetadata,
+    hadTypeMismatch,
+  };
+};
+
+const deriveTemplateTypeFromComponents = (
+  components = [],
+  fallbackType = "text",
+) => {
+  const normalizedFallbackType = String(fallbackType || "text")
+    .trim()
+    .toLowerCase();
+
+  const headerComponent = Array.isArray(components)
+    ? components.find((component) => component.component_type === "header")
+    : null;
+
+  const carouselComponent = Array.isArray(components)
+    ? components.find((component) => component.component_type === "carousel")
+    : null;
+
+  if (carouselComponent) {
+    return "carousel";
+  }
+
+  const headerFormat = String(
+    headerComponent?.header_format || normalizedFallbackType,
+  )
+    .trim()
+    .toLowerCase();
+
+  if (
+    ["image", "video", "document", "location", "text"].includes(headerFormat)
+  ) {
+    return headerFormat;
+  }
+
+  return normalizedFallbackType;
 };
 
 const buildMetaTemplatePayload = async ({
@@ -248,8 +484,17 @@ const buildMetaTemplatePayload = async ({
         }
       }
     } else if (["IMAGE", "VIDEO", "DOCUMENT"].includes(format)) {
-      if (header.media_handle) {
-        headerObj.example = { header_handle: [header.media_handle] };
+      const { header: sanitizedHeader, assetMetadata } =
+        await validateTemplateHeaderMediaBeforeMetaSubmit({
+          template,
+          header,
+        });
+
+      const resolvedMediaHandle =
+        sanitizedHeader?.media_handle || assetMetadata?.media_handle || null;
+
+      if (resolvedMediaHandle) {
+        headerObj.example = { header_handle: [resolvedMediaHandle] };
       } else {
         const defaultSamples = {
           IMAGE: "https://www.facebook.com/images/fb_icon_325x325.png",
@@ -257,7 +502,10 @@ const buildMetaTemplatePayload = async ({
           DOCUMENT:
             "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
         };
-        const sampleUrl = header.media_url || defaultSamples[format];
+        const sampleUrl =
+          sanitizedHeader?.media_url ||
+          assetMetadata?.preview_url ||
+          defaultSamples[format];
         if (sampleUrl) {
           try {
             const { uploadMediaToMetaForTemplate } =
@@ -266,6 +514,7 @@ const buildMetaTemplatePayload = async ({
               whatsappAccount.tenant_id,
               sampleUrl,
               format,
+              { mimeType: assetMetadata?.mime_type || null },
             );
             headerObj.example = { header_handle: [headerHandle] };
           } catch (uploadError) {
@@ -284,17 +533,21 @@ const buildMetaTemplatePayload = async ({
     .sort((a, b) => parseInt(a.variable_key) - parseInt(b.variable_key))
     .map((v) => v.sample_value);
 
-  let totalPlaceholderCount = (bodyText.match(/{{\d+}}/g) || []).length;
+  const uniquePlaceholders = new Set(bodyText.match(/{{\d+}}/g) || []);
   if (header && header.header_format === "text" && header.text_content) {
-    totalPlaceholderCount += (header.text_content.match(/{{\d+}}/g) || [])
-      .length;
+    for (const m of header.text_content.match(/{{\d+}}/g) || []) {
+      uniquePlaceholders.add(m);
+    }
   }
 
   const footer = components.find((c) => c.component_type === "footer");
   if (footer && footer.text_content) {
-    totalPlaceholderCount += (footer.text_content.match(/{{\d+}}/g) || [])
-      .length;
+    for (const m of footer.text_content.match(/{{\d+}}/g) || []) {
+      uniquePlaceholders.add(m);
+    }
   }
+
+  const totalPlaceholderCount = uniquePlaceholders.size;
 
   if (totalPlaceholderCount !== variables.length) {
     throw new Error(
@@ -512,6 +765,25 @@ export const createWhatsappTemplateService = async (
   try {
     const headerMediaAssetId = components?.header?.media_asset_id || null;
     const headerMediaHandle = components?.header?.media_handle || null;
+    const normalizedTemplateType = deriveTemplateTypeFromComponents(
+      [
+        ...(components?.header
+          ? [
+              {
+                component_type: "header",
+                header_format: (
+                  components.header.format ||
+                  components.header.type ||
+                  template_type ||
+                  "text"
+                ).toLowerCase(),
+              },
+            ]
+          : []),
+        ...(components?.carousel ? [{ component_type: "carousel" }] : []),
+      ],
+      template_type,
+    );
 
     // Validate language code
     if (!language || !VALID_META_LANGUAGE_CODES.has(language)) {
@@ -526,10 +798,6 @@ export const createWhatsappTemplateService = async (
       throw new Error("Body cannot start with a variable");
     }
 
-    if (/{{\d+}}[.!?,]*$/.test(bodyText)) {
-      throw new Error("Body cannot end with a variable");
-    }
-
     await db.sequelize.query(
       `
       INSERT INTO ${tableNames.WHATSAPP_TEMPLATE}
@@ -542,7 +810,7 @@ export const createWhatsappTemplateService = async (
           tenant_id,
           template_name,
           category,
-          template_type,
+          normalizedTemplateType,
           language,
           headerMediaAssetId,
           headerMediaHandle,
@@ -559,7 +827,7 @@ export const createWhatsappTemplateService = async (
       VALUES (?, 'body', ?)
       `,
       {
-        replacements: [template_id, components.body.text],
+        replacements: [template_id, bodyText],
         transaction,
       },
     );
@@ -573,7 +841,11 @@ export const createWhatsappTemplateService = async (
         throw new Error("Header type is required");
       }
 
-      const resolvedMediaUrl = await resolveMediaUrl(media_url, media_asset_id, transaction);
+      const resolvedMediaUrl = await resolveMediaUrl(
+        media_url,
+        media_asset_id,
+        transaction,
+      );
 
       await db.sequelize.query(
         `
@@ -700,8 +972,17 @@ export const submitWhatsappTemplateService = async ({
   const transaction = await db.sequelize.transaction();
 
   try {
+    const normalizedTemplateType = deriveTemplateTypeFromComponents(
+      components,
+      template.template_type,
+    );
+    const normalizedTemplate = {
+      ...template,
+      template_type: normalizedTemplateType,
+    };
+
     const payload = await buildMetaTemplatePayload({
-      template,
+      template: normalizedTemplate,
       components,
       variables,
       whatsappAccount,
@@ -767,7 +1048,7 @@ export const submitWhatsappTemplateService = async ({
     }
 
     const metaTemplateId = response.data.id;
-    const metaStatus = STATUS_MAP[response.data.status] || "pending";
+    const metaStatus = mapMetaStatusToLocal(response.data.status);
 
     // ─────────────────────────────────────────
     // Update template
@@ -775,11 +1056,15 @@ export const submitWhatsappTemplateService = async ({
     await db.sequelize.query(
       `
       UPDATE ${tableNames.WHATSAPP_TEMPLATE}
-      SET meta_template_id = ?, status = 'pending'
+      SET meta_template_id = ?, status = 'pending', template_type = ?
       WHERE template_id = ? AND is_deleted = false
       `,
       {
-        replacements: [metaTemplateId, template.template_id],
+        replacements: [
+          metaTemplateId,
+          normalizedTemplateType,
+          template.template_id,
+        ],
         transaction,
       },
     );
@@ -798,7 +1083,7 @@ export const submitWhatsappTemplateService = async ({
           template.template_id,
           JSON.stringify(payload),
           JSON.stringify(response.data),
-          metaStatus,
+          ensureValidLocalMetaStatus(metaStatus),
         ],
         transaction,
       },
@@ -835,6 +1120,16 @@ export const syncWhatsappTemplateStatusService = async ({
 
   try {
     if (!template.meta_template_id) {
+      if (template.status === "draft") {
+        await transaction.rollback();
+        return {
+          status: "draft",
+          meta_status: null,
+          skipped: true,
+          source: "local",
+        };
+      }
+
       throw new Error("Template not submitted to Meta");
     }
 
@@ -851,7 +1146,7 @@ export const syncWhatsappTemplateStatusService = async ({
     );
 
     const metaStatus = metaRes.data.status;
-    const mappedStatus = STATUS_MAP[metaStatus] || "pending";
+    const mappedStatus = mapMetaStatusToLocal(metaStatus);
 
     // Update main table.
     // If status is moving OUT of rejected, clear the stored rejection_reason.
@@ -862,13 +1157,10 @@ export const syncWhatsappTemplateStatusService = async ({
       : `UPDATE ${tableNames.WHATSAPP_TEMPLATE} SET status = ? WHERE template_id = ? AND is_deleted = false`;
 
     // Update main table
-    await db.sequelize.query(
-      updateQuery,
-      {
-        replacements: [mappedStatus, template.template_id],
-        transaction,
-      },
-    );
+    await db.sequelize.query(updateQuery, {
+      replacements: [mappedStatus, template.template_id],
+      transaction,
+    });
 
     // Insert sync log
     await db.sequelize.query(
@@ -881,7 +1173,7 @@ export const syncWhatsappTemplateStatusService = async ({
         replacements: [
           template.template_id,
           JSON.stringify(metaRes.data),
-          mappedStatus,
+          ensureValidLocalMetaStatus(mappedStatus),
         ],
         transaction,
       },
@@ -1015,9 +1307,7 @@ export const getTemplateListService = async (tenant_id) => {
         can_edit: ["draft", "rejected", "paused", "approved"].includes(
           t.status,
         ),
-        can_submit: ["draft", "rejected", "paused", "approved"].includes(
-          t.status,
-        ),
+        can_submit: ["draft", "rejected", "paused"].includes(t.status),
         display_status: t.status.charAt(0).toUpperCase() + t.status.slice(1),
         components,
         variables,
@@ -1069,9 +1359,7 @@ export const getTemplateByIdService = async (template_id, tenant_id) => {
       can_edit: ["draft", "rejected", "paused", "approved"].includes(
         template.status,
       ),
-      can_submit: ["draft", "rejected", "paused", "approved"].includes(
-        template.status,
-      ),
+      can_submit: ["draft", "rejected", "paused"].includes(template.status),
       display_status:
         template.status.charAt(0).toUpperCase() + template.status.slice(1),
       components,
@@ -1114,7 +1402,7 @@ export const pullTemplatesFromMetaService = async (tenant_id) => {
 
     for (const metaT of allTemplates) {
       // Map status
-      const localStatus = STATUS_MAP[metaT.status] || "pending";
+      const localStatus = mapMetaStatusToLocal(metaT.status);
 
       // Check if exists (including soft-deleted)
       const [[existing]] = await db.sequelize.query(
@@ -1130,11 +1418,17 @@ export const pullTemplatesFromMetaService = async (tenant_id) => {
 
         // Update status if changed
         if (existing.status !== localStatus || !existing.meta_template_id) {
-          const rejectionReason = localStatus === "rejected" ? (metaT.rejection_reason || null) : null;
+          const rejectionReason =
+            localStatus === "rejected" ? metaT.rejection_reason || null : null;
           await db.sequelize.query(
             `UPDATE ${tableNames.WHATSAPP_TEMPLATE} SET status = ?, rejection_reason = ?, meta_template_id = ? WHERE template_id = ?`,
             {
-              replacements: [localStatus, rejectionReason, metaT.id, existing.template_id],
+              replacements: [
+                localStatus,
+                rejectionReason,
+                metaT.id,
+                existing.template_id,
+              ],
               transaction,
             },
           );
@@ -1263,7 +1557,11 @@ export const softDeleteTemplateService = async (template_id, tenant_id) => {
     }
 
     await db.sequelize.query(
-      `UPDATE ${tableNames.WHATSAPP_TEMPLATE} SET is_deleted = true, deleted_at = NOW() WHERE template_id = ?`,
+      `UPDATE ${tableNames.WHATSAPP_TEMPLATE}
+       SET is_deleted = true,
+           deleted_at = NOW(),
+           previous_status = status
+       WHERE template_id = ?`,
       {
         replacements: [template_id],
         transaction,
@@ -1278,7 +1576,10 @@ export const softDeleteTemplateService = async (template_id, tenant_id) => {
       VALUES (?, 'soft_delete', ?)
       `,
       {
-        replacements: [template_id, template.status],
+        replacements: [
+          template_id,
+          ensureValidLocalMetaStatus(template.status),
+        ],
         transaction,
       },
     );
@@ -1384,9 +1685,6 @@ export const updateWhatsappTemplateService = async (
   const transaction = await db.sequelize.transaction();
 
   try {
-    const headerMediaAssetId = components?.header?.media_asset_id || null;
-    const headerMediaHandle = components?.header?.media_handle || null;
-
     // Fetch current template
     const [[template]] = await db.sequelize.query(
       `SELECT * FROM ${tableNames.WHATSAPP_TEMPLATE} WHERE template_id = ? AND tenant_id = ? AND is_deleted = false`,
@@ -1448,15 +1746,54 @@ export const updateWhatsappTemplateService = async (
       throw new Error("Body component text is required");
     }
 
+    const sanitizedHeader = components?.header
+      ? (
+          await sanitizeTemplateHeaderMediaReferences({
+            tenantId: tenant_id,
+            header: {
+              ...components.header,
+              header_format: (
+                components.header.format ||
+                components.header.type ||
+                template_type ||
+                template.template_type ||
+                "text"
+              ).toLowerCase(),
+            },
+            transaction,
+          })
+        ).header
+      : null;
+    const headerMediaAssetId = sanitizedHeader?.media_asset_id || null;
+    const headerMediaHandle = sanitizedHeader?.media_handle || null;
+
+    const normalizedTemplateType = deriveTemplateTypeFromComponents(
+      [
+        ...(sanitizedHeader
+          ? [
+              {
+                component_type: "header",
+                header_format: (
+                  sanitizedHeader.header_format ||
+                  sanitizedHeader.format ||
+                  sanitizedHeader.type ||
+                  template_type ||
+                  template.template_type ||
+                  "text"
+                ).toLowerCase(),
+              },
+            ]
+          : []),
+        ...(components?.carousel ? [{ component_type: "carousel" }] : []),
+      ],
+      template_type || template.template_type,
+    );
+
     const bodyText = components.body.text.trim();
 
     // Meta rules for body text
     if (/^{{\d+}}/.test(bodyText)) {
       throw new Error("Body cannot start with a variable");
-    }
-
-    if (/{{\d+}}[.!?,]*$/.test(bodyText)) {
-      throw new Error("Body cannot end with a variable");
     }
 
     const shouldEditOnMeta =
@@ -1547,18 +1884,20 @@ export const updateWhatsappTemplateService = async (
           category: category || template.category,
         },
         components: [
-          ...(components.header
+          ...(sanitizedHeader
             ? [
                 {
                   component_type: "header",
                   header_format: (
-                    components.header.format ||
-                    components.header.type ||
+                    sanitizedHeader.header_format ||
+                    sanitizedHeader.format ||
+                    sanitizedHeader.type ||
                     "text"
                   ).toLowerCase(),
-                  text_content: components.header.text || null,
-                  media_url: components.header.media_url || null,
-                  media_handle: components.header.media_handle || null,
+                  text_content: sanitizedHeader.text || null,
+                  media_asset_id: sanitizedHeader.media_asset_id || null,
+                  media_url: sanitizedHeader.media_url || null,
+                  media_handle: sanitizedHeader.media_handle || null,
                 },
               ]
             : []),
@@ -1666,9 +2005,7 @@ export const updateWhatsappTemplateService = async (
 
         const metaData = metaErr.response?.data?.error;
         const metaMsg =
-          metaData?.error_user_msg ||
-          metaData?.message ||
-          metaErr.message;
+          metaData?.error_user_msg || metaData?.message || metaErr.message;
 
         // ── Edge case: Meta rejects because the template was edited outside our system
         //    (e.g., directly in Meta Business Manager UI). Our DB has no record of that edit,
@@ -1725,7 +2062,7 @@ export const updateWhatsappTemplateService = async (
         replacements: [
           template_name || template.template_name,
           category || template.category,
-          template_type || template.template_type,
+          normalizedTemplateType,
           language || template.language,
           headerMediaAssetId,
           headerMediaHandle,
@@ -1750,14 +2087,14 @@ export const updateWhatsappTemplateService = async (
       (template_id, component_type, text_content)
       VALUES (?, 'body', ?)
       `,
-      { replacements: [template_id, components.body.text], transaction },
+      { replacements: [template_id, bodyText], transaction },
     );
 
     // Insert header if provided
-    if (components.header) {
+    if (sanitizedHeader) {
       const resolvedMediaUrl = await resolveMediaUrl(
-        components.header.media_url,
-        components.header.media_asset_id,
+        sanitizedHeader.media_url,
+        sanitizedHeader.media_asset_id,
         transaction,
       );
 
@@ -1771,14 +2108,15 @@ export const updateWhatsappTemplateService = async (
           replacements: [
             template_id,
             (
-              components.header.format ||
-              components.header.type ||
+              sanitizedHeader.header_format ||
+              sanitizedHeader.format ||
+              sanitizedHeader.type ||
               "text"
             ).toLowerCase(),
-            components.header.text || null,
+            sanitizedHeader.text || null,
             resolvedMediaUrl,
-            components.header.media_asset_id || null,
-            components.header.media_handle || null,
+            sanitizedHeader.media_asset_id || null,
+            sanitizedHeader.media_handle || null,
           ],
           transaction,
         },
@@ -1905,7 +2243,7 @@ export const updateWhatsappTemplateService = async (
           shouldEditOnMeta ? "edit" : "update",
           metaEditPayload ? JSON.stringify(metaEditPayload) : null,
           metaEditResponse ? JSON.stringify(metaEditResponse.data) : null,
-          nextStatus,
+          ensureValidLocalMetaStatus(nextStatus),
         ],
         transaction,
       },
@@ -1996,25 +2334,94 @@ export const getDeletedTemplateListService = async (tenant_id) => {
   }
 };
 
+const restoreRelatedTemplateRows = async (template_id, transaction = null) => {
+  const lifecycleTables = [
+    tableNames.WHATSAPP_TEMPLATE_COMPONENTS,
+    tableNames.WHATSAPP_TEMPLATE_VARIABLES,
+    tableNames.WHATSAPP_TEMPLATE_SYNC_LOGS,
+  ];
+
+  for (const tableName of lifecycleTables) {
+    const [columns] = await db.sequelize.query(
+      `SELECT column_name
+       FROM information_schema.columns
+       WHERE table_schema = DATABASE()
+         AND table_name = ?
+         AND column_name IN ('is_deleted', 'deleted_at')`,
+      { replacements: [tableName], transaction },
+    );
+
+    const columnNames = new Set(columns.map((column) => column.column_name));
+    if (!columnNames.has("is_deleted") || !columnNames.has("deleted_at")) {
+      continue;
+    }
+
+    await db.sequelize.query(
+      `UPDATE ${tableName}
+       SET is_deleted = false,
+           deleted_at = NULL
+       WHERE template_id = ?`,
+      { replacements: [template_id], transaction },
+    );
+  }
+};
+
 /**
  * Restore a soft-deleted template
  */
 export const restoreTemplateService = async (template_id, tenant_id) => {
   try {
-    const template = await db.WhatsappTemplates.findOne({
-      where: { template_id, tenant_id, is_deleted: true },
+    return await db.sequelize.transaction(async (transaction) => {
+      const template = await db.WhatsappTemplates.findOne({
+        where: { template_id, tenant_id, is_deleted: true },
+        transaction,
+        lock: transaction.LOCK.UPDATE,
+      });
+
+      if (!template) {
+        throw new Error("Template not found or not deleted");
+      }
+
+      const previousStatus = template.previous_status || null;
+      const restoredStatus = resolveRestoredTemplateStatus(previousStatus);
+      const isDeletedBeforeRestore = template.is_deleted;
+
+      await template.update(
+        {
+          is_deleted: false,
+          deleted_at: null,
+          status: restoredStatus,
+          previous_status: null,
+        },
+        { transaction },
+      );
+
+      await restoreRelatedTemplateRows(template_id, transaction);
+
+      const restoredTemplate = await db.WhatsappTemplates.findOne({
+        where: { template_id, tenant_id, is_deleted: false },
+        transaction,
+      });
+
+      if (!restoredTemplate) {
+        throw new Error("Template restore validation failed");
+      }
+
+      logger.info("[Template Restore]", {
+        template_id: template.template_id,
+        is_deleted_before_restore: isDeletedBeforeRestore,
+        is_deleted_after_restore: restoredTemplate.is_deleted,
+        previous_status: previousStatus,
+        restored_status: restoredStatus,
+      });
+
+      return {
+        message: "Template restored successfully",
+        template_id: template.template_id,
+        previous_status: previousStatus,
+        restored_status: restoredStatus,
+      };
     });
-
-    if (!template) {
-      throw new Error("Template not found or not deleted");
-    }
-
-    await template.update({
-      is_deleted: false,
-      deleted_at: null,
-    });
-
-    return { message: "Template restored successfully" };
   } catch (err) {
     throw err;
   }

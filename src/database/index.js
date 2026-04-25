@@ -155,6 +155,7 @@ db.FaqReviews = FaqReviewsTable(sequelize, Sequelize);
 db.FaqKnowledgeSource = FaqKnowledgeSourceTable(sequelize, Sequelize);
 db.MediaAsset = MediaAssetTable(sequelize, Sequelize);
 db.Appointments = AppointmentTable(sequelize, Sequelize);
+db.BookingSessions = BookingSessionTable(sequelize, Sequelize); // NEW
 db.SavedPaymentMethod = SavedPaymentMethodTable(sequelize, Sequelize);
 db.TaxSettings = TaxSettingsTable(sequelize, Sequelize);
 db.TenantSecrets = TenantSecretsTable(sequelize, Sequelize);

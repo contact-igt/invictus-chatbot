@@ -12,7 +12,8 @@ import { callAI } from "../../utils/ai/coreAi.js";
 import { searchKnowledgeChunks } from "../Knowledge/knowledge.search.js";
 import { getActivePromptService } from "../AiPrompt/aiprompt.service.js";
 import { getIO } from "../../middlewares/socket/socket.js";
-import { classifyIntent } from "../../utils/ai/intentClassifier.js";
+import { classifyIntent, APPOINTMENT_INTENTS } from "../../utils/ai/intentClassifier.js"; // NEW — APPOINTMENT_INTENTS added
+import { appointmentOrchestrator } from "../AppointmentModel/appointmentConversation.service.js"; // NEW
 
 const httpsAgent = new https.Agent({
   family: 4,
@@ -577,6 +578,26 @@ export const getOpenAIReply = async (
       chatHistory,
       tenant_id,
     );
+
+    // NEW: Route appointment intents directly — skip heavy AI call and knowledge search
+    if (APPOINTMENT_INTENTS.includes(intentResult.intent)) { // NEW
+      const contactObj = { // NEW
+        contact_id, // NEW
+        phone_number: phone, // NEW
+        phone, // NEW
+        ...(cachedData?.contact || {}), // NEW
+      }; // NEW
+      const apptResult = await appointmentOrchestrator.handleAppointmentIntent( // NEW
+        intentResult.intent, cleanMessage, contactObj, tenant_id, // NEW
+      ); // NEW
+      return { // NEW
+        message: apptResult.message, // NEW
+        tagDetected: null, // NEW
+        tagPayload: null, // NEW
+        intent: intentResult.intent, // NEW
+        _apptResult: apptResult, // NEW — signals controller to use interactive sending
+      }; // NEW
+    } // NEW
 
     const factualKnowledgeNeeded = isLikelyFactualQuestion(cleanMessage);
     if (!intentResult.requires.knowledge && factualKnowledgeNeeded) {

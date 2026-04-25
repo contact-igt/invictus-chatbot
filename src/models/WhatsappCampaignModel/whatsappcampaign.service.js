@@ -24,8 +24,136 @@ import { estimateMetaCost } from "../../utils/billing/costEstimator.js";
 import { addCampaignUsageService } from "../GalleryModel/gallery.service.js";
 import { logger } from "../../utils/logger.js";
 
-// In-memory lock to prevent concurrent execution of the same campaign
-const runningCampaigns = new Set();
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const getUniquePlaceholderCount = (text = "") => {
+  return (String(text).match(/{{\d+}}/g) || []).reduce(
+    (set, placeholder) => set.add(placeholder),
+    new Set(),
+  ).size;
+};
+
+const parseTemplateButtons = (buttonsContent) => {
+  if (!buttonsContent) return [];
+
+  try {
+    const parsed =
+      typeof buttonsContent === "string"
+        ? JSON.parse(buttonsContent)
+        : buttonsContent;
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
+
+const getTemplateVariableRequirements = async (template_id) => {
+  const [components] = await db.sequelize.query(
+    `SELECT component_type, text_content, header_format
+     FROM ${tableNames.WHATSAPP_TEMPLATE_COMPONENTS}
+     WHERE template_id = ? AND component_type IN ('body', 'buttons', 'header')`,
+    { replacements: [template_id] },
+  );
+
+  const bodyComponent = components.find((c) => c.component_type === "body");
+  const buttonsComponent = components.find(
+    (c) => c.component_type === "buttons",
+  );
+  const headerComponent = components.find((c) => c.component_type === "header");
+  const buttonVariables = parseTemplateButtons(buttonsComponent?.text_content)
+    .map((button, index) => ({ button, index }))
+    .filter(
+      ({ button }) =>
+        button?.type === "URL" &&
+        typeof button?.url === "string" &&
+        button.url.includes("{{1}}"),
+    )
+    .map(({ index }) => ({ index }));
+
+  return {
+    expectedBodyCount: getUniquePlaceholderCount(bodyComponent?.text_content),
+    buttonVariables,
+    headerFormat: String(headerComponent?.header_format || "").toUpperCase(),
+  };
+};
+
+const normalizeRecipientDynamicVariables = (dynamicVariables, requirements) => {
+  let parsedDynamicVariables = dynamicVariables;
+
+  if (typeof parsedDynamicVariables === "string") {
+    try {
+      parsedDynamicVariables = JSON.parse(parsedDynamicVariables);
+    } catch {
+      return parsedDynamicVariables;
+    }
+  }
+
+  if (
+    Array.isArray(parsedDynamicVariables) &&
+    requirements.buttonVariables.length > 0
+  ) {
+    const body = parsedDynamicVariables.slice(
+      0,
+      requirements.expectedBodyCount,
+    );
+    const buttons = requirements.buttonVariables.map(
+      (buttonVariable, offset) => ({
+        index: buttonVariable.index,
+        parameters: [
+          parsedDynamicVariables[requirements.expectedBodyCount + offset] || "",
+        ],
+      }),
+    );
+
+    return { body, buttons };
+  }
+
+  return parsedDynamicVariables;
+};
+
+const getRecipientVariableState = (dynamicVariables) => {
+  const result = {
+    bodyCount: 0,
+    buttonCount: 0,
+    hasEmptyValues: false,
+  };
+
+  if (Array.isArray(dynamicVariables)) {
+    result.bodyCount = dynamicVariables.length;
+    result.hasEmptyValues = dynamicVariables.some(
+      (value) => !String(value ?? "").trim(),
+    );
+    return result;
+  }
+
+  if (!dynamicVariables || typeof dynamicVariables !== "object") {
+    return result;
+  }
+
+  if (Array.isArray(dynamicVariables.body)) {
+    result.bodyCount = dynamicVariables.body.length;
+    result.hasEmptyValues = dynamicVariables.body.some(
+      (value) => !String(value ?? "").trim(),
+    );
+  }
+
+  if (Array.isArray(dynamicVariables.buttons)) {
+    result.buttonCount = dynamicVariables.buttons.filter(
+      (button) =>
+        Array.isArray(button?.parameters) && button.parameters.length > 0,
+    ).length;
+
+    if (!result.hasEmptyValues) {
+      result.hasEmptyValues = dynamicVariables.buttons.some(
+        (button) =>
+          !Array.isArray(button?.parameters) ||
+          button.parameters.some((value) => !String(value ?? "").trim()),
+      );
+    }
+  }
+
+  return result;
+};
 
 /**
  * Creates a new campaign and populates its recipients.
@@ -67,7 +195,7 @@ export const createCampaignService = async (tenant_id, data, created_by) => {
     // Campaigns can only run with templates that are approved and active for this tenant
     const template = await db.WhatsappTemplates.findOne({
       where: { template_id, tenant_id, is_deleted: false },
-      attributes: ["template_id", "status"],
+      attributes: ["template_id", "status", "category"],
     });
     if (!template) {
       throw new Error("Template not found");
@@ -129,7 +257,7 @@ export const createCampaignService = async (tenant_id, data, created_by) => {
         .filter((item) => item.mobile_number)
         .map((item) => {
           const formatted = formatPhoneNumber(item.mobile_number);
-          if (seenNumbers.has(formatted)) return null;
+          if (!formatted || seenNumbers.has(formatted)) return null;
           seenNumbers.add(formatted);
           return {
             mobile_number: formatted,
@@ -137,7 +265,7 @@ export const createCampaignService = async (tenant_id, data, created_by) => {
             dynamic_variables: item.dynamic_variables || null,
           };
         })
-        .filter(Boolean);
+        .filter((r) => r && r.mobile_number);
 
       if (recipients.length === 0) {
         throw new Error("No valid recipients provided in audience data");
@@ -151,7 +279,7 @@ export const createCampaignService = async (tenant_id, data, created_by) => {
           .filter((item) => item.mobile_number)
           .map((item) => {
             const formatted = formatPhoneNumber(item.mobile_number);
-            if (seenNumbers.has(formatted)) return null;
+            if (!formatted || seenNumbers.has(formatted)) return null;
             seenNumbers.add(formatted);
             return {
               mobile_number: formatted,
@@ -159,7 +287,7 @@ export const createCampaignService = async (tenant_id, data, created_by) => {
               dynamic_variables: item.dynamic_variables || null,
             };
           })
-          .filter(Boolean);
+          .filter((r) => r && r.mobile_number);
 
         if (recipients.length === 0) {
           throw new Error("No valid recipients in group audience data");
@@ -184,16 +312,99 @@ export const createCampaignService = async (tenant_id, data, created_by) => {
           throw new Error("Group has no members or does not exist");
         }
 
-        recipients = groupMembers.map((member) => ({
-          mobile_number: member.contact.phone,
-          contact_id: member.contact.contact_id,
-          dynamic_variables: null,
-        }));
+        // Format and deduplicate exactly like manual/csv paths
+        const groupSeenNumbers = new Set();
+        recipients = groupMembers
+          .map((member) => {
+            const formatted = formatPhoneNumber(member.contact.phone);
+            if (!formatted || groupSeenNumbers.has(formatted)) return null;
+            groupSeenNumbers.add(formatted);
+            return {
+              mobile_number: formatted,
+              contact_id: member.contact.contact_id,
+              dynamic_variables: null,
+            };
+          })
+          .filter((r) => r && r.mobile_number);
+
+        if (recipients.length === 0) {
+          throw new Error(
+            "No valid phone numbers found in group. All members may have invalid or missing numbers.",
+          );
+        }
       }
     } else {
       throw new Error(
         "Invalid audience_type. Must be 'manual', 'group', or 'csv'",
       );
+    }
+
+    if (String(template.category || "").toLowerCase() !== "authentication") {
+      const variableRequirements =
+        await getTemplateVariableRequirements(template_id);
+      const expectedButtonCount = variableRequirements.buttonVariables.length;
+
+      recipients = recipients.map((recipient) => ({
+        ...recipient,
+        dynamic_variables: normalizeRecipientDynamicVariables(
+          recipient.dynamic_variables,
+          variableRequirements,
+        ),
+      }));
+
+      if (
+        variableRequirements.expectedBodyCount > 0 ||
+        expectedButtonCount > 0
+      ) {
+        recipients.forEach((recipient) => {
+          const { bodyCount, buttonCount, hasEmptyValues } =
+            getRecipientVariableState(recipient.dynamic_variables);
+
+          if (
+            bodyCount !== variableRequirements.expectedBodyCount ||
+            buttonCount !== expectedButtonCount ||
+            hasEmptyValues
+          ) {
+            throw new Error(
+              `Template variable mismatch for ${recipient.mobile_number}. Expected ${variableRequirements.expectedBodyCount} body and ${expectedButtonCount} button variable(s), but received ${bodyCount} body and ${buttonCount} button variable(s).`,
+            );
+          }
+        });
+      }
+
+      if (
+        ["IMAGE", "VIDEO", "DOCUMENT"].includes(
+          variableRequirements.headerFormat,
+        ) &&
+        !header_media_url &&
+        !media_handle
+      ) {
+        throw new Error(
+          `Template header requires ${variableRequirements.headerFormat.toLowerCase()} media, but no media URL or handle was provided.`,
+        );
+      }
+
+      if (header_media_url) {
+        try {
+          new URL(header_media_url);
+        } catch {
+          throw new Error("header_media_url must be a valid URL");
+        }
+      }
+
+      if (variableRequirements.headerFormat === "LOCATION") {
+        const hasLocationParams =
+          location_params?.latitude &&
+          location_params?.longitude &&
+          location_params?.name &&
+          location_params?.address;
+
+        if (!hasLocationParams) {
+          throw new Error(
+            "Template header requires location_params with latitude, longitude, name, and address.",
+          );
+        }
+      }
     }
 
     // 2.5 Campaign Safety: Validate against rolling 24h limit
@@ -301,8 +512,10 @@ export const createCampaignService = async (tenant_id, data, created_by) => {
  */
 export const getCampaignListService = async (tenant_id, query = {}) => {
   try {
-    const { page = 1, limit = 10, status, search } = query;
-    const offset = (page - 1) * limit;
+    const { page, limit, status, search } = query;
+    const pageNum = Math.max(1, parseInt(page ?? 1, 10) || 1);
+    const limitNum = Math.max(1, Math.min(100, parseInt(limit ?? 10, 10) || 10));
+    const offset = (pageNum - 1) * limitNum;
 
     const where = { tenant_id, is_deleted: false };
     if (status) {
@@ -317,8 +530,8 @@ export const getCampaignListService = async (tenant_id, query = {}) => {
     const { count, rows } = await db.WhatsappCampaigns.findAndCountAll({
       where,
       order: [["created_at", "DESC"]],
-      limit: parseInt(limit, 10),
-      offset: parseInt(offset, 10),
+      limit: limitNum,
+      offset,
       include: [
         {
           model: db.WhatsappTemplates,
@@ -331,12 +544,30 @@ export const getCampaignListService = async (tenant_id, query = {}) => {
     return {
       campaigns: rows,
       totalItems: count,
-      totalPages: Math.ceil(count / limit),
-      currentPage: parseInt(page, 10),
+      totalPages: Math.ceil(count / limitNum),
+      currentPage: pageNum,
     };
   } catch (err) {
     throw err;
   }
+};
+
+const buildRecipientStatusWhere = (campaign_id, recipient_status) => {
+  const where = { campaign_id, is_deleted: false };
+
+  if (!recipient_status) {
+    return where;
+  }
+
+  if (recipient_status === "failed") {
+    where.status = {
+      [db.Sequelize.Op.in]: ["failed", "permanently_failed"],
+    };
+    return where;
+  }
+
+  where.status = recipient_status;
+  return where;
 };
 
 /**
@@ -349,10 +580,10 @@ export const getCampaignByIdService = async (
 ) => {
   try {
     const { recipient_status } = query;
-    let recipientWhere = { campaign_id };
-    if (recipient_status) {
-      recipientWhere.status = recipient_status;
-    }
+    const recipientWhere = buildRecipientStatusWhere(
+      campaign_id,
+      recipient_status,
+    );
 
     const campaign = await db.WhatsappCampaigns.findOne({
       where: { campaign_id, tenant_id, is_deleted: false },
@@ -376,13 +607,110 @@ export const getCampaignByIdService = async (
   }
 };
 
+const escapeCsvValue = (value) => {
+  if (value === null || value === undefined) return "";
+
+  let normalizedValue = value;
+
+  if (typeof normalizedValue === "object") {
+    try {
+      normalizedValue = JSON.stringify(normalizedValue);
+    } catch {
+      normalizedValue = String(normalizedValue);
+    }
+  }
+
+  const stringValue = String(normalizedValue);
+  if (/[",\n\r]/.test(stringValue)) {
+    return `"${stringValue.replace(/"/g, '""')}"`;
+  }
+
+  return stringValue;
+};
+
+export const exportCampaignRecipientsCsvService = async (
+  campaign_id,
+  tenant_id,
+  recipient_status,
+) => {
+  const campaign = await db.WhatsappCampaigns.findOne({
+    where: { campaign_id, tenant_id, is_deleted: false },
+    attributes: ["campaign_id", "campaign_name"],
+  });
+
+  if (!campaign) {
+    throw new Error("Campaign not found");
+  }
+
+  const where = buildRecipientStatusWhere(campaign_id, recipient_status);
+
+  const recipients = await db.WhatsappCampaignRecipients.findAll({
+    where,
+    attributes: [
+      "mobile_number",
+      "status",
+      "dynamic_variables",
+      "meta_message_id",
+      "error_message",
+      "createdAt",
+      "updatedAt",
+    ],
+    order: [["id", "ASC"]],
+  });
+
+  const headers = [
+    "mobile_number",
+    "status",
+    "dynamic_variables",
+    "meta_message_id",
+    "error_message",
+    "created_at",
+    "updated_at",
+  ];
+
+  const rows = recipients.map((recipient) => {
+    const dynamicVariables = Array.isArray(recipient.dynamic_variables)
+      ? recipient.dynamic_variables.join(" | ")
+      : recipient.dynamic_variables;
+
+    return [
+      recipient.mobile_number,
+      recipient.status,
+      dynamicVariables,
+      recipient.meta_message_id,
+      recipient.error_message,
+      recipient.createdAt ? new Date(recipient.createdAt).toISOString() : "",
+      recipient.updatedAt ? new Date(recipient.updatedAt).toISOString() : "",
+    ]
+      .map(escapeCsvValue)
+      .join(",");
+  });
+
+  const safeCampaignName = String(campaign.campaign_name || campaign_id)
+    .trim()
+    .replace(/[^a-zA-Z0-9-_]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "")
+    .toLowerCase();
+
+  const normalizedStatus = recipient_status || "all";
+  const fileName = `${safeCampaignName || campaign_id}-${normalizedStatus}.csv`;
+  const csv = [headers.join(","), ...rows].join("\n");
+
+  return {
+    fileName,
+    csv,
+    total: recipients.length,
+  };
+};
+
 /**
  * Processes a batch of pending recipients for an active campaign.
  */
 export const executeCampaignBatchService = async (
   campaign_id,
   tenant_id,
-  batchSize = 50,
+  batchSize = 15,
 ) => {
   if (runningCampaigns.has(campaign_id)) {
     logger.warn(`[CAMPAIGN-LOCK] Campaign ${campaign_id} already executing, skipping concurrent run`);
@@ -464,10 +792,16 @@ export const executeCampaignBatchService = async (
     }
 
     if (recipients.length === 0) {
-      // Mark campaign as completed if no more pending recipients
       await campaign.update({ status: "completed" });
+      logger.info(
+        `[CAMPAIGN-BATCH] Campaign ${campaign_id} completed — no more pending recipients`,
+      );
       return { finished: true };
     }
+
+    logger.info(
+      `[CAMPAIGN-BATCH] Starting batch for campaign ${campaign_id} — ${recipients.length} recipients`,
+    );
 
     // --- Per-batch billing check: estimate cost for this batch ---
     try {
@@ -507,16 +841,44 @@ export const executeCampaignBatchService = async (
       // Fail open — don't block on billing check error
     }
 
-    // Update campaign status to active if it was scheduled, draft, or paused
-    if (
-      campaign.status === "scheduled" ||
-      campaign.status === "draft" ||
-      campaign.status === "paused"
-    ) {
+    // If the campaign has been paused by the user, respect it — do not auto-activate.
+    if (campaign.status === "paused") {
+      const pendingCount = await db.WhatsappCampaignRecipients.count({
+        where: { campaign_id, status: "pending" },
+      });
+      logger.info(
+        `[CAMPAIGN-BATCH] Campaign ${campaign_id} is paused — skipping execution (${pendingCount} recipients still pending)`,
+      );
+      return { finished: false, paused: true, pendingCount };
+    }
+
+    // Auto-activate if status is still scheduled or draft (scheduler already handles this,
+    // but guard here for direct manual triggers)
+    if (campaign.status === "scheduled" || campaign.status === "draft") {
       await campaign.update({ status: "active" });
     }
 
+    let batchSentCount = 0;
+    let batchFailCount = 0;
+    let recipientIndex = 0;
+
     for (const recipient of recipients) {
+      recipientIndex++;
+      // Mid-batch pause check every 5 recipients — re-read DB status so user
+      // can stop the campaign without waiting for the full batch to finish.
+      if (recipientIndex % 5 === 0) {
+        const freshCampaign = await db.WhatsappCampaigns.findOne({
+          where: { campaign_id },
+          attributes: ["status"],
+          raw: true,
+        });
+        if (freshCampaign?.status === "paused") {
+          logger.info(
+            `[CAMPAIGN-BATCH] Campaign ${campaign_id} paused mid-batch after ${recipientIndex - 1} recipients — stopping`,
+          );
+          break;
+        }
+      }
       try {
         // 1. Ensure Contact Exists
         let contactId = recipient.contact_id;
@@ -691,14 +1053,19 @@ export const executeCampaignBatchService = async (
               }
               mediaObj.filename = campaign.header_file_name || "document.pdf";
             } else {
-              // IMAGE / VIDEO: Meta accepts string handles as id — id-first is fine.
-              if (mediaId) {
-                mediaObj = { id: mediaId };
-              } else if (campaignHeaderMediaUrl) {
+              // IMAGE / VIDEO: resumable-upload handles ("4::...") are strings and
+              // are only valid for template submission (header_handle field), NOT for
+              // sending messages (image.id / video.id require a numeric Media ID).
+              // Always prefer the public preview URL (link); fall back to id only
+              // when the value is a pure numeric string (a real Media API ID).
+              const isNumericId = mediaId && /^\d+$/.test(mediaId);
+              if (campaignHeaderMediaUrl) {
                 mediaObj = { link: campaignHeaderMediaUrl };
+              } else if (isNumericId) {
+                mediaObj = { id: mediaId };
               } else {
                 throw new Error(
-                  "Media header is configured, but no valid media ID or preview URL is available for sending.",
+                  `${hFormat} header requires a public media URL. No valid URL is available for sending.`,
                 );
               }
             }
@@ -740,7 +1107,7 @@ export const executeCampaignBatchService = async (
         // Fetch full template to check for carousel (since template record doesn't store 'carousel' as category)
         // We actually need to check if there are CAROUSEL components
         const [carousel_data] = await db.sequelize.query(
-          `SELECT * FROM ${tableNames.WHATSAPP_TEMPLATE_COMPONENTS} WHERE template_id = ? AND component_type = 'CAROUSEL'`,
+          `SELECT * FROM ${tableNames.WHATSAPP_TEMPLATE_COMPONENTS} WHERE template_id = ? AND component_type = 'carousel'`,
           { replacements: [campaign.template_id] },
         );
 
@@ -798,6 +1165,70 @@ export const executeCampaignBatchService = async (
           }
         }
 
+        // ── Pre-send validation ─────────────────────────────────────────────
+        // Step 1: Validate phone number format
+        const formattedPhone = formatPhoneNumber(recipient.mobile_number);
+        if (!formattedPhone) {
+          throw Object.assign(
+            new Error(
+              `Invalid phone number "${recipient.mobile_number}" — must be 10–15 digits with country code (e.g. 919876543210)`,
+            ),
+            { validation: true, permanent: true },
+          );
+        }
+
+        // Step 2: Validate template variable count
+        const expectedVarCount = (
+          templateBodyText.match(/{{\d+}}/g) || []
+        ).reduce((set, m) => set.add(m), new Set()).size;
+        if (expectedVarCount > 0) {
+          let sentVarCount = 0;
+          if (
+            typeof dynamicVariables === "object" &&
+            !Array.isArray(dynamicVariables) &&
+            Array.isArray(dynamicVariables.body)
+          ) {
+            sentVarCount = dynamicVariables.body.length;
+          } else if (Array.isArray(dynamicVariables)) {
+            sentVarCount = dynamicVariables.length;
+          }
+          if (sentVarCount < expectedVarCount) {
+            throw Object.assign(
+              new Error(
+                `Variable mismatch found — template expects ${expectedVarCount} variable(s) but recipient has ${sentVarCount}. ` +
+                  `mobile_number=${recipient.mobile_number} template_id=${campaign.template_id}`,
+              ),
+              { validation: true, permanent: true },
+            );
+          }
+        }
+
+        // Step 3: Validate media if template has a media header
+        if (
+          headerComponent &&
+          ["IMAGE", "VIDEO", "DOCUMENT"].includes(
+            headerComponent.header_format?.toUpperCase(),
+          )
+        ) {
+          const hasUrl = !!campaignHeaderMediaUrl;
+          const hasNumericId =
+            campaign.media_handle &&
+            /^\d+$/.test(String(campaign.media_handle));
+          if (!hasUrl && !hasNumericId) {
+            throw Object.assign(
+              new Error(
+                `Missing media — template header requires ${headerComponent.header_format} but no valid URL or media ID is available for campaign ${campaign_id}`,
+              ),
+              { validation: true, permanent: false },
+            );
+          }
+        }
+        // ── End of pre-send validation ──────────────────────────────────────
+
+        logger.info(
+          `[CAMPAIGN-BATCH] Sending to ${formattedPhone} (campaign=${campaign_id} template=${campaign.template_id})`,
+        );
+
         let result;
         // Atomic check: skip if another execution already claimed this recipient
         const stillPending = await db.WhatsappCampaignRecipients.findOne({
@@ -809,76 +1240,116 @@ export const executeCampaignBatchService = async (
         try {
           result = await sendWhatsAppTemplate(
             tenant_id,
-            recipient.mobile_number,
+            formattedPhone,
             campaign.template.template_name,
             campaign.template.language,
             components,
           );
         } catch (sendErr) {
           const errMsg = String(sendErr?.message || "");
-          const hasInvalidMediaId =
-            errMsg.includes(
-              "is not a valid whatsapp business account media attachment ID",
-            ) ||
-            errMsg.includes(
-              "template['components'][0]['parameters'][0]['image']['id']",
-            ) ||
-            // JSON schema type error: document.id / image.id / video.id expected integer
-            (errMsg.includes("JSON schema constraint") && errMsg.includes(".id"));
 
-          // Auto-retry once with LINK if Meta rejects the media ID and we have a preview URL.
-          if (hasInvalidMediaId && campaignHeaderMediaUrl) {
-            const retryComponents = components.map((component) => {
-              if (
-                component?.type !== "header" ||
-                !Array.isArray(component.parameters)
-              ) {
-                return component;
-              }
-              const nextParams = component.parameters.map((param) => {
-                if (!param || typeof param !== "object") return param;
-                if (param.type === "image" && param.image?.id) {
-                  return { ...param, image: { link: campaignHeaderMediaUrl } };
+          // --- Unhealthy API: pause 30s then retry once ---
+          const isUnhealthy =
+            errMsg.toLowerCase().includes("unhealthy") ||
+            errMsg.toLowerCase().includes("service unavailable") ||
+            errMsg.toLowerCase().includes("503");
+
+          if (isUnhealthy) {
+            logger.warn(
+              `[CAMPAIGN-BATCH] Unhealthy API response for campaign ${campaign_id} — pausing 30s before retry (recipient=${formattedPhone})`,
+            );
+            await sleep(30000);
+            logger.info(
+              `[CAMPAIGN-BATCH] Retrying ${formattedPhone} after unhealthy pause`,
+            );
+            try {
+              result = await sendWhatsAppTemplate(
+                tenant_id,
+                formattedPhone,
+                campaign.template.template_name,
+                campaign.template.language,
+                components,
+              );
+            } catch (retryErr) {
+              logger.error(
+                `[CAMPAIGN-BATCH] Retry after unhealthy failed for ${formattedPhone}: ${retryErr.message}`,
+              );
+              throw retryErr;
+            }
+          }
+
+          // --- Invalid media ID: retry once with public URL ---
+          else {
+            const hasInvalidMediaId =
+              errMsg.includes(
+                "is not a valid whatsapp business account media attachment ID",
+              ) ||
+              errMsg.includes(
+                "template['components'][0]['parameters'][0]['image']['id']",
+              ) ||
+              (errMsg.includes("JSON schema constraint") &&
+                errMsg.includes(".id"));
+
+            if (hasInvalidMediaId && campaignHeaderMediaUrl) {
+              const retryComponents = components.map((component) => {
+                if (
+                  component?.type !== "header" ||
+                  !Array.isArray(component.parameters)
+                ) {
+                  return component;
                 }
-                if (param.type === "video" && param.video?.id) {
-                  return { ...param, video: { link: campaignHeaderMediaUrl } };
-                }
-                if (param.type === "document" && param.document?.id) {
-                  return {
-                    ...param,
-                    document: {
-                      link: campaignHeaderMediaUrl,
-                      ...(campaign.header_file_name
-                        ? { filename: campaign.header_file_name }
-                        : {}),
-                    },
-                  };
-                }
-                return param;
+                const nextParams = component.parameters.map((param) => {
+                  if (!param || typeof param !== "object") return param;
+                  if (param.type === "image" && param.image?.id) {
+                    return {
+                      ...param,
+                      image: { link: campaignHeaderMediaUrl },
+                    };
+                  }
+                  if (param.type === "video" && param.video?.id) {
+                    return {
+                      ...param,
+                      video: { link: campaignHeaderMediaUrl },
+                    };
+                  }
+                  if (param.type === "document" && param.document?.id) {
+                    return {
+                      ...param,
+                      document: {
+                        link: campaignHeaderMediaUrl,
+                        ...(campaign.header_file_name
+                          ? { filename: campaign.header_file_name }
+                          : {}),
+                      },
+                    };
+                  }
+                  return param;
+                });
+                return { ...component, parameters: nextParams };
               });
-              return { ...component, parameters: nextParams };
-            });
 
-            console.warn(
-              `[CAMPAIGN-SEND] Invalid media id for campaign ${campaign_id}. Retrying with link.`,
-            );
-            result = await sendWhatsAppTemplate(
-              tenant_id,
-              recipient.mobile_number,
-              campaign.template.template_name,
-              campaign.template.language,
-              retryComponents,
-            );
-          } else {
-            throw sendErr;
+              logger.warn(
+                `[CAMPAIGN-BATCH] Invalid media id for campaign ${campaign_id} — retrying with link (recipient=${formattedPhone})`,
+              );
+              result = await sendWhatsAppTemplate(
+                tenant_id,
+                formattedPhone,
+                campaign.template.template_name,
+                campaign.template.language,
+                retryComponents,
+              );
+            } else {
+              throw sendErr;
+            }
           }
         }
 
         await recipient.update({
           status: "sent",
           meta_message_id: result.meta_message_id || null,
-          error_message: null, // Clear any previous error
+          error_message: null,
         });
+        batchSentCount++;
 
         // 3. Log to Message History and Activate Live Chat
         if (contactId && result.meta_message_id) {
@@ -996,27 +1467,81 @@ export const executeCampaignBatchService = async (
           }
         }
       } catch (err) {
-        console.error(
-          `Failed to send campaign message to ${recipient.mobile_number}:`,
-          err.message,
-        );
+        batchFailCount++;
+
+        // Build a structured diagnostic context for every failure
+        const diagContext = {
+          mobile_number: recipient.mobile_number,
+          template_id: campaign.template_id,
+          template_name: campaign.template?.template_name,
+          dynamic_variables: (() => {
+            try {
+              return JSON.stringify(
+                dynamicVariables ?? recipient.dynamic_variables,
+              );
+            } catch {
+              return String(dynamicVariables ?? recipient.dynamic_variables);
+            }
+          })(),
+          header_format: headerComponent?.header_format ?? null,
+          media_url: campaignHeaderMediaUrl ?? null,
+          media_handle: campaign.media_handle ?? null,
+          error: err.message,
+        };
+
+        // Validation errors (bad phone, variable mismatch, missing media) are permanent —
+        // retrying them will never succeed, so mark immediately as permanently_failed.
+        const isPermanentValidation =
+          err.validation === true && err.permanent === true;
+        const isMissingMedia =
+          err.validation === true && err.permanent === false;
+
         const currentRetryCount = Number(recipient.retry_count || 0);
         const nextRetryCount = currentRetryCount + 1;
+        const isPermanent = isPermanentValidation || nextRetryCount >= 3;
         const backoffMinutes =
           nextRetryCount === 1 ? 5 : nextRetryCount === 2 ? 15 : 45;
         const nextRetryAt = new Date(Date.now() + backoffMinutes * 60 * 1000);
 
+        if (isPermanentValidation) {
+          logger.warn(
+            `[CAMPAIGN-BATCH] VALIDATION FAILURE (permanent) — will not retry:\n${JSON.stringify(diagContext, null, 2)}`,
+          );
+        } else if (isMissingMedia) {
+          // Missing media affects the whole campaign, not just this recipient — log prominently
+          logger.error(
+            `[CAMPAIGN-BATCH] MEDIA MISSING — campaign ${campaign_id} has no usable media. All recipients will fail until media is fixed:\n${JSON.stringify(diagContext, null, 2)}`,
+          );
+        } else {
+          logger.warn(
+            `[CAMPAIGN-BATCH] Send failed (attempt=${nextRetryCount}/3, permanent=${isPermanent}):\n${JSON.stringify(diagContext, null, 2)}`,
+          );
+        }
+
         await recipient.update({
-          status: nextRetryCount >= 3 ? "permanently_failed" : "failed",
+          status: isPermanent ? "permanently_failed" : "failed",
           error_message: err.message,
           last_error: err.message,
-          retry_count: nextRetryCount,
-          next_retry_at: nextRetryCount >= 3 ? null : nextRetryAt,
+          retry_count: isPermanentValidation ? 3 : nextRetryCount,
+          next_retry_at: isPermanent ? null : nextRetryAt,
         });
       }
+
+      // Delay between individual sends to prevent Meta API rate limiting
+      await sleep(500);
+      // Yield to event loop so chatbot webhooks are not starved
+      await new Promise((resolve) => setImmediate(resolve));
     }
 
-    return { finished: false, processedCount: recipients.length };
+    logger.info(
+      `[CAMPAIGN-BATCH] Batch finished for campaign ${campaign_id} — sent=${batchSentCount} failed=${batchFailCount} total=${recipients.length}`,
+    );
+    return {
+      finished: false,
+      processedCount: recipients.length,
+      sentCount: batchSentCount,
+      failCount: batchFailCount,
+    };
   } catch (err) {
     throw err;
   } finally {
@@ -1181,11 +1706,19 @@ export const startCampaignSchedulerService = () => {
             // Fail open — proceed with execution
           }
 
-          await executeCampaignBatchService(
+          logger.info(
+            `[CAMPAIGN-SCHEDULER] Executing batch for campaign ${campaign.campaign_id}`,
+          );
+          const batchResult = await executeCampaignBatchService(
             campaign.campaign_id,
             campaign.tenant_id,
-            100,
+            15,
           );
+          logger.info(
+            `[CAMPAIGN-SCHEDULER] Campaign ${campaign.campaign_id} batch done — processed=${batchResult.processedCount ?? 0} sent=${batchResult.sentCount ?? 0} failed=${batchResult.failCount ?? 0} finished=${batchResult.finished}`,
+          );
+          // Delay between campaigns to protect chatbot event loop
+          await sleep(3000);
         } catch (campaignErr) {
           logger.error(
             `[CAMPAIGN-SCHEDULER] Campaign ${campaign.campaign_id} execution error: ${campaignErr.message}`,
@@ -1209,7 +1742,7 @@ export const startCampaignSchedulerService = () => {
             { next_retry_at: { [db.Sequelize.Op.lte]: new Date() } },
           ],
         },
-        limit: 500,
+        limit: 30,
       });
 
       const campaignIdsToResume = new Set();
@@ -1225,10 +1758,16 @@ export const startCampaignSchedulerService = () => {
           where: { campaign_id: campaignId, is_deleted: false },
         });
         if (!campaign) continue;
-        if (["paused", "failed", "scheduled"].includes(campaign.status)) {
+        // Only auto-resume campaigns that failed — 'scheduled' campaigns must
+        // not be activated early (they have a scheduled_at time to honour).
+        if (campaign.status === "failed") {
           await campaign.update({ status: "active" });
         }
-        await executeCampaignBatchService(campaignId, campaign.tenant_id, 100);
+        logger.info(
+          `[CAMPAIGN-RETRY] Executing batch for campaign ${campaignId}`,
+        );
+        await executeCampaignBatchService(campaignId, campaign.tenant_id, 15);
+        await sleep(3000);
       }
     } catch (err) {
       console.error("[CAMPAIGN-RETRY-WORKER] Error:", err.message);
@@ -1251,6 +1790,7 @@ export const updateCampaignStatusService = async (
   campaign_id,
   tenant_id,
   nextStatusRaw,
+  acted_by = "unknown",
 ) => {
   const campaign = await db.WhatsappCampaigns.findOne({
     where: { campaign_id, tenant_id, is_deleted: false },
@@ -1272,6 +1812,17 @@ export const updateCampaignStatusService = async (
     return campaign;
   }
 
+  // Idempotent: already in the desired state — treat as success, no DB write needed.
+  if (current === next) {
+    return campaign;
+  }
+
+  // If user tries to pause an already-completed or cancelled campaign, the intent
+  // (stop sending) is already satisfied — return success instead of a confusing error.
+  if (next === "paused" && ["completed", "cancelled"].includes(current)) {
+    return campaign;
+  }
+
   const key = `${current}->${next}`;
   if (!allowed.has(key)) {
     throw new Error(
@@ -1280,6 +1831,23 @@ export const updateCampaignStatusService = async (
   }
 
   await campaign.update({ status: next });
+
+  if (next === "paused") {
+    const pendingCount = await db.WhatsappCampaignRecipients.count({
+      where: { campaign_id, status: "pending" },
+    });
+    logger.info(
+      `[CAMPAIGN-STATUS] Campaign ${campaign_id} paused by ${acted_by} at ${new Date().toISOString()} — ${pendingCount} recipients still pending`,
+    );
+  } else if (next === "active" && current === "paused") {
+    const pendingCount = await db.WhatsappCampaignRecipients.count({
+      where: { campaign_id, status: "pending" },
+    });
+    logger.info(
+      `[CAMPAIGN-STATUS] Campaign ${campaign_id} resumed by ${acted_by} at ${new Date().toISOString()} — ${pendingCount} recipients remaining`,
+    );
+  }
+
   return campaign;
 };
 
@@ -1333,6 +1901,53 @@ export const getCampaignStatsService = async (campaign_id, tenant_id) => {
   });
   if (!campaign) throw new Error("Campaign not found");
 
+  const [
+    pendingCount,
+    sentOnlyCount,
+    deliveredOnlyCount,
+    readOnlyCount,
+    failedCount,
+    totalCount,
+  ] = await Promise.all([
+    db.WhatsappCampaignRecipients.count({
+      where: {
+        campaign_id,
+        is_deleted: false,
+        status: "pending",
+      },
+    }),
+    db.WhatsappCampaignRecipients.count({
+      where: {
+        campaign_id,
+        is_deleted: false,
+        status: "sent",
+      },
+    }),
+    db.WhatsappCampaignRecipients.count({
+      where: {
+        campaign_id,
+        is_deleted: false,
+        status: "delivered",
+      },
+    }),
+    db.WhatsappCampaignRecipients.count({
+      where: {
+        campaign_id,
+        is_deleted: false,
+        status: "read",
+      },
+    }),
+    db.WhatsappCampaignRecipients.count({
+      where: buildRecipientStatusWhere(campaign_id, "failed"),
+    }),
+    db.WhatsappCampaignRecipients.count({
+      where: {
+        campaign_id,
+        is_deleted: false,
+      },
+    }),
+  ]);
+
   const total_sent = await db.WhatsappCampaignRecipients.count({
     where: {
       campaign_id,
@@ -1380,6 +1995,14 @@ export const getCampaignStatsService = async (campaign_id, tenant_id) => {
     total_clicked,
     open_rate,
     click_rate,
+    status_counts: {
+      all: totalCount,
+      pending: pendingCount,
+      sent: sentOnlyCount,
+      delivered: deliveredOnlyCount,
+      read: readOnlyCount,
+      failed: failedCount,
+    },
   };
 };
 
@@ -1447,7 +2070,9 @@ export const resolveRecipientCount = async (
     case "csv":
       return Array.isArray(audience_data) ? audience_data.length : 0;
     case "all_contacts":
-      return await db.Contacts.count({ where: { tenant_id, is_deleted: false } });
+      return await db.Contacts.count({
+        where: { tenant_id, is_deleted: false },
+      });
     case "all_leads":
       return await db.Leads.count({ where: { tenant_id, is_deleted: false } });
     case "group":

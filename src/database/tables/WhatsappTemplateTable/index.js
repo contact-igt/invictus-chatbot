@@ -56,6 +56,18 @@ export const WhatsappTemplateTable = (sequelize, Sequelize) => {
         defaultValue: "draft",
       },
 
+      previous_status: {
+        type: Sequelize.ENUM(
+          "draft",
+          "pending",
+          "approved",
+          "rejected",
+          "paused",
+          "disabled",
+        ),
+        allowNull: true,
+      },
+
       rejection_reason: {
         type: Sequelize.TEXT,
         allowNull: true,

@@ -117,9 +117,7 @@ export const BookingSessionTable = (sequelize, Sequelize) => {
       updatedAt: {
         type: Sequelize.DATE,
         allowNull: false,
-        defaultValue: Sequelize.literal(
-          "CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP",
-        ),
+        defaultValue: Sequelize.literal("CURRENT_TIMESTAMP"),
       },
     },
     {

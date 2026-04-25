@@ -155,7 +155,11 @@ export const uploadMediaService = async (
     // Determine file type from MIME type
     const fileType = getFileTypeFromMimeType(file.mimetype);
     if (!fileType) {
-      throw new Error(`Unsupported file type: ${file.mimetype}`);
+      const error = new Error(
+        `Unsupported file type: ${file.mimetype}. Allowed formats: jpg, jpeg, png, mp4, pdf.`,
+      );
+      error.errorCode = "UNSUPPORTED_MEDIA_FORMAT";
+      throw error;
     }
 
     // Validate file
@@ -170,7 +174,9 @@ export const uploadMediaService = async (
     );
 
     if (!validation.valid) {
-      throw new Error(validation.error);
+      const error = new Error(validation.error);
+      error.errorCode = "UNSUPPORTED_MEDIA_FORMAT";
+      throw error;
     }
 
     // Generate asset ID before uploads (needed for R2 file key)
