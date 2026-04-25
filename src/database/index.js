@@ -159,6 +159,7 @@ db.BookingSessions = BookingSessionTable(sequelize, Sequelize); // NEW
 db.SavedPaymentMethod = SavedPaymentMethodTable(sequelize, Sequelize);
 db.TaxSettings = TaxSettingsTable(sequelize, Sequelize);
 db.TenantSecrets = TenantSecretsTable(sequelize, Sequelize);
+db.WhatsappTemplateSyncLogs = WhatsappTemplateSyncLogTable(sequelize, Sequelize);
 
 defineAssociations(db);
 
