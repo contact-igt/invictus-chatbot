@@ -43,10 +43,22 @@ export const restoreTemplateController = async (req, res) => {
     return res.status(200).send(result);
   } catch (err) {
     if (err.message === "Template not found or not deleted") {
-      return res.status(404).json({ success: false, error_code: "NOT_FOUND", message: err.message });
+      return res
+        .status(404)
+        .json({
+          success: false,
+          error_code: "NOT_FOUND",
+          message: err.message,
+        });
     }
     logger.error("restoreTemplateController error:", err);
-    return res.status(500).json({ success: false, error_code: "INTERNAL_ERROR", message: err.message });
+    return res
+      .status(500)
+      .json({
+        success: false,
+        error_code: "INTERNAL_ERROR",
+        message: err.message,
+      });
   }
 };
 export const createWhatsappTemplateController = async (req, res) => {
@@ -128,7 +140,10 @@ export const createWhatsappTemplateController = async (req, res) => {
       },
     });
   } catch (err) {
-    if (err.original?.code === "ER_DUP_ENTRY" || err.message?.includes("already exists")) {
+    if (
+      err.original?.code === "ER_DUP_ENTRY" ||
+      err.message?.includes("already exists")
+    ) {
       return res.status(409).json({
         success: false,
         error_code: "DUPLICATE_TEMPLATE_NAME",
@@ -150,7 +165,13 @@ export const submitWhatsappTemplateController = async (req, res) => {
     const { template_id } = req.params;
 
     if (!tenant_id) {
-      return res.status(401).json({ success: false, error_code: "UNAUTHORIZED", message: "Authentication required" });
+      return res
+        .status(401)
+        .json({
+          success: false,
+          error_code: "UNAUTHORIZED",
+          message: "Authentication required",
+        });
     }
 
     const whatsappAccount = await getWhatsappAccountByTenantService(tenant_id);
@@ -171,7 +192,13 @@ export const submitWhatsappTemplateController = async (req, res) => {
     );
 
     if (!template) {
-      return res.status(404).json({ success: false, error_code: "NOT_FOUND", message: "Template not found" });
+      return res
+        .status(404)
+        .json({
+          success: false,
+          error_code: "NOT_FOUND",
+          message: "Template not found",
+        });
     }
 
     if (template.status !== "draft") {
@@ -214,6 +241,13 @@ export const submitWhatsappTemplateController = async (req, res) => {
       data: result,
     });
   } catch (err) {
+    if (err.errorCode === "UNSUPPORTED_TEMPLATE_MEDIA") {
+      return res.status(422).json({
+        success: false,
+        error_code: err.errorCode,
+        message: err.message,
+      });
+    }
     // Handle Meta "Template being deleted" error specifically
     if (
       err.metaError &&
@@ -322,7 +356,13 @@ export const getTemplateListController = async (req, res) => {
     });
   } catch (err) {
     logger.error("getTemplateListController error:", err);
-    return res.status(500).json({ success: false, error_code: "INTERNAL_ERROR", message: err.message });
+    return res
+      .status(500)
+      .json({
+        success: false,
+        error_code: "INTERNAL_ERROR",
+        message: err.message,
+      });
   }
 };
 
@@ -332,7 +372,13 @@ export const getTemplateByIdController = async (req, res) => {
   try {
     const template = await getTemplateByIdService(template_id, tenant_id);
     if (!template) {
-      return res.status(404).json({ success: false, error_code: "NOT_FOUND", message: "Template not found" });
+      return res
+        .status(404)
+        .json({
+          success: false,
+          error_code: "NOT_FOUND",
+          message: "Template not found",
+        });
     }
     return res.status(200).json({
       success: true,
@@ -341,7 +387,13 @@ export const getTemplateByIdController = async (req, res) => {
     });
   } catch (err) {
     logger.error("getTemplateByIdController error:", err);
-    return res.status(500).json({ success: false, error_code: "INTERNAL_ERROR", message: err.message });
+    return res
+      .status(500)
+      .json({
+        success: false,
+        error_code: "INTERNAL_ERROR",
+        message: err.message,
+      });
   }
 };
 
@@ -356,10 +408,22 @@ export const softDeleteTemplateController = async (req, res) => {
     });
   } catch (err) {
     if (err.message?.includes("not found")) {
-      return res.status(404).json({ success: false, error_code: "NOT_FOUND", message: err.message });
+      return res
+        .status(404)
+        .json({
+          success: false,
+          error_code: "NOT_FOUND",
+          message: err.message,
+        });
     }
     logger.error("softDeleteTemplateController error:", err);
-    return res.status(500).json({ success: false, error_code: "INTERNAL_ERROR", message: err.message });
+    return res
+      .status(500)
+      .json({
+        success: false,
+        error_code: "INTERNAL_ERROR",
+        message: err.message,
+      });
   }
 };
 
@@ -370,14 +434,27 @@ export const permanentDeleteTemplateController = async (req, res) => {
     await permanentDeleteTemplateService(template_id, tenant_id);
     return res.status(200).json({
       success: true,
-      message: "Template permanently deleted successfully from local DB and Meta",
+      message:
+        "Template permanently deleted successfully from local DB and Meta",
     });
   } catch (err) {
     if (err.message?.includes("not found")) {
-      return res.status(404).json({ success: false, error_code: "NOT_FOUND", message: err.message });
+      return res
+        .status(404)
+        .json({
+          success: false,
+          error_code: "NOT_FOUND",
+          message: err.message,
+        });
     }
     logger.error("permanentDeleteTemplateController error:", err);
-    return res.status(500).json({ success: false, error_code: "INTERNAL_ERROR", message: err.message });
+    return res
+      .status(500)
+      .json({
+        success: false,
+        error_code: "INTERNAL_ERROR",
+        message: err.message,
+      });
   }
 };
 
@@ -419,6 +496,12 @@ export const updateWhatsappTemplateController = async (req, res) => {
   } catch (err) {
     // 24h lock — thrown either by our pre-flight check (last_edited_at) or when
     // Meta itself rejects the edit (e.g. template edited from Meta UI).
+    if (err.errorCode === "UNSUPPORTED_TEMPLATE_MEDIA") {
+      return res.status(422).json({
+        message: err.message,
+        error_code: err.errorCode,
+      });
+    }
     if (err.errorCode === "EDIT_LIMIT_24H") {
       return res.status(429).json({
         message: err.message,
@@ -471,12 +554,10 @@ export const resubmitWhatsappTemplateController = async (req, res) => {
       return res.status(404).json({ message: "Template not found" });
     }
 
-    // Only allow resubmit for draft, rejected, paused, approved
-    if (
-      !["draft", "rejected", "paused", "approved"].includes(template.status)
-    ) {
+    // Only allow resubmit for draft, rejected, paused
+    if (!["draft", "rejected", "paused"].includes(template.status)) {
       return res.status(400).json({
-        message: `Cannot resubmit template with status: ${template.status}. Only draft, rejected, paused, or approved templates can be resubmitted.`,
+        message: `Cannot resubmit template with status: ${template.status}. Only draft, rejected, or paused templates can be resubmitted.`,
       });
     }
 
@@ -510,6 +591,12 @@ export const resubmitWhatsappTemplateController = async (req, res) => {
       data: result,
     });
   } catch (err) {
+    if (err.errorCode === "UNSUPPORTED_TEMPLATE_MEDIA") {
+      return res.status(422).json({
+        message: err.message,
+        error_code: err.errorCode,
+      });
+    }
     // Handle Meta "Template being deleted" error specifically
     if (
       err.metaError &&
@@ -574,7 +661,7 @@ export const generateAiTemplateController = async (req, res) => {
       focus,
       style,
       optimization,
-      language: language || 'English',
+      language: language || "English",
       previous_content,
       rejection_reason,
     });
@@ -596,7 +683,8 @@ export const generateAiTemplateController = async (req, res) => {
 export const uploadTemplateMediaController = async (req, res) => {
   try {
     const tenant_id = req.user?.tenant_id;
-    const userId = req.user?.unique_id || req.user?.tenant_user_id || req.user?.id;
+    const userId =
+      req.user?.unique_id || req.user?.tenant_user_id || req.user?.id;
 
     if (!tenant_id) {
       return res.status(400).json({ message: "Invalid tenant context" });
@@ -626,6 +714,12 @@ export const uploadTemplateMediaController = async (req, res) => {
       media_asset_id: media.media_asset_id,
     });
   } catch (err) {
+    if (err.errorCode === "UNSUPPORTED_MEDIA_FORMAT") {
+      return res.status(422).json({
+        message: err.message,
+        error_code: err.errorCode,
+      });
+    }
     return res.status(500).json({ message: err.message });
   }
 };

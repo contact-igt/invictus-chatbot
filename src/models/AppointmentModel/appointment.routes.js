@@ -41,6 +41,11 @@ router.put(
   AppointmentController.updateAppointment,
 );
 router.delete(
+  "/appointment/:appointment_id",
+  ...tenantAuth,
+  AppointmentController.deleteAppointment,
+);
+router.delete(
   "/appointment/:appointment_id/soft",
   ...tenantAuth,
   softDeleteAppointmentController,

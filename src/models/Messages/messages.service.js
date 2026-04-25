@@ -30,8 +30,9 @@ export const createUserMessageService = async (
   status = null,
   template_name = null,
   media_filename = null,
+  interactive_payload = null,
 ) => {
-  const Query = `INSERT INTO ${tableNames?.MESSAGES} (  
+  const Query = `INSERT IGNORE INTO ${tableNames?.MESSAGES} (  
   tenant_id,
   contact_id,
   phone_number_id,
@@ -47,8 +48,9 @@ export const createUserMessageService = async (
   media_mime_type,
   status,
   template_name,
+  interactive_payload,
   media_filename )
-   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) `;
+   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) `;
 
   try {
     let cleanPhone = phone ? phone.toString().replace(/\D/g, "") : "";
@@ -77,6 +79,7 @@ export const createUserMessageService = async (
       media_mime_type,
       status,
       template_name,
+      interactive_payload,
       media_filename,
     ];
 
@@ -102,15 +105,17 @@ export const getChatListService = async (tenant_id, limit = 200) => {
   INNER JOIN (
     SELECT
       contact_id,
-      MAX(created_at) AS last_message_time
+      MAX(created_at) AS last_message_time,
+      MAX(id) AS last_message_id
     FROM messages
     WHERE tenant_id = ? AND is_deleted = false
     GROUP BY contact_id
   ) lm
     ON m.contact_id = lm.contact_id
-   AND m.created_at = lm.last_message_time
+   AND m.id = lm.last_message_id
   JOIN contacts c
     ON c.contact_id = m.contact_id
+   AND c.tenant_id = m.tenant_id
   LEFT JOIN ${tableNames.LIVECHAT} lc
     ON lc.contact_id = m.contact_id
    AND lc.tenant_id = ?
@@ -161,7 +166,7 @@ export const getChatByPhoneService = async (phone, tenant_id) => {
     }
 
     const Query = `
-    SELECT id, contact_id, sender, sender_id, message, message_type, media_url, media_mime_type, media_filename, seen, status, created_at
+    SELECT id, contact_id, sender, sender_id, message, message_type, interactive_payload, media_url, media_mime_type, media_filename, seen, status, created_at
     FROM ${tableNames?.MESSAGES}
     WHERE ${whereClause} AND is_deleted = false
     ORDER BY created_at ASC

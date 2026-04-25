@@ -8,6 +8,7 @@ import {
   createCampaignController,
   getCampaignListController,
   getCampaignByIdController,
+  exportCampaignRecipientsCsvController,
   triggerCampaignExecutionController,
   estimateCampaignCostController,
   updateCampaignStatusController,
@@ -75,6 +76,13 @@ router.get(
   getCampaignByIdController,
 );
 
+router.get(
+  "/whatsapp-campaign/:campaign_id/export",
+  authenticate,
+  authorize({ user_type: "tenant", roles: tenantRoles }),
+  exportCampaignRecipientsCsvController,
+);
+
 router.post(
   "/whatsapp-campaign/:campaign_id/execute",
   authenticate,
@@ -96,6 +104,12 @@ router.patch(
   authorize({ user_type: "tenant", roles: tenantRoles }),
   updateCampaignStatusController,
 );
+router.post(
+  "/whatsapp-campaign/:campaign_id/status",
+  authenticate,
+  authorize({ user_type: "tenant", roles: tenantRoles }),
+  updateCampaignStatusController,
+);
 router.patch(
   "/whatsapp-campaign/:id/status",
   authenticate,
@@ -106,11 +120,18 @@ router.patch(
   },
   updateCampaignStatusController,
 );
-
 router.post(
-  "/whatsapp-campaign/event",
-  campaignEventWebhookController,
+  "/whatsapp-campaign/:id/status",
+  authenticate,
+  authorize({ user_type: "tenant", roles: tenantRoles }),
+  (req, _res, next) => {
+    req.params.campaign_id = req.params.id;
+    next();
+  },
+  updateCampaignStatusController,
 );
+
+router.post("/whatsapp-campaign/event", campaignEventWebhookController);
 
 router.get(
   "/whatsapp-campaign/:campaign_id/stats",
@@ -153,6 +174,12 @@ router.get(
   getCampaignByIdController,
 );
 router.patch(
+  "/campaigns/:campaign_id/status",
+  authenticate,
+  authorize({ user_type: "tenant", roles: tenantRoles }),
+  updateCampaignStatusController,
+);
+router.post(
   "/campaigns/:campaign_id/status",
   authenticate,
   authorize({ user_type: "tenant", roles: tenantRoles }),

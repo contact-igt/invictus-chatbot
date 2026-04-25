@@ -15,6 +15,7 @@ export const tableNames = {
   KNOWLEDGESOURCE: "knowledge_sources",
   KNOWLEDGECHUNKS: "knowledge_chunks",
   AIPROMPT: "ai_prompts",
+  APPOINTMENTS: "appointments", // NEW
   CONTACTS: "contacts",
   CONTACT_GROUPS: "contact_groups",
   CONTACT_GROUP_MEMBERS: "contact_group_members",
@@ -29,6 +30,7 @@ export const tableNames = {
   DOCTOR_AVAILABILITY: "doctor_availability",
   SPECIALIZATIONS: "specializations",
   DOCTOR_SPECIALIZATIONS: "doctor_specializations",
+  APPOINTMENTS: "appointments",
   MESSAGE_USAGE: "message_usage",
   PRICING_TABLE: "pricing_table",
   BILLING_LEDGER: "billing_ledger",
@@ -50,4 +52,5 @@ export const tableNames = {
   FAQ_KNOWLEDGE_SOURCE: "faq_knowledge_source",
   SAVE_PAYMENT_METHOD: "saved_payment_methods",
   TAX_SETTINGS: "tax_settings",
+  TENANT_SECRETS: "tenant_secrets",
 };

@@ -2,6 +2,7 @@ import {
   createCampaignService,
   getCampaignListService,
   getCampaignByIdService,
+  exportCampaignRecipientsCsvService,
   executeCampaignBatchService,
   softDeleteCampaignService,
   permanentDeleteCampaignService,
@@ -10,6 +11,7 @@ import {
   updateCampaignStatusService,
   recordCampaignEventService,
   getCampaignStatsService,
+  resolveRecipientCount,
 } from "./whatsappcampaign.service.js";
 import { missingFieldsChecker } from "../../utils/helpers/missingFields.js";
 import { checkBillingAccess } from "../../middlewares/billing/billingAccessGuard.js";
@@ -45,8 +47,11 @@ export const estimateCampaignCostController = async (req, res) => {
     });
 
     // Auto-detect India based on timezone or country code
-    const isIndia = (tenant?.owner_country_code === "91" || tenant?.timezone === "Asia/Kolkata");
-    const country = req.body.country || tenant?.country || (isIndia ? "IN" : "Global");
+    const isIndia =
+      tenant?.owner_country_code === "91" ||
+      tenant?.timezone === "Asia/Kolkata";
+    const country =
+      req.body.country || tenant?.country || (isIndia ? "IN" : "Global");
 
     // Get cost per message
     const cost = await estimateMetaCost(category, country);
@@ -81,8 +86,6 @@ export const estimateCampaignCostController = async (req, res) => {
 };
 
 // ... existing code ...
-
-
 
 export const getDeletedCampaignListController = async (req, res) => {
   const tenant_id = req.user.tenant_id;
@@ -150,7 +153,9 @@ export const createCampaignController = async (req, res) => {
       const scheduledTime = new Date(req.body.scheduled_at);
       const now = new Date();
       if (isNaN(scheduledTime.getTime())) {
-        return res.status(400).send({ message: "Invalid scheduled_at date format" });
+        return res
+          .status(400)
+          .send({ message: "Invalid scheduled_at date format" });
       }
       if (scheduledTime.getTime() <= now.getTime() + 60_000) {
         return res.status(400).send({
@@ -164,9 +169,11 @@ export const createCampaignController = async (req, res) => {
     // including scheduled. If wallet is insufficient at creation time, block the campaign.
     // At scheduled execution time the wallet is checked again per-batch — if it has
     // dropped below cost by then, the campaign will be automatically paused.
-    const recipientCount = Array.isArray(audience_data)
-      ? audience_data.length
-      : 1;
+    const recipientCount = await resolveRecipientCount(
+      tenant_id,
+      audience_type,
+      audience_data,
+    );
     if (recipientCount > 0) {
       try {
         // Get template category for cost estimation
@@ -184,8 +191,11 @@ export const createCampaignController = async (req, res) => {
           attributes: ["country", "owner_country_code", "timezone"],
           raw: true,
         });
-        const isIndia = (tenant?.owner_country_code === "91" || tenant?.timezone === "Asia/Kolkata");
-        const country = req.body.country || tenant?.country || (isIndia ? "IN" : "Global");
+        const isIndia =
+          tenant?.owner_country_code === "91" ||
+          tenant?.timezone === "Asia/Kolkata";
+        const country =
+          req.body.country || tenant?.country || (isIndia ? "IN" : "Global");
 
         const cost = await estimateMetaCost(category, country);
         const estimated_cost = cost.totalCostInr * recipientCount;
@@ -215,25 +225,21 @@ export const createCampaignController = async (req, res) => {
       created_by,
     );
 
-    // For immediate send campaigns (not scheduled), trigger execution right away
+    // For immediate send campaigns (not scheduled), kick off the first batch only.
+    // The scheduler cron picks up remaining batches every minute — no tight loop here.
     if (campaign_type !== "scheduled") {
-      // Fire and forget - don't block the response
       setImmediate(async () => {
         try {
-          // Execute all batches until complete
-          let finished = false;
-          while (!finished) {
-            const result = await executeCampaignBatchService(
-              campaign.campaign_id,
-              tenant_id,
-              100,
-            );
-            finished = result.finished;
-          }
+          await executeCampaignBatchService(
+            campaign.campaign_id,
+            tenant_id,
+            15,
+          );
         } catch (err) {
           console.error(
             `[Campaign Immediate Exec] Error for campaign ${campaign.campaign_id}:`,
             err.message,
+            err.stack,
           );
         }
       });
@@ -252,6 +258,8 @@ export const updateCampaignStatusController = async (req, res) => {
   const { campaign_id } = req.params;
   const tenant_id = req.user.tenant_id;
   const { status } = req.body;
+  const acted_by =
+    req.user.unique_id || req.user.email || req.user.user_id || "unknown";
 
   if (!status) {
     return res.status(400).json({
@@ -262,7 +270,12 @@ export const updateCampaignStatusController = async (req, res) => {
   }
 
   try {
-    const result = await updateCampaignStatusService(campaign_id, tenant_id, status);
+    const result = await updateCampaignStatusService(
+      campaign_id,
+      tenant_id,
+      status,
+      acted_by,
+    );
     return res.status(200).json({
       success: true,
       message: "Campaign status updated",
@@ -368,20 +381,75 @@ export const getCampaignByIdController = async (req, res) => {
   }
 };
 
+export const exportCampaignRecipientsCsvController = async (req, res) => {
+  const { campaign_id } = req.params;
+  const tenant_id = req.user.tenant_id;
+  const { recipient_status } = req.query;
+
+  try {
+    const result = await exportCampaignRecipientsCsvService(
+      campaign_id,
+      tenant_id,
+      recipient_status,
+    );
+
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="${result.fileName}"`,
+    );
+
+    return res.status(200).send(result.csv);
+  } catch (err) {
+    if (err.message === "Campaign not found") {
+      return res.status(404).send({ message: err.message });
+    }
+    return res.status(500).send({ message: err.message });
+  }
+};
+
 export const triggerCampaignExecutionController = async (req, res) => {
   const { campaign_id } = req.params;
   const tenant_id = req.user.tenant_id;
-  try {
-    const result = await executeCampaignBatchService(campaign_id, tenant_id);
-    return res.status(200).send({
-      message: result.finished
-        ? "Campaign already completed"
-        : "Batch execution started",
-      result,
-    });
-  } catch (err) {
-    return res.status(500).send({ message: err.message });
+  const { default: db } = await import("../../database/index.js");
+
+  const campaign = await db.WhatsappCampaigns.findOne({
+    where: { campaign_id, tenant_id, is_deleted: false },
+    attributes: ["campaign_id", "status"],
+  });
+
+  if (!campaign) {
+    return res.status(404).send({ message: "Campaign not found" });
   }
+
+  if (["completed", "cancelled"].includes(campaign.status)) {
+    return res.status(422).send({
+      message: `Campaign cannot be executed from ${campaign.status} state`,
+    });
+  }
+
+  if (campaign.status === "paused") {
+    return res.status(422).send({
+      message: "Paused campaigns must be resumed before execution.",
+    });
+  }
+
+  if (campaign.status !== "active") {
+    await campaign.update({ status: "active" });
+  }
+
+  // Fire-and-forget: respond immediately, run batch in background
+  setImmediate(async () => {
+    try {
+      await executeCampaignBatchService(campaign_id, tenant_id, 15);
+    } catch (err) {
+      console.error(
+        `[Campaign Trigger] Error for campaign ${campaign_id}:`,
+        err.message,
+      );
+    }
+  });
+  return res.status(202).send({ message: "Batch execution triggered" });
 };
 
 export const softDeleteCampaignController = async (req, res) => {
@@ -414,7 +482,8 @@ export const permanentDeleteCampaignController = async (req, res) => {
 
 export const uploadCampaignMediaController = async (req, res) => {
   const tenant_id = req.user?.tenant_id;
-  const userId = req.user?.unique_id || req.user?.tenant_user_id || req.user?.id;
+  const userId =
+    req.user?.unique_id || req.user?.tenant_user_id || req.user?.id;
   try {
     if (!tenant_id) {
       return res.status(400).json({ message: "Invalid tenant context" });

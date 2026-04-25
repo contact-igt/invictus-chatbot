@@ -42,11 +42,22 @@ export const classifyIntent = async (
 
     const parsed = JSON.parse(result.content);
 
-    // Validate intent
-    const validIntents = ["APPOINTMENT_ACTION", "GENERAL_QUESTION"];
-    const intent = validIntents.includes(parsed.intent)
-      ? parsed.intent
-      : "GENERAL_QUESTION";
+    // NEW: Expanded valid intents — granular appointment intents + greeting
+    const validIntents = [ // NEW
+      "APPOINTMENT_ACTION", // NEW — kept for backward compat
+      "GENERAL_QUESTION", // NEW
+      "greeting", // NEW
+      "create_appointment", // NEW
+      "view_my_appointments", // NEW
+      "reschedule_appointment", // NEW
+      "cancel_appointment", // NEW
+      "check_doctor_availability", // NEW
+      "list_available_doctors", // NEW
+      "get_doctor_info", // NEW
+    ]; // NEW
+    const intent = validIntents.includes(parsed.intent) // NEW
+      ? parsed.intent // NEW
+      : "GENERAL_QUESTION"; // NEW
 
     // Validate requires flags (default all false for safety — minimal tokens)
     const requires = {
@@ -55,12 +66,12 @@ export const classifyIntent = async (
       appointments: parsed.requires?.appointments === true,
     };
 
-    // APPOINTMENT_ACTION always needs all context
-    if (intent === "APPOINTMENT_ACTION") {
-      requires.knowledge = true;
-      requires.doctors = true;
-      requires.appointments = true;
-    }
+    // NEW: Any appointment-family intent gets full context
+    if (APPOINTMENT_INTENTS.includes(intent) || intent === "APPOINTMENT_ACTION") { // NEW
+      requires.knowledge = true; // NEW
+      requires.doctors = true; // NEW
+      requires.appointments = true; // NEW
+    } // NEW
 
     console.log(
       `[INTENT-CLASSIFIER] "${userMessage.substring(0, 60)}" → ${intent} | knowledge:${requires.knowledge} doctors:${requires.doctors} appointments:${requires.appointments}`,
@@ -78,53 +89,86 @@ export const classifyIntent = async (
 };
 
 /**
- * Intent Classifier Prompt
- *
- * Classifies user messages and determines which data sources are needed.
- * This controls token usage — only load what's necessary.
+ * Intent Classifier Prompt — expanded with granular appointment intents.
+ * Controls token usage: only load data sources that are truly needed.
  */
+// NEW: Expanded prompt with 9 intent values
 const INTENT_CLASSIFIER_PROMPT = `You are an Intent Classifier for a business WhatsApp chatbot.
 
-TASK: Classify the customer's message AND determine which data sources the AI needs to answer it.
+TASK: Classify the customer's message into EXACTLY ONE intent from the list below,
+AND determine which data sources the AI needs.
 
-STEP 1 — Classify intent into ONE category:
+═══════════════════════════════════════════════════
+INTENT VALUES (pick exactly one):
+═══════════════════════════════════════════════════
 
-APPOINTMENT_ACTION — The customer wants to:
-- Book / schedule a new appointment
-- Reschedule / update an existing appointment
-- Cancel an existing appointment
-- Check doctor availability or time slots for booking
-- Provide information DURING an active appointment flow (name, age, date, time, slot number, confirmation)
+greeting
+  Customer is greeting or wants the main menu.
+  Examples: "hi", "hello", "hey", "start", "menu", "help", "good morning"
 
-GENERAL_QUESTION — Everything else:
-- Greetings, small talk ("hi", "hello", "thanks", "ok")
-- Asking about services, prices, timings, policies, location
-- Asking about doctors (info only, not booking)
-- Asking about their appointment history (info only, not modifying)
-- Any factual question about the business
+create_appointment
+  Customer wants to BOOK a new appointment.
+  Examples: "book appointment", "I need to see a doctor", "schedule with Dr. Smith",
+  "appointment for tomorrow 3pm", "can I get an appointment?", "I want to visit the doctor"
 
-STEP 2 — Determine which data sources are needed (ONLY for GENERAL_QUESTION):
+view_my_appointments
+  Customer wants to SEE their existing appointments.
+  Examples: "show my appointments", "my bookings", "do I have any appointments?",
+  "when is my next appointment?", "my appointment details"
 
-"knowledge": true/false — Does the AI need uploaded business documents?
-  true → questions about services, prices, timings, policies, location, contact info, treatments, procedures
-  false → greetings, small talk, "ok", "thanks", "bye", simple acknowledgments
+reschedule_appointment
+  Customer wants to CHANGE the date or time of an existing appointment.
+  Examples: "reschedule my appointment", "change my appointment to Friday",
+  "move my booking to 4pm", "I need to change my appointment time"
 
-"doctors": true/false — Does the AI need doctor information?
-  true → questions about doctors, their names, specializations, qualifications, experience, working hours, availability days
-  false → anything not about doctors
+cancel_appointment
+  Customer wants to CANCEL an existing appointment.
+  Examples: "cancel my appointment", "I want to cancel", "cancel my booking",
+  "cancel the Monday appointment", "don't want the appointment anymore"
 
-"appointments": true/false — Does the AI need this customer's appointment data?
-  true → questions about their own appointments ("when is my appointment?", "do I have any bookings?", "my appointment details")
-  false → anything not about their personal appointment status
+check_doctor_availability
+  Customer wants to know if a specific doctor or time slot is available.
+  Examples: "is Dr. Smith available on Friday?", "any slots for Tuesday?",
+  "when is Dr. Priya free?", "check availability for tomorrow"
 
-CONTEXT RULES:
-- Look at RECENT CONTEXT to detect if customer is mid-flow.
-- If assistant just asked for appointment details and customer replies with info → APPOINTMENT_ACTION.
-- "yes", "confirm", "book it", "cancel it" during active appointment flow → APPOINTMENT_ACTION.
-- Number reply ("1", "2", "3") during slot selection → APPOINTMENT_ACTION.
-- Greetings are always GENERAL_QUESTION with all requires = false.
-- If ambiguous → GENERAL_QUESTION.
-- For APPOINTMENT_ACTION, ignore the requires flags (system will load everything).
+list_available_doctors
+  Customer wants a list of all doctors or doctors by specialty.
+  Examples: "show me all doctors", "which doctors are available?",
+  "list of doctors", "what doctors do you have?", "show cardiologists"
+
+get_doctor_info
+  Customer wants details about a specific doctor.
+  Examples: "tell me about Dr. Smith", "Dr. Priya's specialization",
+  "what is Dr. Ahmed's experience?", "info about the neurologist"
+
+APPOINTMENT_ACTION
+  Use ONLY when the customer is mid-booking-flow and providing information
+  (name, age, date, time, slot number, "yes"/"no" confirmation).
+  Examples: "my name is John", "age 35", "tomorrow", "3pm", "yes confirm it",
+  "no cancel it", "slot 2"
+
+GENERAL_QUESTION
+  Everything else: questions about services, prices, timings, policies, location,
+  business info, and anything not appointment-related.
+  Examples: "what are your charges?", "where are you located?", "thanks", "ok"
+
+═══════════════════════════════════════════════════
+REQUIRES FLAGS (for GENERAL_QUESTION only — ignored for all others):
+═══════════════════════════════════════════════════
+
+"knowledge": true/false — needs uploaded business documents?
+"doctors": true/false — needs doctor information?
+"appointments": true/false — needs this customer's appointment history?
+
+═══════════════════════════════════════════════════
+CLASSIFICATION RULES:
+═══════════════════════════════════════════════════
+- Check RECENT CONTEXT first — if assistant just asked for booking info,
+  a plain reply ("tomorrow", "age 30", "yes") → APPOINTMENT_ACTION
+- "yes"/"confirm"/"ok" with no prior context → greeting
+- Greeting is ALWAYS greeting, never APPOINTMENT_ACTION
+- When ambiguous between appointment intents → create_appointment
+- When ambiguous overall → GENERAL_QUESTION
 
 RECENT CONTEXT:
 {RECENT_CONTEXT}
@@ -132,5 +176,22 @@ RECENT CONTEXT:
 CUSTOMER'S MESSAGE:
 "{USER_MESSAGE}"
 
-Return ONLY valid JSON:
-{"intent": "APPOINTMENT_ACTION" or "GENERAL_QUESTION", "requires": {"knowledge": true/false, "doctors": true/false, "appointments": true/false}}`;
+Return ONLY valid JSON (no markdown, no explanation):
+{"intent": "<one of the 10 values above>", "requires": {"knowledge": true/false, "doctors": true/false, "appointments": true/false}}`; // NEW
+
+// NEW: Granular appointment intents — checked in the message pipeline to route to orchestrator
+export const APPOINTMENT_INTENTS = [ // NEW
+  "create_appointment", // NEW
+  "view_my_appointments", // NEW
+  "reschedule_appointment", // NEW
+  "cancel_appointment", // NEW
+  "check_doctor_availability", // NEW
+  "list_available_doctors", // NEW
+  "get_doctor_info", // NEW
+  "APPOINTMENT_ACTION", // NEW — kept so legacy callers still get routed
+]; // NEW
+
+// NEW: Greeting keywords for fast keyword check (avoids AI call for simple greetings)
+export const GREETING_KEYWORDS = [ // NEW
+  "hi", "hello", "hey", "start", "menu", "help", "helo", "hii", // NEW
+]; // NEW

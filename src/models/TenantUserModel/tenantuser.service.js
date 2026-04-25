@@ -1,6 +1,14 @@
 import db from "../../database/index.js";
 import { tableNames } from "../../database/tableName.js";
 
+export const countActiveTenantUsersService = async (tenant_id) => {
+  const [[{ count }]] = await db.sequelize.query(
+    `SELECT COUNT(*) AS count FROM ${tableNames.TENANT_USERS} WHERE tenant_id = ? AND is_deleted = 0`,
+    { replacements: [tenant_id] },
+  );
+  return Number(count);
+};
+
 export const createTenantUserService = async (
   tenant_user_id,
   tenant_id,

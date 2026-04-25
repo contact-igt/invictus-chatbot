@@ -27,10 +27,26 @@ const normalizeTimeFormat = (time) => {
     const [h, m] = timePart.split(":");
     const hour = parseInt(h, 10);
     const displayHour = hour < 10 ? `0${hour}` : `${hour}`;
-    return `${displayHour}:${m} ${period.toUpperCase()}`;
+    const displayMinutes = String(m || "00").padStart(2, "0");
+    return `${displayHour}:${displayMinutes} ${period.toUpperCase()}`;
   }
   // Otherwise convert from 24h format
   return formatTimeToAMPM(time);
+};
+
+const getDayOfWeekFromDate = (date) => {
+  const dateObj = new Date(`${date}T12:00:00`);
+  const days = [
+    "sunday",
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+  ];
+
+  return days[dateObj.getDay()];
 };
 
 export const createAppointmentService = async (data) => {
@@ -51,28 +67,39 @@ export const createAppointmentService = async (data) => {
   let { appointment_time } = data;
 
   // Auto-split phone
-  let phone = contact_number
-    ? contact_number.toString().replace(/\D/g, "")
-    : "";
-  let cc = country_code || "+91";
+  const rawDigits = contact_number // NEW
+    ? contact_number.toString().replace(/\D/g, "") // NEW
+    : ""; // NEW
+  let phone = rawDigits; // NEW
+  let cc = country_code || "+91"; // NEW
 
-  if (!country_code && phone.length > 10) {
-    cc = `+${phone.slice(0, -10)}`;
-    phone = phone.slice(-10);
-  } else if (country_code && !cc.startsWith("+")) {
-    cc = `+${country_code.replace(/\D/g, "")}`;
-  }
+  // WhatsApp numbers can include country code (e.g., 919876543210) — strip prefix first // NEW
+  if (rawDigits.length > 10) {
+    // NEW
+    const inferredCcDigits = rawDigits.slice(0, -10); // NEW
+    phone = rawDigits.slice(-10); // NEW
+    if (!country_code && inferredCcDigits) cc = `+${inferredCcDigits}`; // NEW
+  } // NEW
 
-  contact_number = phone;
-  country_code = cc;
+  if (cc && !cc.startsWith("+")) {
+    // NEW
+    cc = `+${cc.toString().replace(/\D/g, "")}`; // NEW
+  } // NEW
 
-  // Validate mobile is exactly 10 digits
+  contact_number = phone; // NEW
+  country_code = cc; // NEW
+
+  // Validate mobile is exactly 10 digits (after stripping any country code) // NEW
   if (contact_number && contact_number.length !== 10) {
-    throw new Error("Mobile number must be exactly 10 digits.");
-  }
+    // NEW
+    throw new Error("Mobile number must be exactly 10 digits."); // NEW
+  } // NEW
 
   // Normalize time to consistent format (e.g. "09:00 AM" not "9:00 AM")
   appointment_time = normalizeTimeFormat(appointment_time);
+
+  let doctor = null;
+  let doctorDuration = 30;
 
   if (!appointment_time) {
     throw new Error("Appointment time is required.");
@@ -84,6 +111,36 @@ export const createAppointmentService = async (data) => {
 
   if (!patient_name) {
     throw new Error("Patient name is required.");
+  }
+
+  if (doctor_id) {
+    doctor = await db.Doctors.findOne({
+      where: { doctor_id, tenant_id, is_deleted: false },
+      attributes: ["doctor_id", "status", "consultation_duration"],
+    });
+
+    if (!doctor) {
+      throw new Error("Selected doctor was not found.");
+    }
+
+    if (doctor.status !== "available") {
+      throw new Error("Selected doctor is currently unavailable.");
+    }
+
+    const doctorAvailability = await db.DoctorAvailability.findOne({
+      where: {
+        doctor_id,
+        tenant_id,
+        day_of_week: getDayOfWeekFromDate(appointment_date),
+      },
+      attributes: ["doctor_id"],
+    });
+
+    if (!doctorAvailability) {
+      throw new Error("Selected doctor does not work on the chosen date.");
+    }
+
+    doctorDuration = doctor.consultation_duration || 30;
   }
 
   // Resolve contact_id from contact_number if not provided
@@ -140,9 +197,12 @@ export const createAppointmentService = async (data) => {
       throw new Error("You already have an appointment booked for this time.");
     }
 
-    // 2. Check for doctor slot conflict (prevent two patients booking the same doctor at same time)
+    // 2. Check for doctor slot conflict using overlap logic, not exact time equality.
     if (doctor_id) {
-      const doctorSlotConflict = await db.Appointments.findOne({
+      const requestedStart = timeToMinutes(appointment_time);
+      const requestedEnd = requestedStart + doctorDuration;
+
+      const doctorAppointments = await db.Appointments.findAll({
         where: {
           tenant_id,
           doctor_id,
@@ -150,11 +210,17 @@ export const createAppointmentService = async (data) => {
           [Op.and]: [
             seqWhere(fn("DATE", col("appointment_date")), appointment_date),
           ],
-          appointment_time,
           status: { [Op.in]: ["Pending", "Confirmed"] },
         },
+        attributes: ["appointment_time"],
         transaction,
         lock: transaction.LOCK.UPDATE,
+      });
+
+      const doctorSlotConflict = doctorAppointments.some((appt) => {
+        const apptStart = timeToMinutes(appt.appointment_time);
+        const apptEnd = apptStart + doctorDuration;
+        return requestedStart < apptEnd && requestedEnd > apptStart;
       });
 
       if (doctorSlotConflict) {
@@ -419,18 +485,15 @@ export const checkAvailabilityService = async (
       return false; // Doctor doesn't exist
     }
 
+    if (doctor.status !== "available") {
+      console.log(
+        `[CHECK-AVAILABILITY] Doctor ${doctor_id} is ${doctor.status}`,
+      );
+      return false;
+    }
+
     // 2. Verify doctor works on this day
-    const dateObj = new Date(date + "T00:00:00");
-    const days = [
-      "sunday",
-      "monday",
-      "tuesday",
-      "wednesday",
-      "thursday",
-      "friday",
-      "saturday",
-    ];
-    const dayOfWeek = days[dateObj.getDay()];
+    const dayOfWeek = getDayOfWeekFromDate(date);
 
     const doctorAvailability = await db.DoctorAvailability.findOne({
       where: { doctor_id, tenant_id, day_of_week: dayOfWeek },
@@ -705,9 +768,32 @@ export const updateAppointmentService = async (
 
       const doctor = await db.Doctors.findOne({
         where: { doctor_id: newDoctorId, tenant_id, is_deleted: false },
-        attributes: ["consultation_duration"],
+        attributes: ["consultation_duration", "status"],
         transaction,
       });
+
+      if (!doctor) {
+        throw new Error("Selected doctor was not found.");
+      }
+
+      if (doctor.status !== "available") {
+        throw new Error("Selected doctor is currently unavailable.");
+      }
+
+      const doctorAvailability = await db.DoctorAvailability.findOne({
+        where: {
+          doctor_id: newDoctorId,
+          tenant_id,
+          day_of_week: getDayOfWeekFromDate(checkDate),
+        },
+        attributes: ["doctor_id"],
+        transaction,
+      });
+
+      if (!doctorAvailability) {
+        throw new Error("Selected doctor does not work on the chosen date.");
+      }
+
       const duration = doctor?.consultation_duration || 30;
       const requestedStart = timeToMinutes(newTime);
       const requestedEnd = requestedStart + duration;
@@ -883,18 +969,16 @@ export const getAvailableSlotsService = async (tenant_id, doctor_id, date) => {
       };
     }
 
-    // 2. Determine day_of_week from the date (use noon UTC to avoid timezone day-shift)
-    const dateObj = new Date(date + "T12:00:00Z");
-    const days = [
-      "sunday",
-      "monday",
-      "tuesday",
-      "wednesday",
-      "thursday",
-      "friday",
-      "saturday",
-    ];
-    const dayOfWeek = days[dateObj.getDay()];
+    if (doctor.status !== "available") {
+      return {
+        available: false,
+        reason: "Doctor is currently unavailable",
+        slots: [],
+      };
+    }
+
+    // 2. Determine day_of_week from the date consistently with availability checks.
+    const dayOfWeek = getDayOfWeekFromDate(date);
 
     // 3. Get doctor's availability for that day
     const availabilitySlots = await db.DoctorAvailability.findAll({

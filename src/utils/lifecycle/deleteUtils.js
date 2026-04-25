@@ -60,6 +60,21 @@ export class NotFoundError extends Error {
     super(message);
     this.name = "NotFoundError";
     this.statusCode = 404;
+    this.errorCode = "NOT_FOUND";
+  }
+}
+
+/**
+ * Thrown when the resource exists but the requested lifecycle operation is invalid.
+ * Example: restoring a record that is not currently soft-deleted.
+ * Maps to HTTP 400.
+ */
+export class InvalidLifecycleStateError extends Error {
+  constructor(message = "Invalid lifecycle state for this operation") {
+    super(message);
+    this.name = "InvalidLifecycleStateError";
+    this.statusCode = 400;
+    this.errorCode = "INVALID_STATE";
   }
 }
 
@@ -95,12 +110,31 @@ export const lifecycleHandler = (fn) => async (req, res) => {
     await fn(req, res);
   } catch (err) {
     if (err instanceof RestoreExpiredError) {
-      return res.status(410).json({ message: err.message });
+      return res.status(410).json({
+        success: false,
+        error_code: "RESTORE_EXPIRED",
+        message: err.message,
+      });
     }
     if (err instanceof NotFoundError) {
-      return res.status(404).json({ message: err.message });
+      return res.status(404).json({
+        success: false,
+        error_code: err.errorCode || "NOT_FOUND",
+        message: err.message,
+      });
+    }
+    if (err instanceof InvalidLifecycleStateError) {
+      return res.status(400).json({
+        success: false,
+        error_code: err.errorCode || "INVALID_STATE",
+        message: err.message,
+      });
     }
     console.error("[Lifecycle]", err.message, err.stack);
-    return res.status(500).json({ message: err.message || "Internal server error" });
+    return res.status(500).json({
+      success: false,
+      error_code: err?.errorCode || "INTERNAL_ERROR",
+      message: err.message || "Internal server error",
+    });
   }
 };

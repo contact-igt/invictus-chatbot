@@ -40,6 +40,14 @@ export const softDeleteCampaign = async (campaignId, tenant_id) => {
        WHERE campaign_id = ? AND tenant_id = ?`,
       { replacements: [campaignId, tenant_id], transaction: t },
     );
+
+    // Soft-delete recipients so they are hidden while the campaign is in trash
+    await db.sequelize.query(
+      `UPDATE ${tableNames.WHATSAPP_CAMPAIGN_RECIPIENT}
+       SET is_deleted = true, deleted_at = NOW(), updated_at = NOW()
+       WHERE campaign_id = ?`,
+      { replacements: [campaignId], transaction: t },
+    );
   });
 };
 
@@ -50,11 +58,21 @@ export const restoreCampaign = async (campaignId, tenant_id) => {
     if (!row.is_deleted) throw new Error("Campaign is not deleted");
     if (!isRestoreEligible(row.deleted_at)) throw new RestoreExpiredError();
 
+    // Restore to 'draft' so the campaign can be reviewed and re-launched.
+    // Restoring directly to 'active' would auto-execute which may be unintended.
     await db.sequelize.query(
       `UPDATE ${tableNames.WHATSAPP_CAMPAIGN}
-       SET is_deleted = false, deleted_at = NULL, status = 'completed', updated_at = NOW()
+       SET is_deleted = false, deleted_at = NULL, status = 'draft', updated_at = NOW()
        WHERE campaign_id = ? AND tenant_id = ?`,
       { replacements: [campaignId, tenant_id], transaction: t },
+    );
+
+    // Restore recipients that were soft-deleted together with the campaign
+    await db.sequelize.query(
+      `UPDATE ${tableNames.WHATSAPP_CAMPAIGN_RECIPIENT}
+       SET is_deleted = false, deleted_at = NULL, updated_at = NOW()
+       WHERE campaign_id = ?`,
+      { replacements: [campaignId], transaction: t },
     );
 
     return row;

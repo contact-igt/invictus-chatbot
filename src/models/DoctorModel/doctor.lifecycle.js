@@ -10,7 +10,7 @@ import db from "../../database/index.js";
 import { tableNames } from "../../database/tableName.js";
 import {
   annotateDeletedRows, isRestoreEligible,
-  RestoreExpiredError, NotFoundError, lifecycleHandler,
+  RestoreExpiredError, NotFoundError, InvalidLifecycleStateError, lifecycleHandler,
 } from "../../utils/lifecycle/deleteUtils.js";
 
 const fetchDoctor = async (doctorId, tenant_id, t = null) => {
@@ -27,10 +27,10 @@ export const softDeleteDoctor = async (doctorId, tenant_id) => {
   return db.sequelize.transaction(async (t) => {
     const row = await fetchDoctor(doctorId, tenant_id, t);
     if (!row) throw new NotFoundError("Doctor not found");
-    if (row.is_deleted) throw new Error("Doctor is already deleted");
+    if (row.is_deleted) throw new InvalidLifecycleStateError("Doctor is already deleted");
     await db.sequelize.query(
       `UPDATE ${tableNames.DOCTORS}
-       SET is_deleted = true, deleted_at = NOW(), status = 'inactive', updated_at = NOW()
+       SET is_deleted = true, deleted_at = NOW(), status = 'off_duty', updated_at = NOW()
        WHERE doctor_id = ? AND tenant_id = ?`,
       { replacements: [doctorId, tenant_id], transaction: t },
     );
@@ -49,11 +49,11 @@ export const restoreDoctor = async (doctorId, tenant_id) => {
   return db.sequelize.transaction(async (t) => {
     const row = await fetchDoctor(doctorId, tenant_id, t);
     if (!row) throw new NotFoundError("Doctor not found");
-    if (!row.is_deleted) throw new Error("Doctor is not deleted");
+    if (!row.is_deleted) throw new InvalidLifecycleStateError("Doctor is not deleted");
     if (!isRestoreEligible(row.deleted_at)) throw new RestoreExpiredError();
     await db.sequelize.query(
       `UPDATE ${tableNames.DOCTORS}
-       SET is_deleted = false, deleted_at = NULL, status = 'active', updated_at = NOW()
+       SET is_deleted = false, deleted_at = NULL, status = 'available', updated_at = NOW()
        WHERE doctor_id = ? AND tenant_id = ?`,
       { replacements: [doctorId, tenant_id], transaction: t },
     );

@@ -21,6 +21,7 @@ import WhatsappTemplateRouter from "./models/WhatsappTemplateModel/whatsapptempl
 import WhatsappCampaignRouter from "./models/WhatsappCampaignModel/whatsappcampaign.routes.js";
 import GalleryRouter from "./models/GalleryModel/gallery.routes.js";
 import ContactGroupRouter from "./models/ContactGroupModel/contactGroup.routes.js";
+import AppointmentRouter from "./models/AppointmentModel/appointment.routes.js";
 import { startCampaignSchedulerService } from "./models/WhatsappCampaignModel/whatsappcampaign.service.js";
 import { startLeadHeatDecayCronService } from "./models/LeadsModel/leads.service.js";
 import { startLiveChatCleanupService } from "./models/LiveChatModel/livechat.service.js";
@@ -47,6 +48,7 @@ import cron from "node-cron";
 import { tableNames } from "./database/tableName.js";
 import { runHardDeleteCron } from "./utils/lifecycle/hardDeleteCron.js";
 import { runMissingMessageBillingReconciliationCron } from "./cron/reconciliationCron.js";
+import { cleanupExpiredSessions } from "./models/AppointmentModel/appointmentConversation.service.js"; // NEW
 
 dns.setDefaultResultOrder("ipv4first");
 
@@ -102,6 +104,7 @@ app.use(
   ContactRouter,
   LeadRouter,
   LiveChatRouter,
+  AppointmentRouter,
   WhatsappTemplateRouter,
   WhatsappCampaignRouter,
   GalleryRouter,
@@ -157,6 +160,10 @@ cron.schedule("*/5 * * * *", () => {
 cron.schedule("0 * * * *", () => {
   runInvoiceRetryCron();
 }); // Every hour — retry overdue invoice payment reminders
+
+cron.schedule("*/15 * * * *", () => { // NEW
+  cleanupExpiredSessions(); // NEW
+}); // NEW — every 15 min: mark booking_sessions where expires_at < NOW() as 'expired'
 
 cron.schedule("*/15 * * * *", () => {
   checkHealthAlerts();

@@ -67,6 +67,7 @@ export const MessagesTable = (sequelize, Sequelize) => {
           "location",
           "contact",
           "template",
+          "interactive",
         ),
         allowNull: false,
         defaultValue: "text",
@@ -100,6 +101,13 @@ export const MessagesTable = (sequelize, Sequelize) => {
         comment: "Stores the name of the template if message_type is template",
       },
 
+      interactive_payload: {
+        type: Sequelize.TEXT,
+        allowNull: true,
+        comment:
+          "JSON string of interactive button/list payload for dashboard rendering",
+      },
+
       status: {
         type: Sequelize.ENUM("sent", "delivered", "read", "failed"),
         allowNull: true,
@@ -126,7 +134,6 @@ export const MessagesTable = (sequelize, Sequelize) => {
         type: Sequelize.BOOLEAN,
         defaultValue: false,
       },
-
 
       is_deleted: {
         type: Sequelize.BOOLEAN,

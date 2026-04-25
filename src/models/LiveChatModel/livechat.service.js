@@ -91,6 +91,7 @@ export const getLiveChatListService = async (tenant_id, limit = 200) => {
      AND m.created_at = lm.last_message_time
     JOIN contacts c
       ON c.contact_id = m.contact_id
+     AND c.tenant_id = m.tenant_id
     INNER JOIN ${tableNames.LIVECHAT} lc
       ON lc.contact_id = m.contact_id
      AND lc.tenant_id = ?
@@ -143,6 +144,7 @@ export const getHistoryChatListService = async (tenant_id, limit = 200) => {
      AND m.created_at = lm.last_message_time
     JOIN contacts c
       ON c.contact_id = m.contact_id
+     AND c.tenant_id = m.tenant_id
     LEFT JOIN ${tableNames.LIVECHAT} lc
       ON lc.contact_id = c.contact_id
      AND lc.tenant_id = ?

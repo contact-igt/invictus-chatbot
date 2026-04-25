@@ -189,7 +189,7 @@ export const findDoctorByNameService = async (tenant_id, name) => {
   try {
     const [[doctor]] = await db.sequelize.query(
       `SELECT doctor_id, name, title FROM ${tableNames.DOCTORS}
-       WHERE tenant_id = ? AND name LIKE ? AND is_deleted = false
+       WHERE tenant_id = ? AND LOWER(name) LIKE LOWER(?) AND is_deleted = false
        LIMIT 1`,
       { replacements: [tenant_id, `%${name.trim()}%`] },
     );
