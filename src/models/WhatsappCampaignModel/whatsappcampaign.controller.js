@@ -225,15 +225,29 @@ export const createCampaignController = async (req, res) => {
       created_by,
     );
 
+    console.log(
+      `[CAMPAIGN-CREATE] Campaign ${campaign.campaign_id} created with status=${campaign.status}, type=${campaign_type}, template_id=${template_id}`,
+    );
+
     // For immediate send campaigns (not scheduled), kick off the first batch only.
     // The scheduler cron picks up remaining batches every minute — no tight loop here.
     if (campaign_type !== "scheduled") {
+      console.log(
+        `[CAMPAIGN-CREATE] Triggering immediate execution for campaign ${campaign.campaign_id}`,
+      );
       setImmediate(async () => {
+        console.log(
+          `[CAMPAIGN-IMMEDIATE] setImmediate fired for campaign ${campaign.campaign_id}`,
+        );
         try {
-          await executeCampaignBatchService(
+          const result = await executeCampaignBatchService(
             campaign.campaign_id,
             tenant_id,
             15,
+          );
+          console.log(
+            `[CAMPAIGN-IMMEDIATE] Batch result for ${campaign.campaign_id}:`,
+            JSON.stringify(result),
           );
         } catch (err) {
           console.error(
@@ -243,6 +257,10 @@ export const createCampaignController = async (req, res) => {
           );
         }
       });
+    } else {
+      console.log(
+        `[CAMPAIGN-CREATE] Scheduled campaign ${campaign.campaign_id} — will execute at ${req.body.scheduled_at}`,
+      );
     }
 
     return res.status(200).send({
