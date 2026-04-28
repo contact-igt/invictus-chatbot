@@ -90,6 +90,24 @@ export const createWhatsappTemplateController = async (req, res) => {
       });
     }
 
+    // ✅ Validate template name length (max 60 characters)
+    if (template_name.length > 60) {
+      return res.status(400).json({
+        success: false,
+        error_code: "INVALID_FIELD",
+        message: "Template name must be 60 characters or less",
+      });
+    }
+
+    // ✅ Validate header text length (max 60 characters) if present
+    if (components?.header?.text_content && components.header.text_content.length > 60) {
+      return res.status(400).json({
+        success: false,
+        error_code: "INVALID_FIELD",
+        message: "Header text must be 60 characters or less",
+      });
+    }
+
     if (!components?.body?.text) {
       return res.status(400).json({
         success: false,
@@ -475,6 +493,24 @@ export const updateWhatsappTemplateController = async (req, res) => {
 
     if (!tenant_id) {
       return res.status(400).json({ message: "Invalid tenant context" });
+    }
+
+    // ✅ Validate template name length (max 60 characters)
+    if (template_name && template_name.length > 60) {
+      return res.status(400).json({
+        success: false,
+        error_code: "INVALID_FIELD",
+        message: "Template name must be 60 characters or less",
+      });
+    }
+
+    // ✅ Validate header text length (max 60 characters) if present
+    if (components?.header?.text_content && components.header.text_content.length > 60) {
+      return res.status(400).json({
+        success: false,
+        error_code: "INVALID_FIELD",
+        message: "Header text must be 60 characters or less",
+      });
     }
 
     const result = await updateWhatsappTemplateService(
