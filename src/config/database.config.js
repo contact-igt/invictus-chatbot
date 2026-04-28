@@ -5,30 +5,34 @@ dotenv.config();
 const DatabaseEnvironmentConfig = {
   live: {
     host: process.env.DATABASE_PRO_HOST,
+    port: parseInt(process.env.DATABASE_PRO_PORT) || 3306,
     user: process.env.DATABASE_PRO_USER,
     password: process.env.DATABASE_PRO_PASSWORD,
-    databse: process.env.DATABASE_PRO_DB,
+    database: process.env.DATABASE_PRO_DB,
   },
 
   development: {
-    host: process.env.DATABASE_DEV_HOST,
-    user: process.env.DATABASE_DEV_USER,
-    password: process.env.DATABASE_DEV_PASSWORD,
-    databse: process.env.DATABASE_DEV_DB,
+    host: process.env.DATABASE_HOST,
+    port: parseInt(process.env.DATABASE_PORT) || 3306,
+    user: process.env.DATABASE_USER,
+    password: process.env.DATABASE_PASSWORD,
+    database: process.env.DATABASE_DB,
   },
 
   local: {
     host: process.env.DATABASE_HOST,
+    port: parseInt(process.env.DATABASE_PORT) || 3306,
     user: process.env.DATABASE_USER,
     password: process.env.DATABASE_PASSWORD,
-    databse: process.env.DATABASE_DB,
+    database: process.env.DATABASE_DB,
   },
 
   stage: {
     host: process.env.DATABASE_STAGE_HOST,
+    port: parseInt(process.env.DATABASE_STAGE_PORT) || 3306,
     user: process.env.DATABASE_STAGE_USER,
     password: process.env.DATABASE_STAGE_PASSWORD,
-    databse: process.env.DATABASE_STAGE_DB,
+    database: process.env.DATABASE_STAGE_DB,
   },
 };
 

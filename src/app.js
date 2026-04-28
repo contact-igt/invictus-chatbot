@@ -42,6 +42,9 @@ import FaqRouter from "./models/Faq/faq.routes.js";
 import { checkHealthAlerts } from "./utils/billing/billingHealthMonitor.js";
 import { runDailyReconciliation } from "./utils/billing/paymentReconciler.js";
 import { initBillingQueue } from "./utils/billing/billingQueue.js";
+import { initCampaignQueues } from "./queues/campaignQueue.js";
+import { startCampaignDispatchWorker } from "./workers/campaignDispatchWorker.js";
+import { startCampaignSendWorker } from "./workers/campaignSendWorker.js";
 import { validateRazorpayConfig } from "./models/PaymentModel/payment.service.js";
 import { logger } from "./utils/logger.js";
 import cron from "node-cron";
@@ -130,7 +133,25 @@ app.get("/", (req, res) => {
   res.json({ status: "OK" });
 });
 
-await db.sequelize.sync({ alter: true });
+{
+  const MAX_RETRIES = 5;
+  const RETRY_DELAY_MS = 3000;
+  let lastErr;
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      await db.sequelize.sync({ alter: true });
+      lastErr = null;
+      break;
+    } catch (err) {
+      lastErr = err;
+      logger.warn(`[DB] Connection attempt ${attempt}/${MAX_RETRIES} failed: ${err.message}`);
+      if (attempt < MAX_RETRIES) {
+        await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
+      }
+    }
+  }
+  if (lastErr) throw lastErr;
+}
 logger.info("DB connected");
 
 // Validate Razorpay configuration at startup (fail-fast if misconfigured)
@@ -145,7 +166,56 @@ try {
 
 startLeadHeatDecayCronService();
 startLiveChatCleanupService();
-startCampaignSchedulerService();
+
+// Initialize campaign queues before starting the scheduler so the cron can
+// enqueue BullMQ jobs on its very first tick.
+initCampaignQueues()
+  .then(async () => {
+    // Sync wallet balances to Redis cache for atomic billing
+    try {
+      const { getCampaignBillingService } =
+        await import("./services/campaignBillingService.js");
+      const { getRedisConnection } = await import("./queues/campaignQueue.js");
+
+      const redis = getRedisConnection();
+      if (redis) {
+        const billingService = getCampaignBillingService(redis);
+
+        // Sync all active tenant wallets to Redis (fire and forget)
+        const tenants = await db.Tenants.findAll({
+          where: { is_deleted: false },
+          attributes: ["tenant_id"],
+          raw: true,
+        });
+
+        for (const tenant of tenants) {
+          billingService
+            .syncWalletBalance(tenant.tenant_id)
+            .catch((err) =>
+              logger.debug(
+                `[STARTUP] Failed to sync wallet for ${tenant.tenant_id}: ${err.message}`,
+              ),
+            );
+        }
+
+        logger.info(
+          `[STARTUP] Wallet balance sync initiated for ${tenants.length} tenants`,
+        );
+      }
+    } catch (syncErr) {
+      logger.warn(`[STARTUP] Wallet sync failed: ${syncErr.message}`);
+    }
+
+    startCampaignDispatchWorker();
+    startCampaignSendWorker();
+    startCampaignSchedulerService();
+  })
+  .catch((err) => {
+    logger.error(
+      `[STARTUP] Campaign queue init failed: ${err.message} — starting scheduler in fallback mode`,
+    );
+    startCampaignSchedulerService();
+  });
 
 // Billing system crons
 cron.schedule("5 0 * * *", () => {
@@ -161,7 +231,8 @@ cron.schedule("0 * * * *", () => {
   runInvoiceRetryCron();
 }); // Every hour — retry overdue invoice payment reminders
 
-cron.schedule("*/15 * * * *", () => { // NEW
+cron.schedule("*/15 * * * *", () => {
+  // NEW
   cleanupExpiredSessions(); // NEW
 }); // NEW — every 15 min: mark booking_sessions where expires_at < NOW() as 'expired'
 
@@ -206,7 +277,6 @@ cron.schedule("0 3 * * *", async () => {
   }
 }); // Daily at 03:00 UTC
 
-// Initialize billing queue (optional — requires Redis)
 initBillingQueue();
 
 const PORT = process.env.PORT || 8000;

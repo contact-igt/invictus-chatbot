@@ -18,6 +18,7 @@ import { checkBillingAccess } from "../../middlewares/billing/billingAccessGuard
 import { estimateMetaCost } from "../../utils/billing/costEstimator.js";
 import { uploadMediaService } from "../GalleryModel/gallery.service.js";
 import { getWhatsappAccountByTenantService } from "../WhatsappAccountModel/whatsappAccount.service.js";
+import { hasSecret } from "../TenantSecretsModel/tenantSecrets.service.js";
 
 /**
  * GET /whatsapp-campaign/estimate-cost
@@ -145,6 +146,19 @@ export const createCampaignController = async (req, res) => {
     if (campaign_type === "scheduled" && !req.body.scheduled_at) {
       return res.status(400).send({
         message: "scheduled_at is required for scheduled campaigns",
+      });
+    }
+
+    // Verify WhatsApp access token exists before allowing campaign creation
+    const hasWhatsAppToken = await hasSecret(tenant_id, "whatsapp");
+    if (!hasWhatsAppToken) {
+      console.error(
+        `[CAMPAIGN-CREATE] WhatsApp access token not found for tenant ${tenant_id}`,
+      );
+      return res.status(400).send({
+        success: false,
+        message:
+          "WhatsApp is not configured. Please complete WhatsApp setup in Settings before creating campaigns.",
       });
     }
 

@@ -16,6 +16,10 @@ import {
   updateTenantService,
 } from "../TenantModel/tenant.service.js";
 import {
+  getUserPreferencesService,
+  upsertUserPreferencesService,
+} from "../UserPreferencesModel/userPreferences.service.js";
+import {
   createTenantUserService,
   findTenantUserByIdService,
   getAllTenantUsersService,
@@ -60,6 +64,8 @@ export const getLoggedTenantUserController = async (req, res) => {
       return res.status(404).json({ message: "User profile not found" });
     }
 
+    const userPrefs = await getUserPreferencesService(unique_id, "tenant");
+
     // Remove sensitive data
     delete user.password_hash;
 
@@ -82,9 +88,64 @@ export const getLoggedTenantUserController = async (req, res) => {
       user.webhook_verified = !!tenant.webhook_verified;
     }
 
+    user.preferences = { theme: userPrefs?.theme || "light" };
+
     return res.status(200).json({
       message: "Profile fetched successfully",
       data: { ...user, user_type: "tenant" },
+    });
+  } catch (err) {
+    return res.status(500).json({ message: err.message });
+  }
+};
+
+export const getLoggedTenantUserPreferencesController = async (req, res) => {
+  try {
+    const { unique_id } = req.user;
+
+    if (!unique_id) {
+      return res
+        .status(400)
+        .json({ message: "Tenant user ID not found in session" });
+    }
+
+    const userPrefs = await getUserPreferencesService(unique_id, "tenant");
+
+    return res.status(200).json({
+      message: "User preferences fetched successfully",
+      data: {
+        theme: userPrefs?.theme || "light",
+      },
+    });
+  } catch (err) {
+    return res.status(500).json({ message: err.message });
+  }
+};
+
+export const updateLoggedTenantUserPreferencesController = async (req, res) => {
+  try {
+    const { unique_id, tenant_id } = req.user;
+    const { preferences } = req.body;
+
+    if (!unique_id) {
+      return res
+        .status(400)
+        .json({ message: "Tenant user ID not found in session" });
+    }
+
+    if (!preferences || typeof preferences !== "object") {
+      return res.status(400).json({ message: "Preferences payload is required" });
+    }
+
+    await upsertUserPreferencesService(unique_id, tenant_id, preferences, "tenant");
+
+    const updatedPrefs = await getUserPreferencesService(unique_id, "tenant");
+
+    return res.status(200).json({
+      message: "User preferences updated successfully",
+      data: {
+        theme: updatedPrefs?.theme || "light",
+      },
     });
   } catch (err) {
     return res.status(500).json({ message: err.message });
@@ -187,7 +248,7 @@ export const updateLoggedTenantOrganizationController = async (req, res) => {
 export const updateLoggedTenantProfileController = async (req, res) => {
   try {
     const { unique_id, tenant_id, role } = req.user;
-    const { username, country_code, mobile, organization } = req.body;
+    const { username, country_code, mobile, organization, preferences } = req.body;
 
     if (!unique_id) {
       return res.status(400).json({ message: "User ID not found in session" });
@@ -206,6 +267,10 @@ export const updateLoggedTenantProfileController = async (req, res) => {
 
     if (Object.keys(profileData).length > 0) {
       await updateTenantUserByIdService(unique_id, profileData);
+    }
+
+    if (preferences && typeof preferences === "object") {
+      await upsertUserPreferencesService(unique_id, tenant_id, preferences, "tenant");
     }
 
     // Update organization fields — only tenant_admin allowed
@@ -266,6 +331,9 @@ export const updateLoggedTenantProfileController = async (req, res) => {
         updatedUser.webhook_verified = !!tenant.webhook_verified;
       }
     }
+
+    const updatedPrefs = await getUserPreferencesService(unique_id, "tenant");
+    if (updatedUser) updatedUser.preferences = { theme: updatedPrefs?.theme || "light" };
 
     return res.status(200).json({
       message: "Profile updated successfully",
@@ -464,6 +532,12 @@ export const loginTenantUserController = async (req, res) => {
 
     const userDetails = { ...user, user_type: "tenant" };
     delete userDetails.password_hash;
+
+    const userPrefs = await getUserPreferencesService(
+      user.tenant_user_id,
+      "tenant",
+    );
+    userDetails.preferences = { theme: userPrefs?.theme || "light" };
 
     // Fetch tenant details for company name and webhook status
     const tenant = await findTenantByIdService(user.tenant_id);

@@ -53,4 +53,5 @@ export const tableNames = {
   SAVE_PAYMENT_METHOD: "saved_payment_methods",
   TAX_SETTINGS: "tax_settings",
   TENANT_SECRETS: "tenant_secrets",
+  USER_PREFERENCES: "user_preferences",
 };

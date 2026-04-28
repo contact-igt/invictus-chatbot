@@ -55,6 +55,7 @@ import { AppointmentTable } from "./tables/AppointmentTable/index.js";
 import { SavedPaymentMethodTable } from "./tables/SavedPaymentMethod/SavedPaymentMethod.js";
 import { TaxSettingsTable } from "./tables/TaxSettingsTable/index.js";
 import { TenantSecretsTable } from "./tables/TenantSecretsTable/index.js";
+import { UserPreferencesTable } from "./tables/UserPreferencesTable/index.js";
 
 const dbconfig =
   ServerEnvironmentConfig?.server?.line === "production"
@@ -66,16 +67,25 @@ const dbconfig =
         : DatabaseEnvironmentConfig?.local;
 
 const sequelize = new Sequelize(
-  dbconfig?.databse,
+  dbconfig?.database,
   dbconfig?.user,
   dbconfig?.password,
   {
     host: dbconfig?.host,
+    port: dbconfig?.port ?? 3306,
     dialect: "mysql",
     timezone: "+05:30",
 
     dialectOptions: {
       charset: "utf8mb4",
+      connectTimeout: 60000,
+    },
+
+    pool: {
+      max: 10,
+      min: 0,
+      acquire: 60000,
+      idle: 10000,
     },
 
     define: {
@@ -159,6 +169,7 @@ db.BookingSessions = BookingSessionTable(sequelize, Sequelize); // NEW
 db.SavedPaymentMethod = SavedPaymentMethodTable(sequelize, Sequelize);
 db.TaxSettings = TaxSettingsTable(sequelize, Sequelize);
 db.TenantSecrets = TenantSecretsTable(sequelize, Sequelize);
+db.UserPreferences = UserPreferencesTable(sequelize, Sequelize);
 
 defineAssociations(db);
 

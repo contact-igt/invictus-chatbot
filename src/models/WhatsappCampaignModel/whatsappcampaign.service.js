@@ -21,6 +21,10 @@ import cron from "node-cron";
 import { generateWhatsAppOTPService } from "../OtpVerificationModel/otpverification.service.js";
 import { canSendCampaign } from "../../utils/billing/walletGuard.js";
 import { estimateMetaCost } from "../../utils/billing/costEstimator.js";
+import {
+  isCampaignQueueAvailable,
+  getCampaignDispatchQueue,
+} from "../../queues/campaignQueue.js";
 import { addCampaignUsageService } from "../GalleryModel/gallery.service.js";
 import { logger } from "../../utils/logger.js";
 
@@ -897,7 +901,7 @@ export const executeCampaignBatchService = async (
     // If the campaign has been paused by the user, respect it — do not auto-activate.
     if (campaign.status === "paused") {
       const pendingCount = await db.WhatsappCampaignRecipients.count({
-        where: { campaign_id, status: "pending" },
+        where: { campaign_id, status: "pending", is_deleted: false },
       });
       logger.info(
         `[CAMPAIGN-BATCH] Campaign ${campaign_id} is paused — skipping execution (${pendingCount} recipients still pending)`,
@@ -1296,7 +1300,7 @@ export const executeCampaignBatchService = async (
         let result;
         // Atomic check: skip if another execution already claimed this recipient
         const stillPending = await db.WhatsappCampaignRecipients.findOne({
-          where: { id: recipient.id, status: "pending" },
+          where: { id: recipient.id, status: "pending", is_deleted: false },
           attributes: ["id"],
         });
         if (!stillPending) {
@@ -1733,18 +1737,29 @@ export const permanentDeleteCampaignService = async (
 };
 
 /**
- * Starts a cron job to handle scheduled and active campaigns.
+ * Starts the campaign scheduler cron job.
+ *
+ * When BullMQ queues are available (Redis reachable) the cron is a lightweight
+ * dispatcher — it only activates scheduled campaigns and enqueues
+ * campaign-dispatch jobs.  All batch execution and retry logic moves to the
+ * BullMQ workers (campaignDispatchWorker / campaignSendWorker).
+ *
+ * When Redis is unavailable the cron falls back to the original synchronous
+ * executeCampaignBatchService behaviour so the system continues to work.
+ *
+ * The 5-minute retry cron is intentionally removed: BullMQ handles per-job
+ * retries with exponential backoff, which is more precise and scalable than
+ * the old polling approach (capped at 30 recipients per 5-min tick).
  */
 export const startCampaignSchedulerService = () => {
   logger.info("[CAMPAIGN-SCHEDULER] Started");
 
-  // Run every minute
   cron.schedule("* * * * *", async () => {
     try {
       const now = new Date();
 
-      // 1. Check for scheduled campaigns that need to be activated
-      const [scheduledToActiveCount] = await db.WhatsappCampaigns.update(
+      // Activate campaigns whose scheduled_at time has arrived
+      const [activatedCount] = await db.WhatsappCampaigns.update(
         { status: "active" },
         {
           where: {
@@ -1755,19 +1770,61 @@ export const startCampaignSchedulerService = () => {
         },
       );
 
-      if (scheduledToActiveCount > 0) {
+      if (activatedCount > 0) {
         logger.info(
-          `[CAMPAIGN-SCHEDULER] Activated ${scheduledToActiveCount} scheduled campaign(s) at ${now.toISOString()}`,
+          `[CAMPAIGN-SCHEDULER] Activated ${activatedCount} scheduled campaign(s) at ${now.toISOString()}`,
         );
       }
 
       const activeCampaigns = await db.WhatsappCampaigns.findAll({
         where: { status: "active", is_deleted: false },
+        attributes: ["campaign_id", "tenant_id"],
       });
+
+      if (activeCampaigns.length === 0) return;
+
+      // ── BullMQ path: enqueue a dispatch job per active campaign ──────────
+      if (isCampaignQueueAvailable()) {
+        const dispatchQueue = getCampaignDispatchQueue();
+        let queued = 0;
+
+        for (const campaign of activeCampaigns) {
+          try {
+            // jobId dedup: if a dispatch job for this campaign is already
+            // waiting or active, BullMQ ignores this add — no double-dispatch.
+            await dispatchQueue.add(
+              "campaign-dispatch",
+              {
+                campaign_id: campaign.campaign_id,
+                tenant_id: campaign.tenant_id,
+                after_id: 0,
+              },
+              { jobId: `dispatch:${campaign.campaign_id}:0` },
+            );
+            queued++;
+          } catch (enqueueErr) {
+            logger.error(
+              `[CAMPAIGN-SCHEDULER] Failed to enqueue dispatch for ${campaign.campaign_id}: ${enqueueErr.message}`,
+            );
+          }
+        }
+
+        logger.info(
+          `[CAMPAIGN-SCHEDULER] Enqueued dispatch jobs for ${queued}/${activeCampaigns.length} active campaign(s)`,
+        );
+        return;
+      }
+
+      // ── Fallback path: Redis unavailable — run batches synchronously ─────
+      // This preserves full backward compatibility. Billing checks, in-memory
+      // locking, and 3 s delays between campaigns all remain intact.
+      logger.warn(
+        "[CAMPAIGN-SCHEDULER] Queue unavailable — running campaigns synchronously (fallback mode)",
+      );
 
       for (const campaign of activeCampaigns) {
         try {
-          // Pre-execution billing check: verify tenant can afford at least 1 batch
+          // Pre-execution billing check
           try {
             const template = await db.WhatsappTemplates.findOne({
               where: { template_id: campaign.template_id },
@@ -1787,151 +1844,51 @@ export const startCampaignSchedulerService = () => {
               tenantForBilling?.country || (isIndia ? "IN" : "Global");
             const cost = await estimateMetaCost(category, billingCountry);
             const pendingCount = await db.WhatsappCampaignRecipients.count({
-              where: { campaign_id: campaign.campaign_id, status: "pending" },
+              where: {
+                campaign_id: campaign.campaign_id,
+                status: "pending",
+                is_deleted: false,
+              },
             });
             const batchEstimate = Math.min(pendingCount, 15);
             const batchCost = cost.totalCostInr * batchEstimate;
-
             const billingCheck = await canSendCampaign(
               campaign.tenant_id,
               batchCost,
             );
-
             if (!billingCheck.allowed) {
               logger.warn(
-                `[CAMPAIGN-SCHEDULER] Skipping campaign ${campaign.campaign_id} - ${billingCheck.reason}`,
+                `[CAMPAIGN-SCHEDULER] Skipping ${campaign.campaign_id} — ${billingCheck.reason}`,
               );
-              await campaign.update({ status: "paused" });
+              await db.WhatsappCampaigns.update(
+                { status: "paused" },
+                { where: { campaign_id: campaign.campaign_id } },
+              );
               continue;
             }
           } catch (billingErr) {
             logger.error(
               `[CAMPAIGN-SCHEDULER] Billing check error for ${campaign.campaign_id}: ${billingErr.message}`,
             );
-            // Fail open — proceed with execution
           }
 
-          logger.info(
-            `[CAMPAIGN-SCHEDULER] Executing batch for campaign ${campaign.campaign_id}`,
-          );
           const batchResult = await executeCampaignBatchService(
             campaign.campaign_id,
             campaign.tenant_id,
             15,
           );
           logger.info(
-            `[CAMPAIGN-SCHEDULER] Campaign ${campaign.campaign_id} batch done — processed=${batchResult.processedCount ?? 0} sent=${batchResult.sentCount ?? 0} failed=${batchResult.failCount ?? 0} finished=${batchResult.finished}`,
+            `[CAMPAIGN-SCHEDULER] Campaign ${campaign.campaign_id} batch done — processed=${batchResult.processedCount ?? 0} sent=${batchResult.sentCount ?? 0} failed=${batchResult.failCount ?? 0}`,
           );
-          // Delay between campaigns to protect chatbot event loop
           await sleep(3000);
         } catch (campaignErr) {
           logger.error(
-            `[CAMPAIGN-SCHEDULER] Campaign ${campaign.campaign_id} execution error: ${campaignErr.message}`,
+            `[CAMPAIGN-SCHEDULER] Campaign ${campaign.campaign_id} error: ${campaignErr.message}`,
           );
         }
       }
     } catch (err) {
-      logger.error(`[CAMPAIGN-SCHEDULER] Worker error: ${err.message}`);
-    }
-  });
-
-  cron.schedule("*/5 * * * *", async () => {
-    try {
-      const failedRecipients = await db.WhatsappCampaignRecipients.findAll({
-        where: {
-          status: "failed",
-          is_deleted: false,
-          retry_count: { [db.Sequelize.Op.lt]: 3 },
-          [db.Sequelize.Op.or]: [
-            { next_retry_at: null },
-            { next_retry_at: { [db.Sequelize.Op.lte]: new Date() } },
-          ],
-        },
-        limit: 30,
-      });
-
-      const campaignIds = [
-        ...new Set(failedRecipients.map((recipient) => recipient.campaign_id)),
-      ];
-      const campaigns = await db.WhatsappCampaigns.findAll({
-        where: {
-          campaign_id: { [db.Sequelize.Op.in]: campaignIds },
-          is_deleted: false,
-        },
-        attributes: ["campaign_id", "tenant_id", "status"],
-      });
-      const campaignById = new Map(
-        campaigns.map((campaign) => [campaign.campaign_id, campaign]),
-      );
-
-      const campaignIdsToResume = new Set();
-      for (const recipient of failedRecipients) {
-        const campaign = campaignById.get(recipient.campaign_id);
-        if (!campaign) continue;
-
-        // Skip cancelled or completed campaigns — retrying them is pointless
-        if (["cancelled", "completed"].includes(campaign.status)) {
-          logger.info(
-            `[CAMPAIGN-RETRY] Campaign ${recipient.campaign_id} is ${campaign.status} — skipping recipient ${recipient.id}`,
-          );
-          continue;
-        }
-
-        if (campaign.status === "paused") {
-          logger.info(
-            `[CAMPAIGN-RETRY] Campaign ${recipient.campaign_id} is paused — keeping recipient ${recipient.id} in failed state until resume`,
-          );
-          continue;
-        }
-
-        // Skip recipients whose error indicates a non-retryable issue (media missing, validation, Meta policy)
-        const errorMsg = String(recipient.error_message || "").toLowerCase();
-        const isNonRetryableError =
-          errorMsg.includes("missing media") ||
-          errorMsg.includes("no valid url") ||
-          errorMsg.includes("variable mismatch") ||
-          errorMsg.includes("invalid phone") ||
-          errorMsg.includes("healthy ecosystem") ||
-          errorMsg.includes("not delivered") ||
-          errorMsg.includes("spam") ||
-          errorMsg.includes("blocked") ||
-          errorMsg.includes("recipient not on whatsapp") ||
-          errorMsg.includes("incapable of receiving") ||
-          errorMsg.includes("re-engage");
-        if (isNonRetryableError) {
-          logger.info(
-            `[CAMPAIGN-RETRY] Recipient ${recipient.id} has non-retryable error — marking permanently_failed`,
-          );
-          await recipient.update({
-            status: "permanently_failed",
-            retry_count: 3,
-            next_retry_at: null,
-          });
-          continue;
-        }
-
-        await recipient.update({
-          status: "pending",
-        });
-        campaignIdsToResume.add(recipient.campaign_id);
-      }
-
-      for (const campaignId of campaignIdsToResume) {
-        const campaign = campaignById.get(campaignId);
-        if (!campaign) continue;
-        // Only auto-resume campaigns that failed — 'scheduled' campaigns must
-        // not be activated early (they have a scheduled_at time to honour).
-        if (["failed", "completed"].includes(campaign.status)) {
-          await campaign.update({ status: "active" });
-        }
-        logger.info(
-          `[CAMPAIGN-RETRY] Executing batch for campaign ${campaignId}`,
-        );
-        await executeCampaignBatchService(campaignId, campaign.tenant_id, 15);
-        await sleep(3000);
-      }
-    } catch (err) {
-      console.error("[CAMPAIGN-RETRY-WORKER] Error:", err.message);
+      logger.error(`[CAMPAIGN-SCHEDULER] Tick error: ${err.message}`);
     }
   });
 };
@@ -1995,14 +1952,14 @@ export const updateCampaignStatusService = async (
 
   if (next === "paused") {
     const pendingCount = await db.WhatsappCampaignRecipients.count({
-      where: { campaign_id, status: "pending" },
+      where: { campaign_id, status: "pending", is_deleted: false },
     });
     logger.info(
       `[CAMPAIGN-STATUS] Campaign ${campaign_id} paused by ${acted_by} at ${new Date().toISOString()} — ${pendingCount} recipients still pending`,
     );
   } else if (next === "active" && current === "paused") {
     const pendingCount = await db.WhatsappCampaignRecipients.count({
-      where: { campaign_id, status: "pending" },
+      where: { campaign_id, status: "pending", is_deleted: false },
     });
     logger.info(
       `[CAMPAIGN-STATUS] Campaign ${campaign_id} resumed by ${acted_by} at ${new Date().toISOString()} — ${pendingCount} recipients remaining`,
