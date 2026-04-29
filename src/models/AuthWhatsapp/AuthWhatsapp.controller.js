@@ -391,7 +391,7 @@ export const receiveMessage = async (req, res) => {
               status: effectiveStatus,
               error_message:
                 effectiveStatus === "failed" ||
-                effectiveStatus === "permanently_failed"
+                  effectiveStatus === "permanently_failed"
                   ? statusUpdate.errors?.[0]?.title
                   : null,
             };
@@ -1045,7 +1045,6 @@ export const receiveMessage = async (req, res) => {
           messagePreview: aiResult?.message?.substring(0, 200) || "N/A",
         });
 
-<<<<<<< Updated upstream
         // NEW: If getOpenAIReply routed an appointment intent, handle interactive response
         // handleAppointmentResponse saves to DB and emits socket internally
         if (aiResult?._apptResult) { // NEW
@@ -1054,7 +1053,6 @@ export const receiveMessage = async (req, res) => {
           ); // NEW
           return; // NEW
         } // NEW
-=======
         try {
           await updateLeadService(tenant_id, contactsaved?.contact_id, {
             sourceEvent: "user_message",
@@ -1077,7 +1075,6 @@ export const receiveMessage = async (req, res) => {
             leadErr.message,
           );
         }
->>>>>>> Stashed changes
 
         const { messageToSend, tagToExecute, tagPayloadToExecute } =
           resolveAiReplyEnvelope(aiResult, text);
@@ -1376,7 +1373,7 @@ export const receiveMessage = async (req, res) => {
                       status: false,
                     });
                   }
-                } catch (_) {}
+                } catch (_) { }
               }
             });
           }
@@ -1413,10 +1410,10 @@ async function handleAppointmentResponse( // NEW
             ? [{ title: "Confirm" }, { title: "Cancel" }] // NEW
             : result.buttonType === "greeting_menu" // NEW
               ? [ // NEW
-                  { title: "Book appointment" }, // NEW
-                  { title: "My appointments" }, // NEW
-                  { title: "Cancel / Reschedule" }, // NEW
-                ] // NEW
+                { title: "Book appointment" }, // NEW
+                { title: "My appointments" }, // NEW
+                { title: "Cancel / Reschedule" }, // NEW
+              ] // NEW
               : result.buttonType === "book_prompt" // NEW
                 ? [{ title: "Book appointment" }] // NEW
                 : result.buttonType === "post_booking" // NEW
@@ -1478,7 +1475,7 @@ async function handleAppointmentResponse( // NEW
     } // NEW
   } catch (err) { // NEW
     console.error("[APPT-RESPONSE] Failed to send appointment response:", err.message); // NEW
-    await sendWhatsAppMessage(tenant_id, phone, result.message || "Done.").catch(() => {}); // NEW
+    await sendWhatsAppMessage(tenant_id, phone, result.message || "Done.").catch(() => { }); // NEW
   } // NEW
 
   // ── Persist bot message to DB + emit to dashboard socket ──────────────
@@ -1487,10 +1484,10 @@ async function handleAppointmentResponse( // NEW
     const messageTypeToSave = isInteractive ? "interactive" : "text"; // NEW
     const savedBotMsg = contact_id // NEW
       ? await createUserMessageService( // NEW
-          tenant_id, contact_id, phone_number_id, // NEW
-          phone, null, name, "bot", null, // NEW
-          textToSave, messageTypeToSave, null, null, null, null, null, interactive_payload, // NEW
-        ) // NEW
+        tenant_id, contact_id, phone_number_id, // NEW
+        phone, null, name, "bot", null, // NEW
+        textToSave, messageTypeToSave, null, null, null, null, null, interactive_payload, // NEW
+      ) // NEW
       : null; // NEW
 
     const io = getIO(); // NEW

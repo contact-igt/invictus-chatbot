@@ -3,6 +3,30 @@ import { getTenantSettingsService } from "../../models/TenantModel/tenant.servic
 import { getDomainSummary } from "./domainContextHelper.js";
 
 const VALID_INTENTS = ["APPOINTMENT_ACTION", "GENERAL_QUESTION"];
+
+// Granular appointment intents used by the message pipeline/orchestrator
+export const APPOINTMENT_INTENTS = [
+  "create_appointment",
+  "view_my_appointments",
+  "reschedule_appointment",
+  "cancel_appointment",
+  "check_doctor_availability",
+  "list_available_doctors",
+  "get_doctor_info",
+  "APPOINTMENT_ACTION",
+];
+
+// Fast greeting keywords to short-circuit simple messages and avoid AI calls
+export const GREETING_KEYWORDS = [
+  "hi",
+  "hello",
+  "hey",
+  "start",
+  "menu",
+  "help",
+  "helo",
+  "hii",
+];
 const INTENT_CONFIDENCE_DEFAULT = 0.5;
 
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
@@ -18,7 +42,9 @@ const safeParseAIJson = (raw) => {
   // 1. Try direct parse first (fast path)
   try {
     return JSON.parse(raw);
-  } catch (_) { /* continue to sanitize */ }
+  } catch (_) {
+    /* continue to sanitize */
+  }
 
   let text = raw;
 
@@ -37,14 +63,12 @@ const safeParseAIJson = (raw) => {
   // 6. Try parsing the cleaned text
   try {
     return JSON.parse(text);
-  } catch (_) { /* continue */ }
+  } catch (_) {
+    /* continue */
+  }
 
-  // 7. Auto-close truncated JSON (AI hit token limit mid-output)
-  //    Count unmatched { and [ and append closing brackets
   let autoFixed = text.trim();
-  // Remove any trailing incomplete key-value (e.g., "key": or "key)
   autoFixed = autoFixed.replace(/,?\s*"[^"]*"?\s*:?\s*$/, "");
-  // Remove trailing commas
   autoFixed = autoFixed.replace(/,\s*$/, "");
 
   let openBraces = 0;
@@ -52,9 +76,18 @@ const safeParseAIJson = (raw) => {
   let inString = false;
   let escape = false;
   for (const ch of autoFixed) {
-    if (escape) { escape = false; continue; }
-    if (ch === "\\") { escape = true; continue; }
-    if (ch === '"') { inString = !inString; continue; }
+    if (escape) {
+      escape = false;
+      continue;
+    }
+    if (ch === "\\") {
+      escape = true;
+      continue;
+    }
+    if (ch === '"') {
+      inString = !inString;
+      continue;
+    }
     if (inString) continue;
     if (ch === "{") openBraces++;
     else if (ch === "}") openBraces--;
@@ -68,19 +101,32 @@ const safeParseAIJson = (raw) => {
 
   try {
     return JSON.parse(autoFixed);
-  } catch (_) { /* continue */ }
+  } catch (_) {
+    /* continue */
+  }
 
   // 8. Last resort: extract the first { ... } block and auto-close
   const match = text.match(/\{[\s\S]*/);
   if (match) {
     let block = match[0].replace(/,\s*([\]}])/g, "$1");
     // Recount and close
-    let ob = 0, obk = 0;
-    let inStr = false, esc = false;
+    let ob = 0,
+      obk = 0;
+    let inStr = false,
+      esc = false;
     for (const ch of block) {
-      if (esc) { esc = false; continue; }
-      if (ch === "\\") { esc = true; continue; }
-      if (ch === '"') { inStr = !inStr; continue; }
+      if (esc) {
+        esc = false;
+        continue;
+      }
+      if (ch === "\\") {
+        esc = true;
+        continue;
+      }
+      if (ch === '"') {
+        inStr = !inStr;
+        continue;
+      }
       if (inStr) continue;
       if (ch === "{") ob++;
       else if (ch === "}") ob--;
@@ -139,11 +185,15 @@ const TENANT_CONTEXT_CACHE = new Map(); // tenant_id → { context, orgContext, 
 const TENANT_CONTEXT_TTL_MS = 30 * 60 * 1000;
 
 const TENANT_TYPE_CONTEXT_MAP = {
-  hospital: "a hospital where patients book appointments with doctors and specialists",
-  clinic: "a medical clinic offering treatments, consultations, and health check-ups",
-  education: "an educational institution where students inquire about courses, admissions, fees, and enrolments",
+  hospital:
+    "a hospital where patients book appointments with doctors and specialists",
+  clinic:
+    "a medical clinic offering treatments, consultations, and health check-ups",
+  education:
+    "an educational institution where students inquire about courses, admissions, fees, and enrolments",
   law: "a law firm where clients ask about legal services and book consultations with lawyers or advocates",
-  organization: "a business that offers services and handles client inquiries, meetings, and bookings",
+  organization:
+    "a business that offers services and handles client inquiries, meetings, and bookings",
 };
 
 const buildBusinessContext = (tenantSettings) => {
@@ -151,19 +201,27 @@ const buildBusinessContext = (tenantSettings) => {
   const name = tenantSettings.company_name || "this business";
   // Full override via ai_settings.business_description
   const customDescription = tenantSettings.ai_settings?.business_description;
-  if (customDescription && typeof customDescription === "string" && customDescription.trim()) {
+  if (
+    customDescription &&
+    typeof customDescription === "string" &&
+    customDescription.trim()
+  ) {
     return `You are working for "${name}", ${customDescription.trim()}.`;
   }
   // Extensible type via ai_settings.business_type (not limited to the DB ENUM)
   const aiType = tenantSettings.ai_settings?.business_type;
   if (aiType && typeof aiType === "string") {
     const mapped = TENANT_TYPE_CONTEXT_MAP[aiType.toLowerCase()];
-    const description = mapped || `a ${aiType} business that handles client inquiries and service bookings`;
+    const description =
+      mapped ||
+      `a ${aiType} business that handles client inquiries and service bookings`;
     return `You are working for "${name}", ${description}.`;
   }
   // Fallback to tenant.type ENUM
   const enumType = tenantSettings.type;
-  const description = TENANT_TYPE_CONTEXT_MAP[enumType] || "a business that handles client inquiries and service bookings";
+  const description =
+    TENANT_TYPE_CONTEXT_MAP[enumType] ||
+    "a business that handles client inquiries and service bookings";
   return `You are working for "${name}", ${description}.`;
 };
 
@@ -176,7 +234,8 @@ const buildBusinessContext = (tenantSettings) => {
 const getTenantBusinessContext = async (tenant_id) => {
   if (!tenant_id) return { context: "", orgContext: "" };
   const cached = TENANT_CONTEXT_CACHE.get(tenant_id);
-  if (cached && cached.expiresAt > Date.now()) return { context: cached.context, orgContext: cached.orgContext };
+  if (cached && cached.expiresAt > Date.now())
+    return { context: cached.context, orgContext: cached.orgContext };
   try {
     const [settings, domainSummary] = await Promise.all([
       getTenantSettingsService(tenant_id),
@@ -191,7 +250,10 @@ const getTenantBusinessContext = async (tenant_id) => {
     });
     return { context, orgContext };
   } catch (err) {
-    console.error("[INTENT-CLASSIFIER] Failed to load tenant business context:", err.message);
+    console.error(
+      "[INTENT-CLASSIFIER] Failed to load tenant business context:",
+      err.message,
+    );
     return { context: "", orgContext: "" };
   }
 };
@@ -199,13 +261,18 @@ const getTenantBusinessContext = async (tenant_id) => {
 // Intent interest score floor — minimum for any non-negative message
 const INTENT_INTERESTED_SCORE = 82;
 const INTENT_NOT_INTERESTED_SCORE = 20;
-const INTENT_INTEREST_NEUTRAL = 70;  // "hi", "yes", simple acks start at 70
+const INTENT_INTEREST_NEUTRAL = 70; // "hi", "yes", simple acks start at 70
 
-const deriveIntentInterestScore = (negativeNotInterested, intent, userMessage = "") => {
+const deriveIntentInterestScore = (
+  negativeNotInterested,
+  intent,
+  userMessage = "",
+) => {
   if (negativeNotInterested) return INTENT_NOT_INTERESTED_SCORE;
   if (intent === "APPOINTMENT_ACTION") return 92;
   // Budget/timeline mention = high domain interest
-  if (detectBudgetMention(userMessage) || detectTimelineMention(userMessage)) return 85;
+  if (detectBudgetMention(userMessage) || detectTimelineMention(userMessage))
+    return 85;
   // Any domain question above greeting level
   if (userMessage && userMessage.trim().length > 10) return 75;
   // Simple greetings / acks still score 70 — they are not NOT interested
@@ -238,7 +305,11 @@ const getDefaultLeadIntelligence = (
         : 45,
     clarity_score: userMessage?.trim()?.length > 24 ? 55 : 35,
     conversation_lead_score: baseConversationLeadScore,
-    intent_interest_score: deriveIntentInterestScore(negativeNotInterested, intent, userMessage),
+    intent_interest_score: deriveIntentInterestScore(
+      negativeNotInterested,
+      intent,
+      userMessage,
+    ),
     timeline_mentioned: timelineMentioned,
     budget_mentioned: budgetMentioned,
     authority_mentioned: authorityMentioned,
@@ -269,13 +340,23 @@ const normalizeLeadIntelligence = (rawValue, userMessage, intent) => {
   // Normalize intent_interest_score: prefer AI numeric 0-100, then binary map, then default
   const rawInterest = raw.intent_interest_score;
   let normalizedInterest;
-  if (rawInterest !== null && rawInterest !== undefined && Number.isFinite(Number(rawInterest))) {
-    normalizedInterest = parseScore(rawInterest, defaults.intent_interest_score);
+  if (
+    rawInterest !== null &&
+    rawInterest !== undefined &&
+    Number.isFinite(Number(rawInterest))
+  ) {
+    normalizedInterest = parseScore(
+      rawInterest,
+      defaults.intent_interest_score,
+    );
   } else if (typeof raw.intent_interest === "string") {
     const label = raw.intent_interest.toUpperCase();
-    normalizedInterest = label === "INTERESTED" ? INTENT_INTERESTED_SCORE
-      : label === "NOT_INTERESTED" ? INTENT_NOT_INTERESTED_SCORE
-        : defaults.intent_interest_score;
+    normalizedInterest =
+      label === "INTERESTED"
+        ? INTENT_INTERESTED_SCORE
+        : label === "NOT_INTERESTED"
+          ? INTENT_NOT_INTERESTED_SCORE
+          : defaults.intent_interest_score;
   } else {
     normalizedInterest = negativeNotInterested
       ? INTENT_NOT_INTERESTED_SCORE
@@ -299,9 +380,13 @@ const normalizeLeadIntelligence = (rawValue, userMessage, intent) => {
     ),
     intent_interest_score: normalizedInterest,
     timeline_mentioned:
-      raw.timeline_mentioned === true || !!timelineText || defaults.timeline_mentioned,
+      raw.timeline_mentioned === true ||
+      !!timelineText ||
+      defaults.timeline_mentioned,
     budget_mentioned:
-      raw.budget_mentioned === true || !!budgetText || defaults.budget_mentioned,
+      raw.budget_mentioned === true ||
+      !!budgetText ||
+      defaults.budget_mentioned,
     authority_mentioned:
       raw.authority_mentioned === true || defaults.authority_mentioned,
     negative_not_interested: negativeNotInterested,
@@ -342,7 +427,8 @@ export const classifyIntent = async (
       )
       .join("\n");
 
-    const { context: businessContext, orgContext } = await getTenantBusinessContext(tenant_id);
+    const { context: businessContext, orgContext } =
+      await getTenantBusinessContext(tenant_id);
     const prompt = buildClassifierPrompt(businessContext, orgContext)
       .replace("{RECENT_CONTEXT}", recentContext || "No previous messages.")
       .replace("{USER_MESSAGE}", userMessage);
@@ -355,32 +441,11 @@ export const classifyIntent = async (
       responseFormat: { type: "json_object" },
     });
 
-    // Robust JSON extraction — AI models sometimes return trailing commas,
-    // comments, or wrapping text around the JSON object.
     const parsed = safeParseAIJson(result.content);
 
-<<<<<<< Updated upstream
-    // NEW: Expanded valid intents — granular appointment intents + greeting
-    const validIntents = [ // NEW
-      "APPOINTMENT_ACTION", // NEW — kept for backward compat
-      "GENERAL_QUESTION", // NEW
-      "greeting", // NEW
-      "create_appointment", // NEW
-      "view_my_appointments", // NEW
-      "reschedule_appointment", // NEW
-      "cancel_appointment", // NEW
-      "check_doctor_availability", // NEW
-      "list_available_doctors", // NEW
-      "get_doctor_info", // NEW
-    ]; // NEW
-    const intent = validIntents.includes(parsed.intent) // NEW
-      ? parsed.intent // NEW
-      : "GENERAL_QUESTION"; // NEW
-=======
     const intent = VALID_INTENTS.includes(parsed.intent)
       ? parsed.intent
       : "GENERAL_QUESTION";
->>>>>>> Stashed changes
 
     const requires = {
       knowledge: parsed.requires?.knowledge === true,
@@ -388,12 +453,14 @@ export const classifyIntent = async (
       appointments: parsed.requires?.appointments === true,
     };
 
-    // NEW: Any appointment-family intent gets full context
-    if (APPOINTMENT_INTENTS.includes(intent) || intent === "APPOINTMENT_ACTION") { // NEW
-      requires.knowledge = true; // NEW
-      requires.doctors = true; // NEW
-      requires.appointments = true; // NEW
-    } // NEW
+    if (
+      APPOINTMENT_INTENTS.includes(intent) ||
+      intent === "APPOINTMENT_ACTION"
+    ) {
+      requires.knowledge = true;
+      requires.doctors = true;
+      requires.appointments = true;
+    }
 
     const lead_intelligence = normalizeLeadIntelligence(
       parsed.lead_intelligence || parsed.leadIntelligence,
@@ -413,28 +480,14 @@ export const classifyIntent = async (
     return {
       intent: fallbackIntent,
       requires: { knowledge: true, doctors: false, appointments: false },
-      lead_intelligence: getDefaultLeadIntelligence(userMessage, fallbackIntent),
+      lead_intelligence: getDefaultLeadIntelligence(
+        userMessage,
+        fallbackIntent,
+      ),
     };
   }
 };
 
-/**
-<<<<<<< Updated upstream
- * Intent Classifier Prompt — expanded with granular appointment intents.
- * Controls token usage: only load data sources that are truly needed.
- */
-// NEW: Expanded prompt with 9 intent values
-const INTENT_CLASSIFIER_PROMPT = `You are an Intent Classifier for a business WhatsApp chatbot.
-
-TASK: Classify the customer's message into EXACTLY ONE intent from the list below,
-AND determine which data sources the AI needs.
-=======
- * Builds the intent classifier prompt with tenant-specific business context injected.
- * Domain-agnostic — works for clinics, schools, law firms, organizations, and more.
- * Business context is loaded from tenant settings (ai_settings.business_description,
- * ai_settings.business_type, or tenant.type ENUM) and cached for 30 minutes.
- * orgContext is the cached domain summary (org prompt main points + KB topics).
- */
 const buildClassifierPrompt = (businessContext = "", orgContext = "") => {
   const contextSection = businessContext
     ? `BUSINESS CONTEXT:\n${businessContext}\n\n`
@@ -447,22 +500,11 @@ const buildClassifierPrompt = (businessContext = "", orgContext = "") => {
   return `You are an Intent Classifier for a business WhatsApp chatbot.
 
 ${contextSection}${orgSection}TASK: Classify the customer's message AND determine which data sources the AI needs to answer it.
->>>>>>> Stashed changes
 
 ═══════════════════════════════════════════════════
 INTENT VALUES (pick exactly one):
 ═══════════════════════════════════════════════════
 
-<<<<<<< Updated upstream
-greeting
-  Customer is greeting or wants the main menu.
-  Examples: "hi", "hello", "hey", "start", "menu", "help", "good morning"
-
-create_appointment
-  Customer wants to BOOK a new appointment.
-  Examples: "book appointment", "I need to see a doctor", "schedule with Dr. Smith",
-  "appointment for tomorrow 3pm", "can I get an appointment?", "I want to visit the doctor"
-=======
 APPOINTMENT_ACTION — The customer wants to actively book or engage:
 - Book / schedule / enroll in a session, appointment, class, consultation, meeting, or demo
 - Reschedule or cancel an existing booking / session / enrollment
@@ -475,68 +517,12 @@ GENERAL_QUESTION — Everything else:
 - Asking about staff or professionals (info only, not booking)
 - Asking about their own bookings, sessions, or enrollment history (info only, not modifying)
 - Any factual question about the business
->>>>>>> Stashed changes
 
 view_my_appointments
   Customer wants to SEE their existing appointments.
   Examples: "show my appointments", "my bookings", "do I have any appointments?",
   "when is my next appointment?", "my appointment details"
 
-<<<<<<< Updated upstream
-reschedule_appointment
-  Customer wants to CHANGE the date or time of an existing appointment.
-  Examples: "reschedule my appointment", "change my appointment to Friday",
-  "move my booking to 4pm", "I need to change my appointment time"
-
-cancel_appointment
-  Customer wants to CANCEL an existing appointment.
-  Examples: "cancel my appointment", "I want to cancel", "cancel my booking",
-  "cancel the Monday appointment", "don't want the appointment anymore"
-
-check_doctor_availability
-  Customer wants to know if a specific doctor or time slot is available.
-  Examples: "is Dr. Smith available on Friday?", "any slots for Tuesday?",
-  "when is Dr. Priya free?", "check availability for tomorrow"
-
-list_available_doctors
-  Customer wants a list of all doctors or doctors by specialty.
-  Examples: "show me all doctors", "which doctors are available?",
-  "list of doctors", "what doctors do you have?", "show cardiologists"
-
-get_doctor_info
-  Customer wants details about a specific doctor.
-  Examples: "tell me about Dr. Smith", "Dr. Priya's specialization",
-  "what is Dr. Ahmed's experience?", "info about the neurologist"
-
-APPOINTMENT_ACTION
-  Use ONLY when the customer is mid-booking-flow and providing information
-  (name, age, date, time, slot number, "yes"/"no" confirmation).
-  Examples: "my name is John", "age 35", "tomorrow", "3pm", "yes confirm it",
-  "no cancel it", "slot 2"
-
-GENERAL_QUESTION
-  Everything else: questions about services, prices, timings, policies, location,
-  business info, and anything not appointment-related.
-  Examples: "what are your charges?", "where are you located?", "thanks", "ok"
-
-═══════════════════════════════════════════════════
-REQUIRES FLAGS (for GENERAL_QUESTION only — ignored for all others):
-═══════════════════════════════════════════════════
-
-"knowledge": true/false — needs uploaded business documents?
-"doctors": true/false — needs doctor information?
-"appointments": true/false — needs this customer's appointment history?
-
-═══════════════════════════════════════════════════
-CLASSIFICATION RULES:
-═══════════════════════════════════════════════════
-- Check RECENT CONTEXT first — if assistant just asked for booking info,
-  a plain reply ("tomorrow", "age 30", "yes") → APPOINTMENT_ACTION
-- "yes"/"confirm"/"ok" with no prior context → greeting
-- Greeting is ALWAYS greeting, never APPOINTMENT_ACTION
-- When ambiguous between appointment intents → create_appointment
-- When ambiguous overall → GENERAL_QUESTION
-=======
 "knowledge": true/false — Does the AI need uploaded business documents?
   true → questions about services, programs, courses, prices, timings, policies, location, procedures, fees, eligibility
   false → greetings, small talk, "ok", "thanks", "bye", simple acknowledgments
@@ -557,7 +543,6 @@ CONTEXT RULES:
 - Greetings are always GENERAL_QUESTION with all requires = false.
 - If ambiguous → GENERAL_QUESTION.
 - For APPOINTMENT_ACTION, ignore the requires flags (system will load everything).
->>>>>>> Stashed changes
 
 RECENT CONTEXT:
 {RECENT_CONTEXT}
@@ -565,27 +550,6 @@ RECENT CONTEXT:
 CUSTOMER'S MESSAGE:
 "{USER_MESSAGE}"
 
-<<<<<<< Updated upstream
-Return ONLY valid JSON (no markdown, no explanation):
-{"intent": "<one of the 10 values above>", "requires": {"knowledge": true/false, "doctors": true/false, "appointments": true/false}}`; // NEW
-
-// NEW: Granular appointment intents — checked in the message pipeline to route to orchestrator
-export const APPOINTMENT_INTENTS = [ // NEW
-  "create_appointment", // NEW
-  "view_my_appointments", // NEW
-  "reschedule_appointment", // NEW
-  "cancel_appointment", // NEW
-  "check_doctor_availability", // NEW
-  "list_available_doctors", // NEW
-  "get_doctor_info", // NEW
-  "APPOINTMENT_ACTION", // NEW — kept so legacy callers still get routed
-]; // NEW
-
-// NEW: Greeting keywords for fast keyword check (avoids AI call for simple greetings)
-export const GREETING_KEYWORDS = [ // NEW
-  "hi", "hello", "hey", "start", "menu", "help", "helo", "hii", // NEW
-]; // NEW
-=======
 EXTRA TASK — LEAD SCORING (CRITICAL):
 Estimate intent quality signals. Set negative_not_interested = true ONLY if the user explicitly says they are not interested or asks to stop. Use confidence 0-1.
 
@@ -702,4 +666,3 @@ Return ONLY valid JSON with this exact shape:
   }
 }`;
 };
->>>>>>> Stashed changes
