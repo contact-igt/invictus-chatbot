@@ -746,9 +746,18 @@ export const getOpenAIReply = async (
       tagDetected: processed.tagDetected,
       tagPayload: processed.tagPayload,
       intent: intentResult.intent,
+      requires: intentResult.requires,
+      lead_intelligence: intentResult.lead_intelligence || null,
     };
   } catch (err) {
     console.error("OpenAI error:", err.message);
-    return { message: null, tagDetected: null, tagPayload: null };
+    return {
+      message: null,
+      tagDetected: null,
+      tagPayload: null,
+      intent: null,
+      requires: null,
+      lead_intelligence: null,
+    };
   }
 };

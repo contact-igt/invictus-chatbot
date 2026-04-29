@@ -43,7 +43,7 @@ export const TenantsTable = (sequelize, Sequelize) => {
       },
 
       type: {
-        type: Sequelize.ENUM("hospital", "clinic", "organization"),
+        type: Sequelize.ENUM("hospital", "clinic", "organization", "education", "law"),
         allowNull: false,
       },
 

@@ -52,6 +52,8 @@ export const execute = async (tagPayload, context, cleanMessage) => {
   const tenantId = context?.tenant_id;
   const userMessage = context?.userMessage || cleanMessage || "";
   const phone = context?.phone || null;
+  const messageId = context?.messageId || null; // WhatsApp Message ID (wamid)
+  const message_db_id = context?.message_db_id || null; // Local database message ID
 
   if (!tenantId || !userMessage) {
     console.log("[MISSING-KNOWLEDGE] Skipping — missing tenant_id or userMessage");
@@ -103,8 +105,8 @@ export const execute = async (tagPayload, context, cleanMessage) => {
     const [insertResult] = await db.sequelize.query(
       `INSERT INTO ${tableNames.FAQ_REVIEWS}
          (tenant_id, question, normalized_question, agent_category, agent_reason,
-          whatsapp_number, status, add_to_kb, is_active, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, 'pending_review', false, true, NOW(), NOW())`,
+          whatsapp_number, wamid, message_id, status, add_to_kb, is_active, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending_review', false, true, NOW(), NOW())`,
       {
         replacements: [
           tenantId,
@@ -113,6 +115,8 @@ export const execute = async (tagPayload, context, cleanMessage) => {
           classification.category,
           classification.reason,
           phone,
+          messageId,
+          message_db_id,
         ],
       },
     );

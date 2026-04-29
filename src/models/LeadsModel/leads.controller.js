@@ -87,9 +87,9 @@ export const getLeadSummaryController = async (req, res) => {
       tenant_id,
     );
 
-    const { mode, date, start_date, end_date } = req.query;
+    const { mode, date, start_date, end_date, force } = req.query;
     console.log(
-      `Smart Summary Req - Lead: ${lead_id}, Mode: ${mode}, Date: ${date}, Range: ${start_date} to ${end_date}`,
+      `Smart Summary Req - Lead: ${lead_id}, Mode: ${mode}, Date: ${date}, Range: ${start_date} to ${end_date}, Force: ${force}`,
     );
 
     const response = await getLeadSummaryService(
@@ -101,6 +101,7 @@ export const getLeadSummaryController = async (req, res) => {
       start_date,
       end_date,
       lead.contact_id,
+      { force: force === 'true' },
     );
 
     return res.status(200).send({

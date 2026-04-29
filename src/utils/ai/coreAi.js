@@ -7,7 +7,7 @@ import { getOpenAIClient } from "./getOpenAIClient.js";
  */
 const TOKEN_LIMITS = {
   language_detect: 80,
-  classifier: 80,
+  classifier: 500,
   knowledge_search: 50,
   lead_summary: 300,
   smart_reply: 500,

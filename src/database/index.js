@@ -10,6 +10,8 @@ import { ProcessedMessagesTable } from "./tables/ProcessedMessagesTable/index.js
 import { ChatLocksTable } from "./tables/ChatLocksTable/index.js";
 import { TenantsTable } from "./tables/TenantsTable/index.js";
 import { LeadsTable } from "./tables/LeadsTable/index.js";
+import { MessageUnderstandingTable } from "./tables/MessageUnderstandingTable/index.js";
+import { LeadScoreHistoryTable } from "./tables/LeadScoreHistoryTable/index.js";
 import { ContactsTable } from "./tables/ContactsTable/index.js";
 import { LiveChatTable } from "./tables/LiveChatTable/index.js";
 import { TenantUsersTable } from "./tables/TenantUsersTable/index.js";
@@ -138,6 +140,8 @@ db.Messages = MessagesTable(sequelize, Sequelize);
 db.ProcessedMessage = ProcessedMessagesTable(sequelize, Sequelize);
 db.ChatLocks = ChatLocksTable(sequelize, Sequelize);
 db.Leads = LeadsTable(sequelize, Sequelize);
+db.MessageUnderstanding = MessageUnderstandingTable(sequelize, Sequelize);
+db.LeadScoreHistory = LeadScoreHistoryTable(sequelize, Sequelize);
 db.LiveChat = LiveChatTable(sequelize, Sequelize);
 db.Sequences = SequencesTable(sequelize, Sequelize);
 db.OtpVerification = OtpVerificationTable(sequelize, Sequelize);

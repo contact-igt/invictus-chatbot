@@ -76,6 +76,18 @@ export const FaqReviewsTable = (sequelize, Sequelize) => {
         allowNull: true,
       },
 
+      // WhatsApp Message ID from Meta API — unique identifier for the message that triggered FAQ
+      wamid: {
+        type: Sequelize.STRING,
+        allowNull: true,
+      },
+
+      // Local database message ID — foreign key reference to messages table
+      message_id: {
+        type: Sequelize.INTEGER,
+        allowNull: true,
+      },
+
       // Moderation lifecycle — status-only model (no extra is_deleted flag)
       status: {
         type: Sequelize.ENUM("pending_review", "published", "deleted"),
@@ -152,6 +164,16 @@ export const FaqReviewsTable = (sequelize, Sequelize) => {
         {
           name: "idx_faq_retrieval",
           fields: ["tenant_id", "status", "add_to_kb", "is_active"],
+        },
+        // Message tracking — find FAQ by original message (for Go to Chat feature)
+        {
+          name: "idx_faq_wamid",
+          fields: ["wamid"],
+        },
+        // Local message reference — alternative lookup
+        {
+          name: "idx_faq_message_id",
+          fields: ["message_id"],
         },
       ],
     },

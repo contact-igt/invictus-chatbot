@@ -99,9 +99,11 @@ const resolveAiReplyEnvelope = (aiResult, userText) => {
       ? ""
       : "Our team will review your message and contact you shortly.";
 
-  const messageToSend = isMissingInfoSignal
-    ? FIXED_MISSING_INFO_FALLBACK
-    : finalReply && finalReply.trim()
+  // When MISSING_KNOWLEDGE is detected but the AI DID provide a real answer,
+  // send the AI's actual reply (not the fallback). Only use the fallback
+  // when the AI reply is empty/null (true missing info scenario).
+  const messageToSend =
+    finalReply && finalReply.trim()
       ? finalReply.trim()
       : fallback;
 
@@ -832,7 +834,12 @@ export const receiveMessage = async (req, res) => {
         lead_source,
       );
     }
-    await updateLeadService(tenant_id, leadSaved?.contact_id);
+    await updateLeadService(tenant_id, leadSaved?.contact_id, {
+      sourceEvent: "user_message",
+      message_id: savedMsg?.id,
+      message_text: text,
+      skipIntentAi: true,
+    });
     io.to(`tenant-${tenant_id}`).emit("lead-updated", {
       tenant_id,
       contact_id: contactsaved?.contact_id,
@@ -1038,6 +1045,7 @@ export const receiveMessage = async (req, res) => {
           messagePreview: aiResult?.message?.substring(0, 200) || "N/A",
         });
 
+<<<<<<< Updated upstream
         // NEW: If getOpenAIReply routed an appointment intent, handle interactive response
         // handleAppointmentResponse saves to DB and emits socket internally
         if (aiResult?._apptResult) { // NEW
@@ -1046,6 +1054,30 @@ export const receiveMessage = async (req, res) => {
           ); // NEW
           return; // NEW
         } // NEW
+=======
+        try {
+          await updateLeadService(tenant_id, contactsaved?.contact_id, {
+            sourceEvent: "user_message",
+            message_id: savedMsg?.id,
+            message_text: text,
+            intentResult: {
+              intent: aiResult?.intent,
+              requires: aiResult?.requires,
+              lead_intelligence: aiResult?.lead_intelligence,
+            },
+          });
+
+          io.to(`tenant-${tenant_id}`).emit("lead-updated", {
+            tenant_id,
+            contact_id: contactsaved?.contact_id,
+          });
+        } catch (leadErr) {
+          console.error(
+            "[WEBHOOK] Failed to apply async intent lead-score update:",
+            leadErr.message,
+          );
+        }
+>>>>>>> Stashed changes
 
         const { messageToSend, tagToExecute, tagPayloadToExecute } =
           resolveAiReplyEnvelope(aiResult, text);
@@ -1147,6 +1179,8 @@ export const receiveMessage = async (req, res) => {
               phone,
               phone_number_id,
               userMessage: text,
+              messageId: messageId || null, // WhatsApp Message ID (wamid)
+              message_db_id: savedMsg?.id || null, // Local database message ID
             },
             text,
           );
@@ -1207,6 +1241,29 @@ export const receiveMessage = async (req, res) => {
                   pending.contact_id,
                   phone_number_id,
                 );
+
+                try {
+                  await updateLeadService(tenant_id, pending.contact_id, {
+                    sourceEvent: "user_message",
+                    message_text: pending.text,
+                    intentResult: {
+                      intent: aiResult?.intent,
+                      requires: aiResult?.requires,
+                      lead_intelligence: aiResult?.lead_intelligence,
+                    },
+                  });
+
+                  io.to(`tenant-${tenant_id}`).emit("lead-updated", {
+                    tenant_id,
+                    contact_id: pending.contact_id,
+                  });
+                } catch (leadErr) {
+                  console.error(
+                    "[WEBHOOK] Failed queued async lead-score update:",
+                    leadErr.message,
+                  );
+                }
+
                 const {
                   messageToSend,
                   tagToExecute: queuedTagToExecute,

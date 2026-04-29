@@ -25,6 +25,64 @@ export const LeadsTable = (sequelize, Sequelize) => {
         defaultValue: 0,
       },
 
+      lead_score_final: {
+        type: Sequelize.INTEGER,
+        allowNull: false,
+        defaultValue: 0,
+      },
+
+      lead_score_raw: {
+        type: Sequelize.DECIMAL(5, 2),
+        allowNull: false,
+        defaultValue: 0,
+      },
+
+      lead_score_recency_component: {
+        type: Sequelize.INTEGER,
+        allowNull: false,
+        defaultValue: 0,
+      },
+
+      lead_score_intent_component: {
+        type: Sequelize.INTEGER,
+        allowNull: false,
+        defaultValue: 50,
+      },
+
+      lead_score_conversation_component: {
+        type: Sequelize.INTEGER,
+        allowNull: false,
+        defaultValue: 50,
+      },
+
+      lead_score_intent_interest_component: {
+        type: Sequelize.INTEGER,
+        allowNull: false,
+        defaultValue: 50,
+      },
+
+      lead_score_confidence: {
+        type: Sequelize.DECIMAL(4, 2),
+        allowNull: false,
+        defaultValue: 0.5,
+      },
+
+      lead_score_reason_codes: {
+        type: Sequelize.JSON,
+        allowNull: true,
+      },
+
+      lead_score_updated_at: {
+        type: Sequelize.DATE,
+        allowNull: true,
+      },
+
+      lead_status_final: {
+        type: Sequelize.ENUM("hot", "warm", "cold", "supercold"),
+        allowNull: false,
+        defaultValue: "cold",
+      },
+
       heat_state: {
         type: Sequelize.ENUM("hot", "warm", "cold", "supercold"),
         allowNull: false,
@@ -158,6 +216,14 @@ export const LeadsTable = (sequelize, Sequelize) => {
         {
           name: "idx_lead_heat",
           fields: ["tenant_id", "heat_state", "is_deleted"],
+        },
+        {
+          name: "idx_lead_final_status",
+          fields: ["tenant_id", "lead_status_final", "is_deleted"],
+        },
+        {
+          name: "idx_lead_final_score",
+          fields: ["tenant_id", "lead_score_final", "is_deleted"],
         },
         {
           name: "idx_lead_contact_active",
