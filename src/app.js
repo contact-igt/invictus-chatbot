@@ -45,8 +45,12 @@ import { initBillingQueue } from "./utils/billing/billingQueue.js";
 import { initCampaignQueues } from "./queues/campaignQueue.js";
 import { startCampaignDispatchWorker } from "./workers/campaignDispatchWorker.js";
 import { startCampaignSendWorker } from "./workers/campaignSendWorker.js";
+import { getDispatchWorkerStatus } from "./workers/campaignDispatchWorker.js";
+import { getSendWorkerStatus } from "./workers/campaignSendWorker.js";
 import { validateRazorpayConfig } from "./models/PaymentModel/payment.service.js";
 import { logger } from "./utils/logger.js";
+import { authenticate, authorize } from "./middlewares/auth/authMiddlewares.js";
+import { getCampaignDiagnosticsController } from "./models/WhatsappCampaignModel/whatsappcampaign.controller.js";
 import cron from "node-cron";
 import { tableNames } from "./database/tableName.js";
 import { runHardDeleteCron } from "./utils/lifecycle/hardDeleteCron.js";
@@ -133,6 +137,16 @@ app.get("/", (req, res) => {
   res.json({ status: "OK" });
 });
 
+app.get(
+  "/api/campaign/diagnostics",
+  authenticate,
+  authorize({
+    user_type: "tenant",
+    roles: ["tenant_admin", "doctor", "staff", "agent"],
+  }),
+  getCampaignDiagnosticsController,
+);
+
 {
   const MAX_RETRIES = 5;
   const RETRY_DELAY_MS = 3000;
@@ -144,7 +158,9 @@ app.get("/", (req, res) => {
       break;
     } catch (err) {
       lastErr = err;
-      logger.warn(`[DB] Connection attempt ${attempt}/${MAX_RETRIES} failed: ${err.message}`);
+      logger.warn(
+        `[DB] Connection attempt ${attempt}/${MAX_RETRIES} failed: ${err.message}`,
+      );
       if (attempt < MAX_RETRIES) {
         await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
       }
@@ -208,6 +224,12 @@ initCampaignQueues()
 
     startCampaignDispatchWorker();
     startCampaignSendWorker();
+    logger.info(
+      `[STARTUP] Dispatch worker status: ${JSON.stringify(getDispatchWorkerStatus())}`,
+    );
+    logger.info(
+      `[STARTUP] Send worker status: ${JSON.stringify(getSendWorkerStatus())}`,
+    );
     startCampaignSchedulerService();
   })
   .catch((err) => {

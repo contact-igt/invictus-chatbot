@@ -6,7 +6,6 @@
  */
 import { logger } from "../utils/logger.js";
 import db from "../database/index.js";
-import { tableNames } from "../database/tableName.js";
 
 export class CampaignBillingService {
   constructor(redisClient) {
@@ -22,12 +21,20 @@ export class CampaignBillingService {
    */
   async createReservation(tenantId, amount, ttl = 300) {
     try {
+      const reserveAmount = Number(amount);
+      if (!Number.isFinite(reserveAmount) || reserveAmount <= 0) {
+        return {
+          success: false,
+          reason: "Reservation amount must be greater than zero",
+        };
+      }
+
       const reservationId = `billing_reservation:${Date.now()}:${Math.random().toString(36).substr(2, 9)}`;
 
       // Get current wallet balance
-      const wallet = await db.TenantWallets.findOne({
+      const wallet = await db.Wallets.findOne({
         where: { tenant_id: tenantId },
-        attributes: ["balance_inr", "is_active"],
+        attributes: ["balance"],
         raw: true,
       });
 
@@ -38,18 +45,37 @@ export class CampaignBillingService {
         };
       }
 
-      if (!wallet.is_active) {
+      const dbBalance = parseFloat(wallet.balance) || 0;
+
+      if (dbBalance < reserveAmount) {
         return {
           success: false,
-          reason: "Wallet is inactive",
+          reason: `Insufficient balance. Required: ₹${reserveAmount}, Available: ₹${dbBalance}`,
         };
       }
 
-      if (wallet.balance_inr < amount) {
-        return {
-          success: false,
-          reason: `Insufficient balance. Required: ₹${amount}, Available: ₹${wallet.balance_inr}`,
-        };
+      // Keep cache aligned with DB to prevent stale-high balances without
+      // clobbering in-flight reservation deductions.
+      const walletKey = `wallet:balance:${tenantId}`;
+      const cachedBalanceRaw = await this.redis.get(walletKey);
+      if (!cachedBalanceRaw) {
+        await this.redis.set(walletKey, dbBalance.toString());
+        logger.info(
+          `[BILLING] Wallet cache seeded for tenant ${tenantId}: ₹${dbBalance}`,
+        );
+      } else {
+        const cachedBalance = Number(cachedBalanceRaw);
+        if (!Number.isFinite(cachedBalance)) {
+          await this.redis.set(walletKey, dbBalance.toString());
+          logger.warn(
+            `[BILLING] Wallet cache reset for tenant ${tenantId} due to invalid cached balance`,
+          );
+        } else if (dbBalance < cachedBalance) {
+          await this.redis.set(walletKey, dbBalance.toString());
+          logger.warn(
+            `[BILLING] Wallet cache corrected for tenant ${tenantId}: cache ₹${cachedBalance} -> DB ₹${dbBalance}`,
+          );
+        }
       }
 
       // Atomic reservation: check balance and deduct in one operation
@@ -72,7 +98,6 @@ export class CampaignBillingService {
         return {1, balance - reserveAmount}
       `;
 
-      const walletKey = `wallet:balance:${tenantId}`;
       const reservationKey = `reservation:${reservationId}`;
 
       const result = await this.redis.eval(
@@ -80,7 +105,7 @@ export class CampaignBillingService {
         2,
         walletKey,
         reservationKey,
-        amount.toString(),
+        reserveAmount.toString(),
         ttl.toString(),
       );
 
@@ -88,7 +113,7 @@ export class CampaignBillingService {
 
       if (success === 1) {
         logger.info(
-          `[BILLING] Reservation created: ${reservationId} for tenant ${tenantId}, amount: ₹${amount}`,
+          `[BILLING] Reservation created: ${reservationId} for tenant ${tenantId}, amount: ₹${reserveAmount}`,
         );
         return {
           success: true,
@@ -175,26 +200,93 @@ export class CampaignBillingService {
    * Confirm a billing reservation (convert to actual deduction)
    * @param {string} tenantId - Tenant ID
    * @param {string} reservationId - Reservation ID
+   * @param {number|null} consumedAmount - Amount to consume from reservation.
+   * Null consumes all reserved amount.
    * @returns {Promise<boolean>}
    */
-  async confirmReservation(tenantId, reservationId) {
+  async confirmReservation(tenantId, reservationId, consumedAmount = null) {
     try {
       const reservationKey = `reservation:${reservationId}`;
+      const walletKey = `wallet:balance:${tenantId}`;
 
-      // Just delete the reservation - amount is already deducted
-      const deleted = await this.redis.del(reservationKey);
+      const hasCustomAmount =
+        consumedAmount !== null &&
+        consumedAmount !== undefined &&
+        Number.isFinite(Number(consumedAmount));
 
-      if (deleted === 1) {
-        logger.info(
-          `[BILLING] Reservation confirmed: ${reservationId} for tenant ${tenantId}`,
-        );
-        return true;
-      } else {
+      if (!hasCustomAmount) {
+        // Default: consume full reserved amount
+        const deleted = await this.redis.del(reservationKey);
+
+        if (deleted === 1) {
+          logger.info(
+            `[BILLING] Reservation confirmed: ${reservationId} for tenant ${tenantId}`,
+          );
+          return true;
+        }
+
         logger.warn(
           `[BILLING] Reservation not found for confirmation: ${reservationId}`,
         );
         return false;
       }
+
+      const normalizedConsumed = Math.max(0, Number(consumedAmount));
+
+      // Partial confirm: refund (reserved - consumed) back to wallet cache.
+      const script = `
+        local reservationValue = redis.call('get', KEYS[1])
+        if not reservationValue then
+          return {0, 'reservation_not_found'}
+        end
+
+        local reservedAmount = tonumber(reservationValue)
+        local consumed = tonumber(ARGV[1])
+
+        if consumed < 0 then
+          return {0, 'invalid_consumed_amount'}
+        end
+
+        if consumed > reservedAmount then
+          return {0, 'consumed_exceeds_reserved', reservedAmount}
+        end
+
+        local refund = reservedAmount - consumed
+        if refund > 0 then
+          redis.call('incrbyfloat', KEYS[2], refund)
+        end
+
+        redis.call('del', KEYS[1])
+        return {1, refund}
+      `;
+
+      const result = await this.redis.eval(
+        script,
+        2,
+        reservationKey,
+        walletKey,
+        normalizedConsumed.toString(),
+      );
+
+      const [success, info, extra] = result;
+
+      if (success === 1) {
+        const refund = Number(info) || 0;
+        logger.info(
+          `[BILLING] Reservation confirmed: ${reservationId} for tenant ${tenantId}, consumed: ₹${normalizedConsumed}, refunded: ₹${refund}`,
+        );
+        return true;
+      }
+
+      if (info === "consumed_exceeds_reserved") {
+        logger.warn(
+          `[BILLING] Confirm failed for ${reservationId}: consumed exceeds reserved (reserved ₹${extra})`,
+        );
+      } else {
+        logger.warn(`[BILLING] Confirm failed for ${reservationId}: ${info}`);
+      }
+
+      return false;
     } catch (err) {
       logger.error(
         `[BILLING] Failed to confirm reservation ${reservationId}: ${err.message}`,
@@ -210,9 +302,9 @@ export class CampaignBillingService {
    */
   async syncWalletBalance(tenantId) {
     try {
-      const wallet = await db.TenantWallets.findOne({
+      const wallet = await db.Wallets.findOne({
         where: { tenant_id: tenantId },
-        attributes: ["balance_inr"],
+        attributes: ["balance"],
         raw: true,
       });
 
@@ -222,10 +314,10 @@ export class CampaignBillingService {
       }
 
       const walletKey = `wallet:balance:${tenantId}`;
-      await this.redis.set(walletKey, wallet.balance_inr.toString());
+      await this.redis.set(walletKey, wallet.balance.toString());
 
       logger.debug(
-        `[BILLING] Wallet balance synced for tenant ${tenantId}: ₹${wallet.balance_inr}`,
+        `[BILLING] Wallet balance synced for tenant ${tenantId}: ₹${wallet.balance}`,
       );
       return true;
     } catch (err) {

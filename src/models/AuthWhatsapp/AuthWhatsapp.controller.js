@@ -59,6 +59,8 @@ import { tableNames } from "../../database/tableName.js";
 const FIXED_MISSING_INFO_FALLBACK =
   "Our team will get back to you shortly. Please feel free to ask any other questions in the meantime ?";
 
+const ENABLE_APPOINTMENT_BUTTONS = false;
+
 const MISSING_INFO_TAGS = new Set([
   "MISSING_KNOWLEDGE",
   "MISSING_KNOWLEDGEBASE_HOOK",
@@ -889,7 +891,24 @@ export const receiveMessage = async (req, res) => {
 
         // NEW: Build a contact object that the appointment orchestrator expects
         const contactObj = { ...contactsaved, phone_number: phone }; // NEW
-        const effectiveText = buttonReplyId || text; // NEW — use button ID when available
+        const isAppointmentButtonTrigger = Boolean(
+          buttonReplyId &&
+            (buttonReplyId === "create_appointment" ||
+              buttonReplyId === "view_my_appointments" ||
+              buttonReplyId.startsWith("reschedule_") ||
+              buttonReplyId.startsWith("cancel_") ||
+              buttonReplyId.startsWith("slot_") ||
+              buttonReplyId.startsWith("doctor_")),
+        );
+        const ignoreAppointmentButton =
+          !ENABLE_APPOINTMENT_BUTTONS && isAppointmentButtonTrigger;
+        const effectiveText = ignoreAppointmentButton ? text : buttonReplyId || text; // NEW — use button ID when available
+
+        console.log(
+          "[AI FLOW]",
+          "Appointment buttons enabled:",
+          ENABLE_APPOINTMENT_BUTTONS,
+        );
 
         // NEW: Audio / voice guard — appointments are text-only
         if (type === "audio") { // NEW
@@ -901,18 +920,20 @@ export const receiveMessage = async (req, res) => {
         } // NEW
 
         // NEW: Check if user is in a pending confirmation state (YES/NO for any booking flow)
-        const confirmResult = await appointmentOrchestrator.handleConfirmation( // NEW
-          effectiveText, contactObj, tenant_id, // NEW
-        ); // NEW
-        if (confirmResult) { // NEW
-          await handleAppointmentResponse( // NEW
-            confirmResult, tenant_id, phone, contactsaved, phone_number_id, name, // NEW
+        if (!ignoreAppointmentButton) {
+          const confirmResult = await appointmentOrchestrator.handleConfirmation( // NEW
+            effectiveText, contactObj, tenant_id, // NEW
           ); // NEW
-          return; // NEW
-        } // NEW
+          if (confirmResult) { // NEW
+            await handleAppointmentResponse( // NEW
+              confirmResult, tenant_id, phone, contactsaved, phone_number_id, name, // NEW
+            ); // NEW
+            return; // NEW
+          } // NEW
+        }
 
         // NEW: Route button replies that map directly to appointment intents
-        if (buttonReplyId) { // NEW
+        if (ENABLE_APPOINTMENT_BUTTONS && isAppointmentButtonTrigger) { // NEW
           let apptIntent = null; // NEW
           let resolvedMessage = effectiveText; // NEW — may be overridden for slot/doctor decoding
 
@@ -960,7 +981,8 @@ export const receiveMessage = async (req, res) => {
 
         if (
           activeSession &&
-          !["confirming", "processing", "completed", "cancelled"].includes(activeSession.current_step)
+          !["confirming", "processing", "completed", "cancelled"].includes(activeSession.current_step) &&
+          !ignoreAppointmentButton
         ) {
           const apptResult = await appointmentOrchestrator.handleAppointmentIntent(
             "APPOINTMENT_ACTION",

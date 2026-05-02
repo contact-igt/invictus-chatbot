@@ -1,12 +1,12 @@
 /**
  * Campaign BullMQ queue setup.
  *
- * Initialises two queues backed by Redis:
- *   campaign-dispatch  — reads pending recipients and fans out send jobs
- *   campaign-send      — sends one WhatsApp message per job, rate-limited
+ * Queue topology:
+ *   campaign-dispatch           - global queue used by scheduler/dispatch worker
+ *   campaignQueue:{tenant_id}   - per-tenant send queue
+ *   campaignDLQ:{tenant_id}     - per-tenant dead-letter queue
  *
  * Falls back gracefully to cron-based execution when Redis is unavailable.
- * Mirrors the fallback pattern already used in utils/billing/billingQueue.js.
  */
 import net from "net";
 import { logger } from "../utils/logger.js";
@@ -17,11 +17,86 @@ const CONNECT_TIMEOUT_MS = Number(
 );
 
 let campaignDispatchQueue = null;
-let campaignSendQueue = null;
 let redisConnection = null;
 let queueAvailable = false;
 let queueDisabling = false;
 let queueDisableLogged = false;
+let BullmqQueueCtor = null;
+
+const tenantSendQueues = new Map();
+const tenantDlqQueues = new Map();
+const knownTenantIds = new Set();
+
+const DISPATCH_QUEUE_NAME = "campaign-dispatch";
+
+export const getCampaignDispatchQueueName = () => DISPATCH_QUEUE_NAME;
+
+const getQueueConfig = () => {
+  const jobAttempts = parseInt(process.env.CAMPAIGN_JOB_ATTEMPTS || "3", 10);
+  const jobBackoffDelay = parseInt(
+    process.env.CAMPAIGN_JOB_BACKOFF_DELAY || "300000",
+    10,
+  );
+  const defaultRateMax = parseInt(
+    process.env.CAMPAIGN_SEND_RATE_MAX || "3500",
+    10,
+  );
+  const defaultRateDuration = parseInt(
+    process.env.CAMPAIGN_SEND_RATE_DURATION || "60000",
+    10,
+  );
+
+  return {
+    jobAttempts,
+    jobBackoffDelay,
+    defaultRateMax,
+    defaultRateDuration,
+  };
+};
+
+const parseTenantRateLimitOverrides = () => {
+  const raw = process.env.CAMPAIGN_TENANT_RATE_LIMITS;
+  if (!raw) return {};
+
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return {};
+    return parsed;
+  } catch (err) {
+    logger.warn(
+      `[CAMPAIGN-QUEUE] Invalid CAMPAIGN_TENANT_RATE_LIMITS JSON: ${err.message}`,
+    );
+    return {};
+  }
+};
+
+const assertReady = () => {
+  if (!queueAvailable || !redisConnection) {
+    throw new Error("Campaign queue is not available");
+  }
+};
+
+const normalizeTenantId = (tenant_id) => {
+  const normalized = String(tenant_id || "").trim();
+  if (!normalized) {
+    throw new Error("tenant_id is required for tenant queue operations");
+  }
+  return normalized;
+};
+
+export const getTenantQueueName = (tenant_id) =>
+  `campaignQueue:${normalizeTenantId(tenant_id)}`;
+
+export const getTenantDLQName = (tenant_id) =>
+  `campaignDLQ:${normalizeTenantId(tenant_id)}`;
+
+export const getTenantRateLimit = (tenant_id) => {
+  const normalizedTenantId = normalizeTenantId(tenant_id);
+  const { defaultRateMax } = getQueueConfig();
+  const overrides = parseTenantRateLimitOverrides();
+  const value = Number(overrides[normalizedTenantId]);
+  return Number.isFinite(value) && value > 0 ? value : defaultRateMax;
+};
 
 // ── Redis reachability check (same approach as billingQueue.js) ──────────────
 
@@ -54,12 +129,36 @@ const checkRedisReachability = (url, timeoutMs = CONNECT_TIMEOUT_MS) =>
     socket.once("error", (err) => done({ ok: false, reason: err.message }));
   });
 
+const closeTenantQueues = async () => {
+  for (const queue of tenantSendQueues.values()) {
+    try {
+      await queue.close();
+    } catch (err) {
+      logger.warn(
+        `[CAMPAIGN-QUEUE] Failed to close tenant send queue: ${err.message}`,
+      );
+    }
+  }
+
+  for (const queue of tenantDlqQueues.values()) {
+    try {
+      await queue.close();
+    } catch (err) {
+      logger.warn(
+        `[CAMPAIGN-QUEUE] Failed to close tenant DLQ queue: ${err.message}`,
+      );
+    }
+  }
+
+  tenantSendQueues.clear();
+  tenantDlqQueues.clear();
+};
+
 // ── Queue initialisation ──────────────────────────────────────────────────────
 
 export const initCampaignQueues = async () => {
-  // Prevent double-initialization
   if (redisConnection) {
-    logger.info("[CAMPAIGN-QUEUE] Already initialized — skipping re-init");
+    logger.info("[CAMPAIGN-QUEUE] Already initialized - skipping re-init");
     return;
   }
 
@@ -68,7 +167,7 @@ export const initCampaignQueues = async () => {
   const reachable = await checkRedisReachability(redisUrl);
   if (!reachable.ok) {
     logger.warn(
-      `[CAMPAIGN-QUEUE] Redis unreachable (${reachable.reason}) — falling back to cron-based execution`,
+      `[CAMPAIGN-QUEUE] Redis unreachable (${reachable.reason}) - falling back to cron-based execution`,
     );
     return;
   }
@@ -80,14 +179,15 @@ export const initCampaignQueues = async () => {
     ]);
 
     const { Queue } = bullmqModule;
+    BullmqQueueCtor = Queue;
     const IORedis = ioredisModule.default || ioredisModule;
+    const { jobAttempts, jobBackoffDelay } = getQueueConfig();
 
     redisConnection = new IORedis(redisUrl, {
       maxRetriesPerRequest: null,
       enableReadyCheck: false,
     });
 
-    // Runtime handlers: disable queues if Redis connection is lost
     const logQueueDisabledOnce = (message, detail) => {
       if (queueDisableLogged) return;
       queueDisableLogged = true;
@@ -102,11 +202,9 @@ export const initCampaignQueues = async () => {
       if (queueDisabling) return;
       queueDisabling = true;
 
-      const q1 = campaignDispatchQueue;
-      const q2 = campaignSendQueue;
+      const dispatchQueue = campaignDispatchQueue;
 
       campaignDispatchQueue = null;
-      campaignSendQueue = null;
       queueAvailable = false;
 
       logQueueDisabledOnce(
@@ -115,25 +213,20 @@ export const initCampaignQueues = async () => {
       );
 
       try {
-        if (q1) await q1.close();
+        if (dispatchQueue) await dispatchQueue.close();
       } catch (closeErr) {
         logger.warn(
           `[CAMPAIGN-QUEUE] Failed to close dispatch queue: ${closeErr.message}`,
         );
       }
-      try {
-        if (q2) await q2.close();
-      } catch (closeErr) {
-        logger.warn(
-          `[CAMPAIGN-QUEUE] Failed to close send queue: ${closeErr.message}`,
-        );
-      }
+
+      await closeTenantQueues();
 
       try {
         if (redisConnection) {
           try {
             redisConnection.disconnect();
-          } catch (e) {
+          } catch {
             // ignore
           }
         }
@@ -152,7 +245,7 @@ export const initCampaignQueues = async () => {
     });
 
     redisConnection.on("end", (err) => {
-      logger.warn(`[CAMPAIGN-QUEUE] Redis connection ended`);
+      logger.warn("[CAMPAIGN-QUEUE] Redis connection ended");
       void disableCampaignQueues(
         "[CAMPAIGN-QUEUE] Redis connection ended - queues disabled, switching to cron fallback.",
         err,
@@ -160,67 +253,176 @@ export const initCampaignQueues = async () => {
     });
 
     redisConnection.on("close", (err) => {
-      logger.warn(`[CAMPAIGN-QUEUE] Redis connection closed`);
+      logger.warn("[CAMPAIGN-QUEUE] Redis connection closed");
       void disableCampaignQueues(
         "[CAMPAIGN-QUEUE] Redis connection closed - queues disabled, switching to cron fallback.",
         err,
       );
     });
 
-    const jobAttempts = parseInt(process.env.CAMPAIGN_JOB_ATTEMPTS || "3");
-    const jobBackoffDelay = parseInt(
-      process.env.CAMPAIGN_JOB_BACKOFF_DELAY || "300000",
-    );
-    const sendRateMax = parseInt(process.env.CAMPAIGN_SEND_RATE_MAX || "80");
-    const sendRateDuration = parseInt(
-      process.env.CAMPAIGN_SEND_RATE_DURATION || "60000",
-    );
-
-    campaignDispatchQueue = new Queue("campaign-dispatch", {
+    campaignDispatchQueue = new Queue(DISPATCH_QUEUE_NAME, {
       connection: redisConnection,
       defaultJobOptions: {
-        // Dispatch jobs are driven by the cron — no BullMQ retries needed here
         attempts: 1,
         removeOnComplete: { count: 5000 },
         removeOnFail: { count: 1000 },
       },
     });
 
-    campaignSendQueue = new Queue("campaign-send", {
-      connection: redisConnection,
-      defaultJobOptions: {
-        attempts: jobAttempts,
-        backoff: { type: "exponential", delay: jobBackoffDelay },
-        removeOnComplete: { count: 50000 },
-        removeOnFail: { count: 10000 },
-      },
-    });
-
     queueAvailable = true;
     logger.info(
-      `[CAMPAIGN-QUEUE] Initialized — rateLimit=${sendRateMax}/${sendRateDuration}ms attempts=${jobAttempts} backoff=${jobBackoffDelay}ms`,
+      `[CAMPAIGN-QUEUE] Initialized - dispatchQueue=${DISPATCH_QUEUE_NAME} attempts=${jobAttempts} backoff=${jobBackoffDelay}ms`,
     );
   } catch (err) {
     logger.warn(
-      `[CAMPAIGN-QUEUE] Initialization failed — falling back to cron: ${err.message}`,
+      `[CAMPAIGN-QUEUE] Initialization failed - falling back to cron: ${err.message}`,
     );
     queueAvailable = false;
   }
 };
 
-// ── Accessors ─────────────────────────────────────────────────────────────────
+// ── Queue accessors ──────────────────────────────────────────────────────────
 
 export const getCampaignDispatchQueue = () => campaignDispatchQueue;
-export const getCampaignSendQueue = () => campaignSendQueue;
 export const getRedisConnection = () => redisConnection;
 export const isCampaignQueueAvailable = () => queueAvailable;
+export const getKnownTenantIds = () => Array.from(knownTenantIds);
+
+export const getCampaignQueueHealth = async () => {
+  if (!queueAvailable || !campaignDispatchQueue) {
+    return {
+      queue_available: false,
+      dispatch_queue: null,
+      tenant_queues: [],
+      totals: {
+        waiting: 0,
+        active: 0,
+        failed: 0,
+        delayed: 0,
+      },
+    };
+  }
+
+  const dispatchCounts = await campaignDispatchQueue.getJobCounts(
+    "waiting",
+    "active",
+    "failed",
+    "delayed",
+  );
+
+  const tenantQueues = [];
+  const totals = {
+    waiting: dispatchCounts.waiting || 0,
+    active: dispatchCounts.active || 0,
+    failed: dispatchCounts.failed || 0,
+    delayed: dispatchCounts.delayed || 0,
+  };
+
+  for (const [tenantId, queue] of tenantSendQueues.entries()) {
+    const counts = await queue.getJobCounts(
+      "waiting",
+      "active",
+      "failed",
+      "delayed",
+    );
+
+    totals.waiting += counts.waiting || 0;
+    totals.active += counts.active || 0;
+    totals.failed += counts.failed || 0;
+    totals.delayed += counts.delayed || 0;
+
+    tenantQueues.push({
+      tenant_id: tenantId,
+      queue_name: queue.name,
+      waiting: counts.waiting || 0,
+      active: counts.active || 0,
+      failed: counts.failed || 0,
+      delayed: counts.delayed || 0,
+    });
+  }
+
+  return {
+    queue_available: true,
+    dispatch_queue: {
+      queue_name: campaignDispatchQueue.name,
+      waiting: dispatchCounts.waiting || 0,
+      active: dispatchCounts.active || 0,
+      failed: dispatchCounts.failed || 0,
+      delayed: dispatchCounts.delayed || 0,
+    },
+    tenant_queues: tenantQueues,
+    totals,
+  };
+};
+
+export const getTenantQueue = (tenant_id) => {
+  assertReady();
+  const normalizedTenantId = normalizeTenantId(tenant_id);
+  const existing = tenantSendQueues.get(normalizedTenantId);
+  if (existing) return existing;
+
+  const queueName = getTenantQueueName(normalizedTenantId);
+  const { jobAttempts, jobBackoffDelay } = getQueueConfig();
+
+  const { Queue } = requireBullmqQueue();
+  const queue = new Queue(queueName, {
+    connection: redisConnection,
+    defaultJobOptions: {
+      attempts: jobAttempts,
+      backoff: { type: "exponential", delay: jobBackoffDelay },
+      removeOnComplete: { count: 50000 },
+      removeOnFail: { count: 10000 },
+    },
+  });
+
+  tenantSendQueues.set(normalizedTenantId, queue);
+  knownTenantIds.add(normalizedTenantId);
+  logger.info(
+    `[CAMPAIGN-QUEUE] Created tenant send queue ${queueName} (tenant=${normalizedTenantId})`,
+  );
+  return queue;
+};
+
+export const getTenantDLQ = (tenant_id) => {
+  assertReady();
+  const normalizedTenantId = normalizeTenantId(tenant_id);
+  const existing = tenantDlqQueues.get(normalizedTenantId);
+  if (existing) return existing;
+
+  const queueName = getTenantDLQName(normalizedTenantId);
+  const { Queue } = requireBullmqQueue();
+  const queue = new Queue(queueName, {
+    connection: redisConnection,
+    defaultJobOptions: {
+      attempts: 1,
+      removeOnComplete: false,
+      removeOnFail: false,
+    },
+  });
+
+  tenantDlqQueues.set(normalizedTenantId, queue);
+  knownTenantIds.add(normalizedTenantId);
+  logger.info(
+    `[CAMPAIGN-QUEUE] Created tenant DLQ ${queueName} (tenant=${normalizedTenantId})`,
+  );
+  return queue;
+};
+
+const requireBullmqQueue = () => {
+  if (!BullmqQueueCtor) {
+    throw new Error(
+      "BullMQ Queue constructor not initialized. Call initCampaignQueues first.",
+    );
+  }
+  return { Queue: BullmqQueueCtor };
+};
 
 // ── Graceful shutdown ─────────────────────────────────────────────────────────
 
 export const closeCampaignQueues = async () => {
   try {
     if (campaignDispatchQueue) await campaignDispatchQueue.close();
-    if (campaignSendQueue) await campaignSendQueue.close();
+    await closeTenantQueues();
     if (redisConnection) redisConnection.disconnect();
     logger.info("[CAMPAIGN-QUEUE] Closed gracefully");
   } catch (err) {

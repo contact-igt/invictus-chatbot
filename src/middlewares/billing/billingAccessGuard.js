@@ -263,7 +263,15 @@ export const requireCampaignAccess = async (req, res, next) => {
       const countResult = await db.WhatsappCampaignRecipients.count({
         where: { campaign_id, status: "pending" },
       });
-      recipientCount = countResult || 1;
+      const pendingCount = countResult || 1;
+
+      // For manual execute we only need access to start one execution batch.
+      // Ongoing per-batch billing checks will pause the campaign if funds drop.
+      const batchGuardSize = parseInt(
+        process.env.CAMPAIGN_EXECUTE_GUARD_BATCH_SIZE || "15",
+        10,
+      );
+      recipientCount = Math.max(1, Math.min(pendingCount, batchGuardSize));
     }
 
     // Get template category from campaign's template

@@ -19,6 +19,11 @@ import { estimateMetaCost } from "../../utils/billing/costEstimator.js";
 import { uploadMediaService } from "../GalleryModel/gallery.service.js";
 import { getWhatsappAccountByTenantService } from "../WhatsappAccountModel/whatsappAccount.service.js";
 import { hasSecret } from "../TenantSecretsModel/tenantSecrets.service.js";
+import { getCampaignDiagnosticsService } from "../../services/campaignDiagnostics.service.js";
+import {
+  isCampaignQueueAvailable,
+  getCampaignDispatchQueue,
+} from "../../queues/campaignQueue.js";
 
 /**
  * GET /whatsapp-campaign/estimate-cost
@@ -275,6 +280,40 @@ export const createCampaignController = async (req, res) => {
       console.log(
         `[CAMPAIGN-CREATE] Scheduled campaign ${campaign.campaign_id} — will execute at ${req.body.scheduled_at}`,
       );
+
+      // Queue a delayed dispatch so execution starts exactly at scheduled_at.
+      // Cron-based scheduler still exists as a safety fallback.
+      if (isCampaignQueueAvailable() && req.body.scheduled_at) {
+        try {
+          const dispatchQueue = getCampaignDispatchQueue();
+          const scheduledTs = new Date(req.body.scheduled_at).getTime();
+          const delay = Math.max(0, scheduledTs - Date.now());
+
+          await dispatchQueue.add(
+            "campaign-dispatch",
+            {
+              campaign_id: campaign.campaign_id,
+              tenant_id,
+              after_id: 0,
+            },
+            {
+              delay,
+              // Keep scheduled dispatch job IDs unique so retries/re-queues are
+              // never blocked by historical completed jobs with the same ID.
+              jobId: `dispatch:${campaign.campaign_id}:scheduled:${scheduledTs}:${Date.now()}`,
+            },
+          );
+
+          console.log(
+            `[CAMPAIGN-CREATE] Delayed dispatch queued for ${campaign.campaign_id} with delay=${delay}ms`,
+          );
+        } catch (queueErr) {
+          console.error(
+            `[CAMPAIGN-CREATE] Failed to enqueue delayed dispatch for ${campaign.campaign_id}:`,
+            queueErr.message,
+          );
+        }
+      }
     }
 
     return res.status(200).send({
@@ -379,6 +418,22 @@ export const getCampaignStatsController = async (req, res) => {
   }
 };
 
+export const getCampaignDiagnosticsController = async (_req, res) => {
+  try {
+    const data = await getCampaignDiagnosticsService();
+    return res.status(200).json({
+      success: true,
+      message: "Campaign diagnostics fetched",
+      data,
+    });
+  } catch (err) {
+    return res.status(500).json({
+      success: false,
+      message: err.message,
+    });
+  }
+};
+
 export const getCampaignListController = async (req, res) => {
   const tenant_id = req.user.tenant_id;
   try {
@@ -447,7 +502,7 @@ export const triggerCampaignExecutionController = async (req, res) => {
 
   const campaign = await db.WhatsappCampaigns.findOne({
     where: { campaign_id, tenant_id, is_deleted: false },
-    attributes: ["campaign_id", "status"],
+    attributes: ["id", "campaign_id", "status"],
   });
 
   if (!campaign) {
@@ -470,7 +525,33 @@ export const triggerCampaignExecutionController = async (req, res) => {
     await campaign.update({ status: "active" });
   }
 
-  // Fire-and-forget: respond immediately, run batch in background
+  // Prefer queue-based dispatch for immediate execution reliability.
+  if (isCampaignQueueAvailable()) {
+    try {
+      const dispatchQueue = getCampaignDispatchQueue();
+      await dispatchQueue.add(
+        "campaign-dispatch",
+        {
+          campaign_id,
+          tenant_id,
+          after_id: 0,
+        },
+        {
+          // Unique manual trigger ID avoids stale dedupe collisions.
+          jobId: `dispatch:${campaign_id}:manual:${Date.now()}`,
+        },
+      );
+
+      return res.status(202).send({ message: "Campaign execution queued" });
+    } catch (queueErr) {
+      console.error(
+        `[Campaign Trigger] Queue enqueue failed for campaign ${campaign_id}:`,
+        queueErr.message,
+      );
+    }
+  }
+
+  // Fallback path when queue is unavailable or enqueue fails.
   setImmediate(async () => {
     try {
       await executeCampaignBatchService(campaign_id, tenant_id, 15);

@@ -17,6 +17,9 @@ import { Worker } from "bullmq";
 import { logger } from "../utils/logger.js";
 import {
   getRedisConnection,
+  getTenantDLQ,
+  getTenantQueueName,
+  getTenantRateLimit,
   isCampaignQueueAvailable,
 } from "../queues/campaignQueue.js";
 import { getTemplateComponents } from "../utils/templateCache.js";
@@ -41,6 +44,7 @@ import {
   updateLiveChatTimestampService,
 } from "../models/LiveChatModel/livechat.service.js";
 import { generateWhatsAppOTPService } from "../models/OtpVerificationModel/otpverification.service.js";
+import { recordCampaignDiagnosticEvent } from "../utils/campaignDiagnosticsEvents.js";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -70,6 +74,24 @@ const isFinallyPermanent = (err) => {
 
 async function processSendJob(job) {
   const { campaign_id, tenant_id, recipient_id } = job.data;
+  logger.info(
+    `[SEND-WORKER] Sending message campaign=${campaign_id} tenant=${tenant_id} recipient=${recipient_id}`,
+  );
+  logger.info(
+    `[SEND-WORKER] Executing job id=${job.id} campaign=${campaign_id} tenant=${tenant_id} recipient=${recipient_id} attempt=${job.attemptsMade + 1}`,
+  );
+  recordCampaignDiagnosticEvent({
+    source: "send-worker",
+    type: "worker_processed",
+    message: `Send worker processing recipient=${recipient_id} campaign=${campaign_id}`,
+    meta: {
+      job_id: job.id,
+      campaign_id,
+      tenant_id,
+      recipient_id,
+      attempt: job.attemptsMade + 1,
+    },
+  });
 
   // Load campaign + template in one query
   const campaign = await db.WhatsappCampaigns.findOne({
@@ -410,6 +432,18 @@ async function processSendJob(job) {
             if (
               cardHeader &&
               ["IMAGE", "VIDEO"].includes(cardHeader.format) &&
+              !cardMediaUrl
+            ) {
+              throw Object.assign(
+                new Error(
+                  `Missing carousel media for card ${idx + 1} (${cardHeader.format}) in campaign ${campaign_id}`,
+                ),
+                { validation: true },
+              );
+            }
+            if (
+              cardHeader &&
+              ["IMAGE", "VIDEO"].includes(cardHeader.format) &&
               cardMediaUrl
             ) {
               cardComponents.push({
@@ -437,7 +471,7 @@ async function processSendJob(job) {
     if (!formattedPhone) {
       throw Object.assign(
         new Error(
-          `Invalid phone number "${recipient.mobile_number}" — must be 10–15 digits with country code`,
+          `Invalid phone number "${recipient.mobile_number}" — must be either a 10-digit local number or a 12-digit country+number`,
         ),
         { validation: true, permanent: true },
       );
@@ -684,6 +718,38 @@ async function processSendJob(job) {
     logger.info(
       `[SEND-WORKER] Sent — campaign=${campaign_id} recipient=${recipient_id} phone=${formattedPhone}`,
     );
+
+    const remainingRecipients = await db.WhatsappCampaignRecipients.count({
+      where: { campaign_id, status: "pending", is_deleted: false },
+    });
+
+    logger.info(
+      `[SEND-WORKER] campaign_id=${campaign_id} remaining_pending=${remainingRecipients} status=${campaign.status}`,
+    );
+
+    if (remainingRecipients === 0) {
+      await db.WhatsappCampaigns.update(
+        { status: "completed" },
+        {
+          where: {
+            campaign_id,
+            tenant_id,
+            status: { [db.Sequelize.Op.in]: ["active", "scheduled", "failed"] },
+            is_deleted: false,
+          },
+        },
+      );
+      logger.info(
+        `[SEND-WORKER] Campaign ${campaign_id} marked completed (remaining_pending=0)`,
+      );
+    }
+
+    recordCampaignDiagnosticEvent({
+      source: "send-worker",
+      type: "worker_processed",
+      message: `Recipient sent campaign=${campaign_id} recipient=${recipient_id}`,
+      meta: { campaign_id, tenant_id, recipient_id, phone: formattedPhone },
+    });
   } catch (err) {
     // Classify the error
     const isPermErr = isFinallyPermanent(err);
@@ -707,13 +773,157 @@ async function processSendJob(job) {
     logger.warn(
       `[SEND-WORKER] Retryable failure for recipient ${recipient_id} (attempt ${job.attemptsMade + 1}): ${err.message}`,
     );
+    recordCampaignDiagnosticEvent({
+      source: "send-worker",
+      type: "error",
+      level: "warn",
+      message: `Retryable failure recipient=${recipient_id}: ${err.message}`,
+      meta: {
+        campaign_id,
+        tenant_id,
+        recipient_id,
+        attempt: job.attemptsMade + 1,
+      },
+    });
     throw err;
   }
 }
 
 // ── Worker lifecycle ──────────────────────────────────────────────────────────
 
-let sendWorker = null;
+const sendWorkers = new Map();
+
+const markRecipientPermanentlyFailed = async (recipientId, errorMessage) => {
+  try {
+    await db.WhatsappCampaignRecipients.update(
+      {
+        status: "permanently_failed",
+        error_message: errorMessage,
+        last_error: errorMessage,
+        retry_count: 3,
+        next_retry_at: null,
+      },
+      { where: { id: recipientId } },
+    );
+  } catch (updateErr) {
+    logger.error(
+      `[SEND-WORKER] Could not mark recipient ${recipientId} permanently_failed: ${updateErr.message}`,
+    );
+  }
+};
+
+const pushFailedJobToTenantDlq = async (tenantId, job, err) => {
+  try {
+    const dlq = getTenantDLQ(tenantId);
+    await dlq.add(
+      "campaign-send-dlq",
+      {
+        tenant_id: tenantId,
+        original_queue: getTenantQueueName(tenantId),
+        failed_at: new Date().toISOString(),
+        reason: err.message,
+        attempts_made: job.attemptsMade,
+        job_id: job.id,
+        payload: job.data,
+      },
+      {
+        jobId: `dlq:${job.id || `${job.data?.recipient_id}:${Date.now()}`}`,
+      },
+    );
+  } catch (dlqErr) {
+    logger.error(
+      `[SEND-WORKER] Failed to move job ${job?.id} to tenant DLQ ${tenantId}: ${dlqErr.message}`,
+    );
+  }
+};
+
+const createTenantSendWorker = (tenantId) => {
+  if (sendWorkers.has(tenantId)) {
+    return sendWorkers.get(tenantId);
+  }
+
+  const connection = getRedisConnection();
+  const queueName = getTenantQueueName(tenantId);
+  const perTenantConcurrency = parseInt(
+    process.env.CAMPAIGN_SEND_CONCURRENCY_PER_TENANT || "5",
+    10,
+  );
+  const rateDuration = parseInt(
+    process.env.CAMPAIGN_SEND_RATE_DURATION || "60000",
+    10,
+  );
+  const tenantLimit = getTenantRateLimit(tenantId);
+
+  const worker = new Worker(queueName, processSendJob, {
+    connection,
+    concurrency: perTenantConcurrency,
+    limiter: { max: tenantLimit, duration: rateDuration },
+  });
+
+  worker.on("failed", async (job, err) => {
+    if (!job) return;
+
+    logger.error(
+      `[SEND-WORKER] All retries exhausted for tenant ${tenantId} job ${job.id} (recipient=${job.data.recipient_id}): ${err.message}`,
+    );
+    recordCampaignDiagnosticEvent({
+      source: "send-worker",
+      type: "error",
+      level: "error",
+      message: `Retries exhausted tenant=${tenantId} recipient=${job.data.recipient_id}: ${err.message}`,
+      meta: {
+        tenant_id: tenantId,
+        job_id: job.id,
+        recipient_id: job.data.recipient_id,
+      },
+    });
+
+    await markRecipientPermanentlyFailed(job.data.recipient_id, err.message);
+    await pushFailedJobToTenantDlq(tenantId, job, err);
+  });
+
+  worker.on("error", (err) => {
+    logger.error(
+      `[SEND-WORKER] Worker error (tenant=${tenantId}, queue=${queueName}): ${err.message}`,
+    );
+  });
+
+  sendWorkers.set(tenantId, worker);
+  logger.info(
+    `[SEND-WORKER] Started tenant worker queue=${queueName} concurrency=${perTenantConcurrency} limiter=${tenantLimit}/${rateDuration}ms`,
+  );
+  recordCampaignDiagnosticEvent({
+    source: "send-worker",
+    type: "worker_started",
+    message: `Tenant send worker started queue=${queueName}`,
+    meta: {
+      tenant_id: tenantId,
+      queue_name: queueName,
+      concurrency: perTenantConcurrency,
+      tenant_limit: tenantLimit,
+      rate_duration: rateDuration,
+    },
+  });
+  return worker;
+};
+
+export const ensureTenantSendWorker = (tenant_id) => {
+  if (!isCampaignQueueAvailable()) return null;
+
+  const tenantId = String(tenant_id || "").trim();
+  if (!tenantId) {
+    logger.warn(
+      "[SEND-WORKER] ensureTenantSendWorker called without tenant_id",
+    );
+    return null;
+  }
+
+  if (sendWorkers.has(tenantId)) {
+    return sendWorkers.get(tenantId);
+  }
+
+  return createTenantSendWorker(tenantId);
+};
 
 export const startCampaignSendWorker = () => {
   if (!isCampaignQueueAvailable()) {
@@ -723,55 +933,31 @@ export const startCampaignSendWorker = () => {
     return;
   }
 
-  const connection = getRedisConnection();
-  const concurrency = parseInt(process.env.CAMPAIGN_SEND_CONCURRENCY || "50");
-  const rateMax = parseInt(process.env.CAMPAIGN_SEND_RATE_MAX || "3500");
-  const rateDuration = parseInt(
-    process.env.CAMPAIGN_SEND_RATE_DURATION || "60000",
-  );
-
-  sendWorker = new Worker("campaign-send", processSendJob, {
-    connection,
-    concurrency,
-    limiter: { max: rateMax, duration: rateDuration },
-  });
-
-  // After ALL retry attempts exhausted, mark the recipient permanently failed
-  sendWorker.on("failed", async (job, err) => {
-    if (!job) return;
-    logger.error(
-      `[SEND-WORKER] All retries exhausted for job ${job.id} (recipient=${job.data.recipient_id}): ${err.message}`,
-    );
-    try {
-      await db.WhatsappCampaignRecipients.update(
-        {
-          status: "permanently_failed",
-          error_message: err.message,
-          last_error: err.message,
-          retry_count: 3,
-          next_retry_at: null,
-        },
-        { where: { id: job.data.recipient_id } },
-      );
-    } catch (updateErr) {
-      logger.error(
-        `[SEND-WORKER] Could not mark recipient ${job.data.recipient_id} permanently_failed: ${updateErr.message}`,
-      );
-    }
-  });
-
-  sendWorker.on("error", (err) => {
-    logger.error(`[SEND-WORKER] Worker error: ${err.message}`);
-  });
-
   logger.info(
-    `[SEND-WORKER] Started — concurrency=${concurrency} rateLimit=${rateMax} per ${rateDuration}ms`,
+    "[SEND-WORKER] Tenant worker manager started. Workers will be created lazily per tenant queue.",
   );
 };
 
 export const closeSendWorker = async () => {
-  if (sendWorker) {
-    await sendWorker.close();
-    logger.info("[SEND-WORKER] Closed");
+  for (const [tenantId, worker] of sendWorkers.entries()) {
+    try {
+      await worker.close();
+      logger.info(`[SEND-WORKER] Closed worker for tenant ${tenantId}`);
+    } catch (err) {
+      logger.warn(
+        `[SEND-WORKER] Failed to close worker for tenant ${tenantId}: ${err.message}`,
+      );
+    }
   }
+  sendWorkers.clear();
+};
+
+export const getSendWorkerStatus = () => {
+  const tenants = Array.from(sendWorkers.keys());
+  return {
+    running: sendWorkers.size > 0,
+    worker_type: "campaign-send-tenant",
+    active_worker_count: sendWorkers.size,
+    active_tenant_ids: tenants,
+  };
 };

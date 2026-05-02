@@ -21,16 +21,16 @@ import { logger } from "../utils/logger.js";
 import {
   getRedisConnection,
   getCampaignDispatchQueue,
-  getCampaignSendQueue,
+  getCampaignDispatchQueueName,
+  getTenantQueue,
   isCampaignQueueAvailable,
 } from "../queues/campaignQueue.js";
-import { canSendCampaign } from "../utils/billing/walletGuard.js";
 import { estimateMetaCost } from "../utils/billing/costEstimator.js";
 import { getRedisLock } from "../utils/redis/redisLock.js";
-import { getCampaignCache } from "../utils/redis/redisCache.js";
 import { getCampaignBillingService } from "../services/campaignBillingService.js";
 import db from "../database/index.js";
-import { randomUUID } from "crypto";
+import { ensureTenantSendWorker } from "./campaignSendWorker.js";
+import { recordCampaignDiagnosticEvent } from "../utils/campaignDiagnosticsEvents.js";
 
 const PAGE_SIZE = parseInt(process.env.CAMPAIGN_DISPATCH_PAGE_SIZE || "500");
 const LOCK_TTL = parseInt(process.env.CAMPAIGN_DISPATCH_LOCK_TTL || "120"); // seconds
@@ -39,20 +39,44 @@ const LOCK_TTL = parseInt(process.env.CAMPAIGN_DISPATCH_LOCK_TTL || "120"); // s
 
 async function processDispatchJob(job) {
   const { campaign_id, tenant_id, after_id = 0 } = job.data;
+  logger.info(
+    `[DISPATCH-WORKER] Processing campaign ${campaign_id} for tenant ${tenant_id}`,
+  );
+  logger.info(
+    `[DISPATCH-WORKER] Processing dispatch job campaign=${campaign_id} tenant=${tenant_id} after_id=${after_id}`,
+  );
+  recordCampaignDiagnosticEvent({
+    source: "dispatch-worker",
+    type: "worker_processed",
+    message: `Dispatch processing campaign=${campaign_id} tenant=${tenant_id} after_id=${after_id}`,
+    meta: { campaign_id, tenant_id, after_id, job_id: job.id },
+  });
 
   const redis = getRedisConnection();
-  const sendQueue = getCampaignSendQueue();
   const dispatchQueue = getCampaignDispatchQueue();
+  let sendQueue = null;
+  let billingReservation = null;
+  let billingSettlement = "none";
+  let consumedBillingAmount = 0;
 
-  if (!redis || !sendQueue || !dispatchQueue) {
+  if (!redis || !dispatchQueue) {
     logger.warn(
       `[DISPATCH-WORKER] Queue/Redis not available for campaign ${campaign_id} — skipping`,
     );
     return;
   }
 
+  try {
+    sendQueue = getTenantQueue(tenant_id);
+    ensureTenantSendWorker(tenant_id);
+  } catch (err) {
+    logger.warn(
+      `[DISPATCH-WORKER] Tenant queue unavailable for tenant ${tenant_id}: ${err.message}`,
+    );
+    return;
+  }
+
   const redisLock = getRedisLock(redis);
-  const campaignCache = getCampaignCache(redis);
   const billingService = getCampaignBillingService(redis);
 
   // ── Acquire improved distributed Redis lock ─────────────────────────────────
@@ -72,12 +96,19 @@ async function processDispatchJob(job) {
     // ── Load campaign ─────────────────────────────────────────────────────
     const campaign = await db.WhatsappCampaigns.findOne({
       where: { campaign_id, tenant_id, is_deleted: false },
-      attributes: ["campaign_id", "tenant_id", "status", "template_id"],
+      attributes: ["id", "campaign_id", "tenant_id", "status", "template_id"],
     });
 
     if (!campaign) {
       logger.warn(`[DISPATCH-WORKER] Campaign ${campaign_id} not found`);
       return;
+    }
+
+    if (campaign.status === "scheduled") {
+      await campaign.update({ status: "active" });
+      logger.info(
+        `[DISPATCH-WORKER] Campaign ${campaign_id} moved scheduled -> active before dispatch`,
+      );
     }
 
     if (["paused", "cancelled", "completed"].includes(campaign.status)) {
@@ -88,54 +119,6 @@ async function processDispatchJob(job) {
     }
 
     // ── Billing check with atomic reservation ─────────────────
-    let billingReservation = null;
-    try {
-      const template = await db.WhatsappTemplates.findOne({
-        where: { template_id: campaign.template_id },
-        attributes: ["category"],
-        raw: true,
-      });
-      const category = (template?.category || "marketing").toLowerCase();
-
-      const tenant = await db.Tenants.findOne({
-        where: { tenant_id },
-        attributes: ["country", "owner_country_code", "timezone"],
-        raw: true,
-      });
-      const isIndia =
-        tenant?.owner_country_code === "91" ||
-        tenant?.timezone === "Asia/Kolkata";
-      const billingCountry = tenant?.country || (isIndia ? "IN" : "Global");
-
-      const cost = await estimateMetaCost(category, billingCountry);
-      const batchCost = cost.totalCostInr * PAGE_SIZE;
-
-      // Create atomic billing reservation
-      const reservationResult = await billingService.createReservation(
-        tenant_id,
-        batchCost,
-        300,
-      ); // 5 min TTL
-
-      if (!reservationResult.success) {
-        logger.warn(
-          `[DISPATCH-WORKER] Campaign ${campaign_id} billing reservation failed — ${reservationResult.reason}`,
-        );
-        await campaign.update({ status: "paused" });
-        return;
-      }
-
-      billingReservation = reservationResult.reservationId;
-      logger.info(
-        `[DISPATCH-WORKER] Billing reservation created: ${billingReservation} for ₹${batchCost}`,
-      );
-    } catch (billingErr) {
-      logger.error(
-        `[DISPATCH-WORKER] Billing check error for ${campaign_id}: ${billingErr.message}`,
-      );
-      return;
-    }
-
     // ── Fetch a page of pending recipients (keyset pagination for performance) ─────────────────
     const whereClause = {
       campaign_id,
@@ -156,37 +139,106 @@ async function processDispatchJob(job) {
     logger.info(
       `[DISPATCH-WORKER] Campaign ${campaign_id} — found ${recipients.length} pending recipients (after_id=${after_id})`,
     );
+    logger.info(
+      `[DISPATCH-WORKER] recipient count for campaign ${campaign_id}: ${recipients.length}`,
+    );
+
+    // Debug: log remaining pending count and status
+    try {
+      const remainingPending = await db.WhatsappCampaignRecipients.count({
+        where: { campaign_id, status: "pending", is_deleted: false },
+      });
+      logger.info(
+        `[DISPATCH-WORKER] campaign_id=${campaign_id} remaining_pending=${remainingPending} status=${campaign.status}`,
+      );
+    } catch (e) {
+      logger.debug(
+        `[DISPATCH-WORKER] Could not compute remaining pending for ${campaign_id}: ${e.message}`,
+      );
+    }
+
+    // ── Billing check with atomic reservation (use actual page size) ─────────────────
+    let perRecipientCost = 0;
+    if (recipients.length > 0) {
+      try {
+        const template = await db.WhatsappTemplates.findOne({
+          where: { template_id: campaign.template_id },
+          attributes: ["category"],
+          raw: true,
+        });
+        const category = (template?.category || "marketing").toLowerCase();
+
+        const tenant = await db.Tenants.findOne({
+          where: { tenant_id },
+          attributes: ["country", "owner_country_code", "timezone"],
+          raw: true,
+        });
+        const isIndia =
+          tenant?.owner_country_code === "91" ||
+          tenant?.timezone === "Asia/Kolkata";
+        const billingCountry = tenant?.country || (isIndia ? "IN" : "Global");
+
+        const cost = await estimateMetaCost(category, billingCountry);
+        perRecipientCost = Number(cost.totalCostInr) || 0;
+        const batchCost = perRecipientCost * recipients.length;
+
+        const reservationResult = await billingService.createReservation(
+          tenant_id,
+          batchCost,
+          300,
+        ); // 5 min TTL
+
+        if (!reservationResult.success) {
+          logger.warn(
+            `[DISPATCH-WORKER] Campaign ${campaign_id} billing reservation failed — ${reservationResult.reason}`,
+          );
+          await campaign.update({ status: "paused" });
+          return;
+        }
+
+        billingReservation = reservationResult.reservationId;
+        billingSettlement = "release";
+        logger.info(
+          `[DISPATCH-WORKER] Billing reservation created: ${billingReservation} for ₹${batchCost}`,
+        );
+      } catch (billingErr) {
+        logger.error(
+          `[DISPATCH-WORKER] Billing check error for ${campaign_id}: ${billingErr.message}`,
+        );
+        return;
+      }
+    }
 
     // ── No recipients — check whether campaign is truly finished ──────────
     if (recipients.length === 0) {
-      const stillPending = await db.WhatsappCampaignRecipients.count({
+      const remainingPending = await db.WhatsappCampaignRecipients.count({
         where: { campaign_id, status: "pending", is_deleted: false },
       });
 
-      if (stillPending === 0) {
-        // Only mark completed if at least one message was sent successfully
-        const sentCount = await db.WhatsappCampaignRecipients.count({
-          where: {
-            campaign_id,
-            status: { [db.Sequelize.Op.in]: ["sent", "delivered", "read"] },
-            is_deleted: false,
-          },
-        });
+      logger.info(
+        `[DISPATCH-WORKER] campaign_id=${campaign_id} remaining_pending=${remainingPending} status=${campaign.status}`,
+      );
 
-        if (sentCount > 0) {
-          await db.WhatsappCampaigns.update(
-            { status: "completed" },
-            {
-              where: {
-                campaign_id,
-                status: { [db.Sequelize.Op.in]: ["active", "failed"] },
+      if (remainingPending === 0) {
+        await db.WhatsappCampaigns.update(
+          { status: "completed" },
+          {
+            where: {
+              campaign_id,
+              status: {
+                [db.Sequelize.Op.in]: [
+                  "active",
+                  "failed",
+                  "scheduled",
+                  "draft",
+                ],
               },
             },
-          );
-          logger.info(
-            `[DISPATCH-WORKER] Campaign ${campaign_id} marked completed (${sentCount} sent)`,
-          );
-        }
+          },
+        );
+        logger.info(
+          `[DISPATCH-WORKER] Campaign ${campaign_id} marked completed (remaining_pending=0)`,
+        );
       }
       return;
     }
@@ -216,8 +268,29 @@ async function processDispatchJob(job) {
     }
 
     logger.info(
-      `[DISPATCH-WORKER] Campaign ${campaign_id} — enqueued ${enqueued}/${recipients.length} send jobs`,
+      `[DISPATCH-WORKER] Campaign ${campaign_id} — enqueued ${enqueued}/${recipients.length} send jobs into ${sendQueue?.name || "tenant queue"}`,
     );
+
+    if (billingReservation) {
+      consumedBillingAmount = Number((perRecipientCost * enqueued).toFixed(6));
+      billingSettlement = consumedBillingAmount > 0 ? "confirm" : "release";
+    }
+
+    logger.info(
+      `[DISPATCH-WORKER] send jobs added for campaign ${campaign_id}: ${enqueued}`,
+    );
+    recordCampaignDiagnosticEvent({
+      source: "dispatch-worker",
+      type: "jobs_added",
+      message: `Enqueued ${enqueued}/${recipients.length} jobs for campaign ${campaign_id}`,
+      meta: {
+        campaign_id,
+        tenant_id,
+        enqueued,
+        recipients: recipients.length,
+        queue_name: sendQueue?.name || null,
+      },
+    });
 
     // ── Fan-out: if this page was full, enqueue the next page immediately ─
     if (recipients.length === PAGE_SIZE) {
@@ -236,16 +309,41 @@ async function processDispatchJob(job) {
       );
     }
   } finally {
-    // Release billing reservation if it exists
+    // Settle billing reservation if it exists
     if (billingReservation) {
       try {
-        await billingService.releaseReservation(tenant_id, billingReservation);
-        logger.debug(
-          `[DISPATCH-WORKER] Billing reservation released: ${billingReservation}`,
-        );
+        if (billingSettlement === "confirm") {
+          const confirmed = await billingService.confirmReservation(
+            tenant_id,
+            billingReservation,
+            consumedBillingAmount,
+          );
+
+          if (confirmed) {
+            logger.debug(
+              `[DISPATCH-WORKER] Billing reservation confirmed: ${billingReservation} (consumed ₹${consumedBillingAmount})`,
+            );
+          } else {
+            await billingService.releaseReservation(
+              tenant_id,
+              billingReservation,
+            );
+            logger.warn(
+              `[DISPATCH-WORKER] Billing reservation confirmation failed, released instead: ${billingReservation}`,
+            );
+          }
+        } else {
+          await billingService.releaseReservation(
+            tenant_id,
+            billingReservation,
+          );
+          logger.debug(
+            `[DISPATCH-WORKER] Billing reservation released: ${billingReservation}`,
+          );
+        }
       } catch (err) {
         logger.warn(
-          `[DISPATCH-WORKER] Failed to release billing reservation ${billingReservation}: ${err.message}`,
+          `[DISPATCH-WORKER] Failed to settle billing reservation ${billingReservation}: ${err.message}`,
         );
       }
     }
@@ -277,8 +375,9 @@ export const startCampaignDispatchWorker = () => {
   const concurrency = parseInt(
     process.env.CAMPAIGN_DISPATCH_CONCURRENCY || "10",
   );
+  const dispatchQueueName = getCampaignDispatchQueueName();
 
-  dispatchWorker = new Worker("campaign-dispatch", processDispatchJob, {
+  dispatchWorker = new Worker(dispatchQueueName, processDispatchJob, {
     connection,
     concurrency,
   });
@@ -292,9 +391,21 @@ export const startCampaignDispatchWorker = () => {
   });
 
   logger.info(
-    `[DISPATCH-WORKER] Started — concurrency=${concurrency} pageSize=${PAGE_SIZE}`,
+    `[DISPATCH-WORKER] Started — queue=${dispatchQueueName} concurrency=${concurrency} pageSize=${PAGE_SIZE}`,
   );
+  recordCampaignDiagnosticEvent({
+    source: "dispatch-worker",
+    type: "worker_started",
+    message: `Dispatch worker started (concurrency=${concurrency})`,
+    meta: { concurrency, page_size: PAGE_SIZE },
+  });
 };
+
+export const getDispatchWorkerStatus = () => ({
+  running: Boolean(dispatchWorker),
+  worker_type: "campaign-dispatch",
+  active_worker_count: dispatchWorker ? 1 : 0,
+});
 
 export const closeDispatchWorker = async () => {
   if (dispatchWorker) {

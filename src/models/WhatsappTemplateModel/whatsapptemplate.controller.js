@@ -43,22 +43,18 @@ export const restoreTemplateController = async (req, res) => {
     return res.status(200).send(result);
   } catch (err) {
     if (err.message === "Template not found or not deleted") {
-      return res
-        .status(404)
-        .json({
-          success: false,
-          error_code: "NOT_FOUND",
-          message: err.message,
-        });
-    }
-    logger.error("restoreTemplateController error:", err);
-    return res
-      .status(500)
-      .json({
+      return res.status(404).json({
         success: false,
-        error_code: "INTERNAL_ERROR",
+        error_code: "NOT_FOUND",
         message: err.message,
       });
+    }
+    logger.error("restoreTemplateController error:", err);
+    return res.status(500).json({
+      success: false,
+      error_code: "INTERNAL_ERROR",
+      message: err.message,
+    });
   }
 };
 export const createWhatsappTemplateController = async (req, res) => {
@@ -100,7 +96,10 @@ export const createWhatsappTemplateController = async (req, res) => {
     }
 
     // ✅ Validate header text length (max 60 characters) if present
-    if (components?.header?.text_content && components.header.text_content.length > 60) {
+    if (
+      components?.header?.text_content &&
+      components.header.text_content.length > 60
+    ) {
       return res.status(400).json({
         success: false,
         error_code: "INVALID_FIELD",
@@ -183,13 +182,11 @@ export const submitWhatsappTemplateController = async (req, res) => {
     const { template_id } = req.params;
 
     if (!tenant_id) {
-      return res
-        .status(401)
-        .json({
-          success: false,
-          error_code: "UNAUTHORIZED",
-          message: "Authentication required",
-        });
+      return res.status(401).json({
+        success: false,
+        error_code: "UNAUTHORIZED",
+        message: "Authentication required",
+      });
     }
 
     const whatsappAccount = await getWhatsappAccountByTenantService(tenant_id);
@@ -210,13 +207,11 @@ export const submitWhatsappTemplateController = async (req, res) => {
     );
 
     if (!template) {
-      return res
-        .status(404)
-        .json({
-          success: false,
-          error_code: "NOT_FOUND",
-          message: "Template not found",
-        });
+      return res.status(404).json({
+        success: false,
+        error_code: "NOT_FOUND",
+        message: "Template not found",
+      });
     }
 
     if (template.status !== "draft") {
@@ -374,13 +369,11 @@ export const getTemplateListController = async (req, res) => {
     });
   } catch (err) {
     logger.error("getTemplateListController error:", err);
-    return res
-      .status(500)
-      .json({
-        success: false,
-        error_code: "INTERNAL_ERROR",
-        message: err.message,
-      });
+    return res.status(500).json({
+      success: false,
+      error_code: "INTERNAL_ERROR",
+      message: err.message,
+    });
   }
 };
 
@@ -390,13 +383,11 @@ export const getTemplateByIdController = async (req, res) => {
   try {
     const template = await getTemplateByIdService(template_id, tenant_id);
     if (!template) {
-      return res
-        .status(404)
-        .json({
-          success: false,
-          error_code: "NOT_FOUND",
-          message: "Template not found",
-        });
+      return res.status(404).json({
+        success: false,
+        error_code: "NOT_FOUND",
+        message: "Template not found",
+      });
     }
     return res.status(200).json({
       success: true,
@@ -405,13 +396,11 @@ export const getTemplateByIdController = async (req, res) => {
     });
   } catch (err) {
     logger.error("getTemplateByIdController error:", err);
-    return res
-      .status(500)
-      .json({
-        success: false,
-        error_code: "INTERNAL_ERROR",
-        message: err.message,
-      });
+    return res.status(500).json({
+      success: false,
+      error_code: "INTERNAL_ERROR",
+      message: err.message,
+    });
   }
 };
 
@@ -426,22 +415,18 @@ export const softDeleteTemplateController = async (req, res) => {
     });
   } catch (err) {
     if (err.message?.includes("not found")) {
-      return res
-        .status(404)
-        .json({
-          success: false,
-          error_code: "NOT_FOUND",
-          message: err.message,
-        });
-    }
-    logger.error("softDeleteTemplateController error:", err);
-    return res
-      .status(500)
-      .json({
+      return res.status(404).json({
         success: false,
-        error_code: "INTERNAL_ERROR",
+        error_code: "NOT_FOUND",
         message: err.message,
       });
+    }
+    logger.error("softDeleteTemplateController error:", err);
+    return res.status(500).json({
+      success: false,
+      error_code: "INTERNAL_ERROR",
+      message: err.message,
+    });
   }
 };
 
@@ -457,22 +442,18 @@ export const permanentDeleteTemplateController = async (req, res) => {
     });
   } catch (err) {
     if (err.message?.includes("not found")) {
-      return res
-        .status(404)
-        .json({
-          success: false,
-          error_code: "NOT_FOUND",
-          message: err.message,
-        });
-    }
-    logger.error("permanentDeleteTemplateController error:", err);
-    return res
-      .status(500)
-      .json({
+      return res.status(404).json({
         success: false,
-        error_code: "INTERNAL_ERROR",
+        error_code: "NOT_FOUND",
         message: err.message,
       });
+    }
+    logger.error("permanentDeleteTemplateController error:", err);
+    return res.status(500).json({
+      success: false,
+      error_code: "INTERNAL_ERROR",
+      message: err.message,
+    });
   }
 };
 
@@ -505,7 +486,10 @@ export const updateWhatsappTemplateController = async (req, res) => {
     }
 
     // ✅ Validate header text length (max 60 characters) if present
-    if (components?.header?.text_content && components.header.text_content.length > 60) {
+    if (
+      components?.header?.text_content &&
+      components.header.text_content.length > 60
+    ) {
       return res.status(400).json({
         success: false,
         error_code: "INVALID_FIELD",
@@ -740,14 +724,23 @@ export const uploadTemplateMediaController = async (req, res) => {
       userId,
       whatsappAccount.access_token,
       whatsappAccount.app_id || process.env.META_APP_ID,
-      { folder: "template-header", tags: ["template"] },
+      {
+        folder: "template-header",
+        tags: ["template"],
+        // Template header uploads should be immediately usable.
+        readyImmediately: true,
+      },
     );
 
     return res.status(200).json({
       message: "Media uploaded successfully",
       url: media.preview_url,
+      media_id: media.media_handle,
       media_handle: media.media_handle,
       media_asset_id: media.media_asset_id,
+      media_status: "READY",
+      file_name: media.file_name,
+      upload_time: media.createdAt,
     });
   } catch (err) {
     if (err.errorCode === "UNSUPPORTED_MEDIA_FORMAT") {

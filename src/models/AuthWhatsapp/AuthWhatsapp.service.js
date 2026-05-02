@@ -23,6 +23,8 @@ const httpsAgent = new https.Agent({
 const FIXED_MISSING_INFO_FALLBACK =
   "Our team will get back to you shortly. Please feel free to ask any other questions in the meantime ?";
 
+const ENABLE_APPOINTMENT_FLOW = false;
+
 const FACTUAL_KEYWORD_PATTERN =
   /\b(price|cost|fee|fees|timing|timings|hours|open|close|policy|policies|service|services|treatment|treatments|procedure|procedures|operation|surgery|medication|medicine|diet|drink|drinks|food|before|after|insurance|package|offer|facility|facilities|address|location|contact|refund|payment|emi|warranty|guarantee|side effects?)\b/i;
 const FACTUAL_INTENT_PATTERN =
@@ -579,8 +581,17 @@ export const getOpenAIReply = async (
       tenant_id,
     );
 
+    console.log(
+      "[AI FLOW]",
+      "Appointment flow enabled:",
+      ENABLE_APPOINTMENT_FLOW,
+    );
+
     // NEW: Route appointment intents directly — skip heavy AI call and knowledge search
-    if (APPOINTMENT_INTENTS.includes(intentResult.intent)) { // NEW
+    if (
+      ENABLE_APPOINTMENT_FLOW &&
+      APPOINTMENT_INTENTS.includes(intentResult.intent)
+    ) { // NEW
       const contactObj = { // NEW
         contact_id, // NEW
         phone_number: phone, // NEW

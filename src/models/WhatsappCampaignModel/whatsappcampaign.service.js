@@ -27,6 +27,7 @@ import {
 } from "../../queues/campaignQueue.js";
 import { addCampaignUsageService } from "../GalleryModel/gallery.service.js";
 import { logger } from "../../utils/logger.js";
+import { recordCampaignDiagnosticEvent } from "../../utils/campaignDiagnosticsEvents.js";
 
 // In-memory lock to prevent concurrent batch executions for the same campaign
 const runningCampaigns = new Set();
@@ -183,9 +184,12 @@ export const createCampaignService = async (tenant_id, data, created_by) => {
       media_asset_id, // Gallery asset ID (optional)
       media_handle, // Meta media handle from gallery (optional)
     } = data;
+    const normalizedCampaignType = String(campaign_type || "")
+      .trim()
+      .toLowerCase();
     const scheduledAtUtc =
-      campaign_type === "scheduled" && scheduled_at
-        ? new Date(scheduled_at).toISOString()
+      normalizedCampaignType === "scheduled" && scheduled_at
+        ? new Date(new Date(scheduled_at).toISOString())
         : null;
 
     // 0. Check for duplicate campaign name
@@ -468,7 +472,7 @@ export const createCampaignService = async (tenant_id, data, created_by) => {
         campaign_name,
         campaign_type,
         template_id,
-        status: campaign_type === "scheduled" ? "scheduled" : "active",
+        status: normalizedCampaignType === "scheduled" ? "scheduled" : "active",
         total_audience: recipients.length,
         scheduled_at: scheduledAtUtc,
         header_media_url,
@@ -563,7 +567,7 @@ export const getCampaignListService = async (tenant_id, query = {}) => {
 };
 
 const buildRecipientStatusWhere = (campaign_id, recipient_status) => {
-  const where = { campaign_id, is_deleted: false };
+  const where = { campaign_id };
 
   if (!recipient_status) {
     return where;
@@ -579,6 +583,32 @@ const buildRecipientStatusWhere = (campaign_id, recipient_status) => {
   where.status = recipient_status;
   return where;
 };
+
+const buildRetryEligibleRecipientWhere = (campaign_id, now = new Date()) => ({
+  campaign_id,
+  is_deleted: false,
+  [db.Sequelize.Op.or]: [
+    { status: "pending" },
+    {
+      status: "failed",
+      retry_count: { [db.Sequelize.Op.lt]: 3 },
+      next_retry_at: { [db.Sequelize.Op.lte]: now },
+    },
+  ],
+});
+
+const buildOutstandingRecipientWhere = (campaign_id) => ({
+  campaign_id,
+  is_deleted: false,
+  [db.Sequelize.Op.or]: [
+    { status: "pending" },
+    {
+      status: "failed",
+      retry_count: { [db.Sequelize.Op.lt]: 3 },
+      next_retry_at: { [db.Sequelize.Op.ne]: null },
+    },
+  ],
+});
 
 /**
  * Retrieves detailed info for a single campaign.
@@ -596,11 +626,12 @@ export const getCampaignByIdService = async (
     );
 
     const campaign = await db.WhatsappCampaigns.findOne({
-      where: { campaign_id, tenant_id, is_deleted: false },
+      where: { campaign_id, tenant_id },
       include: [
         {
           model: db.WhatsappTemplates,
           as: "template",
+          required: false,
         },
         {
           model: db.WhatsappCampaignRecipients,
@@ -780,16 +811,17 @@ export const executeCampaignBatchService = async (
     );
 
     const recipients = await db.WhatsappCampaignRecipients.findAll({
-      where: { campaign_id, status: "pending", is_deleted: false },
+      where: buildRetryEligibleRecipientWhere(campaign_id, new Date()),
+      order: [["id", "ASC"]],
       limit: batchSize,
     });
 
     console.log(
-      `[CAMPAIGN-BATCH] Pending recipients query: found ${recipients.length} recipients`,
+      `[CAMPAIGN-BATCH] Executable recipients query: found ${recipients.length} recipients`,
     );
 
     logger.info(
-      `[CAMPAIGN-BATCH] Found ${recipients.length} pending recipients for campaign ${campaign_id}`,
+      `[CAMPAIGN-BATCH] Found ${recipients.length} executable recipients for campaign ${campaign_id}`,
     );
 
     if (!campaign.template) {
@@ -849,10 +881,24 @@ export const executeCampaignBatchService = async (
     }
 
     if (recipients.length === 0) {
-      await campaign.update({ status: "completed" });
+      const remainingOutstanding = await db.WhatsappCampaignRecipients.count({
+        where: buildOutstandingRecipientWhere(campaign_id),
+      });
+
       logger.info(
-        `[CAMPAIGN-BATCH] Campaign ${campaign_id} completed — no more pending recipients`,
+        `[CAMPAIGN-BATCH] campaign_id=${campaign_id} remaining_outstanding=${remainingOutstanding} status=${campaign.status}`,
       );
+
+      if (remainingOutstanding === 0) {
+        await campaign.update({ status: "completed" });
+        logger.info(
+          `[CAMPAIGN-BATCH] Campaign ${campaign_id} marked completed (remaining_outstanding=0)`,
+        );
+      } else {
+        logger.info(
+          `[CAMPAIGN-BATCH] Campaign ${campaign_id} has retryable failed recipients pending next_retry_at windows`,
+        );
+      }
       return { finished: true };
     }
 
@@ -900,13 +946,13 @@ export const executeCampaignBatchService = async (
 
     // If the campaign has been paused by the user, respect it — do not auto-activate.
     if (campaign.status === "paused") {
-      const pendingCount = await db.WhatsappCampaignRecipients.count({
-        where: { campaign_id, status: "pending", is_deleted: false },
+      const outstandingCount = await db.WhatsappCampaignRecipients.count({
+        where: buildOutstandingRecipientWhere(campaign_id),
       });
       logger.info(
-        `[CAMPAIGN-BATCH] Campaign ${campaign_id} is paused — skipping execution (${pendingCount} recipients still pending)`,
+        `[CAMPAIGN-BATCH] Campaign ${campaign_id} is paused — skipping execution (${outstandingCount} recipients still outstanding)`,
       );
-      return { finished: false, paused: true, pendingCount };
+      return { finished: false, paused: true, pendingCount: outstandingCount };
     }
 
     // Auto-activate if status is still scheduled or draft (scheduler already handles this,
@@ -1195,6 +1241,20 @@ export const executeCampaignBatchService = async (
                   cardHeader &&
                   (cardHeader.format === "IMAGE" ||
                     cardHeader.format === "VIDEO") &&
+                  !cardMediaUrl
+                ) {
+                  throw Object.assign(
+                    new Error(
+                      `Missing carousel media for card ${idx + 1} (${cardHeader.format}) in campaign ${campaign_id}`,
+                    ),
+                    { validation: true, permanent: true },
+                  );
+                }
+
+                if (
+                  cardHeader &&
+                  (cardHeader.format === "IMAGE" ||
+                    cardHeader.format === "VIDEO") &&
                   cardMediaUrl
                 ) {
                   cardComponents.push({
@@ -1239,7 +1299,7 @@ export const executeCampaignBatchService = async (
         if (!formattedPhone) {
           throw Object.assign(
             new Error(
-              `Invalid phone number "${recipient.mobile_number}" — must be 10–15 digits with country code (e.g. 919876543210)`,
+              `Invalid phone number "${recipient.mobile_number}" — must be either a 10-digit local number or a 12-digit country+number`,
             ),
             { validation: true, permanent: true },
           );
@@ -1300,7 +1360,18 @@ export const executeCampaignBatchService = async (
         let result;
         // Atomic check: skip if another execution already claimed this recipient
         const stillPending = await db.WhatsappCampaignRecipients.findOne({
-          where: { id: recipient.id, status: "pending", is_deleted: false },
+          where: {
+            id: recipient.id,
+            is_deleted: false,
+            [db.Sequelize.Op.or]: [
+              { status: "pending" },
+              {
+                status: "failed",
+                retry_count: { [db.Sequelize.Op.lt]: 3 },
+                next_retry_at: { [db.Sequelize.Op.lte]: new Date() },
+              },
+            ],
+          },
           attributes: ["id"],
         });
         if (!stillPending) {
@@ -1645,6 +1716,27 @@ export const executeCampaignBatchService = async (
     logger.info(
       `[CAMPAIGN-BATCH] Batch finished for campaign ${campaign_id} — sent=${batchSentCount} failed=${batchFailCount} total=${recipients.length}`,
     );
+
+    // Unified completion check: if no outstanding recipients remain, mark campaign completed
+    try {
+      const remainingOutstanding = await db.WhatsappCampaignRecipients.count({
+        where: buildOutstandingRecipientWhere(campaign_id),
+      });
+      logger.info(
+        `[CAMPAIGN-BATCH] campaign_id=${campaign_id} remaining_outstanding=${remainingOutstanding} status=${campaign.status}`,
+      );
+      if (remainingOutstanding === 0) {
+        await campaign.update({ status: "completed" });
+        logger.info(
+          `[CAMPAIGN-BATCH] Campaign ${campaign_id} marked completed (remaining_outstanding=0)`,
+        );
+      }
+    } catch (e) {
+      logger.warn(
+        `[CAMPAIGN-BATCH] Completion check failed for ${campaign_id}: ${e.message}`,
+      );
+    }
+
     return {
       finished: false,
       processedCount: recipients.length,
@@ -1753,45 +1845,95 @@ export const permanentDeleteCampaignService = async (
  */
 export const startCampaignSchedulerService = () => {
   logger.info("[CAMPAIGN-SCHEDULER] Started");
+  const schedulerBatchSize = parseInt(
+    process.env.CAMPAIGN_SCHEDULER_BATCH_SIZE || "15",
+    10,
+  );
 
   cron.schedule("* * * * *", async () => {
     try {
       const now = new Date();
-
-      // Activate campaigns whose scheduled_at time has arrived
-      const [activatedCount] = await db.WhatsappCampaigns.update(
-        { status: "active" },
-        {
-          where: {
-            status: "scheduled",
-            scheduled_at: { [db.Sequelize.Op.lte]: now },
-            is_deleted: false,
-          },
-        },
+      const tickBucket = Math.floor(now.getTime() / 60000);
+      logger.info(
+        `[CAMPAIGN-SCHEDULER] Tick start at ${now.toISOString()} (batchSize=${schedulerBatchSize})`,
       );
+      recordCampaignDiagnosticEvent({
+        source: "scheduler",
+        type: "scheduler_run",
+        message: `Scheduler tick started at ${now.toISOString()}`,
+        meta: { batch_size: schedulerBatchSize },
+      });
 
-      if (activatedCount > 0) {
-        logger.info(
-          `[CAMPAIGN-SCHEDULER] Activated ${activatedCount} scheduled campaign(s) at ${now.toISOString()}`,
+      // Find due scheduled campaigns first so we can explicitly dispatch them
+      // in the same tick right after activation.
+      const dueScheduledCampaigns = await db.WhatsappCampaigns.findAll({
+        where: {
+          status: "scheduled",
+          scheduled_at: { [db.Sequelize.Op.lte]: now },
+          is_deleted: false,
+        },
+        attributes: ["campaign_id", "tenant_id"],
+      });
+
+      const dueCampaignIds = dueScheduledCampaigns.map((c) => c.campaign_id);
+
+      // Activate campaigns whose scheduled_at time has arrived.
+      // Scope activation to due IDs so the activated set is explicit.
+      let activatedCount = 0;
+      if (dueCampaignIds.length > 0) {
+        [activatedCount] = await db.WhatsappCampaigns.update(
+          { status: "active" },
+          {
+            where: {
+              campaign_id: { [db.Sequelize.Op.in]: dueCampaignIds },
+              status: "scheduled",
+              is_deleted: false,
+            },
+          },
         );
       }
 
-      const activeCampaigns = await db.WhatsappCampaigns.findAll({
+      if (activatedCount > 0) {
+        logger.info(
+          `[CAMPAIGN-SCHEDULER] Activated ${activatedCount} scheduled campaign(s) at ${now.toISOString()} and preparing immediate dispatch`,
+        );
+      }
+
+      const currentlyActiveCampaigns = await db.WhatsappCampaigns.findAll({
         where: { status: "active", is_deleted: false },
         attributes: ["campaign_id", "tenant_id"],
       });
 
-      if (activeCampaigns.length === 0) return;
+      const campaignsToDispatchMap = new Map();
+      for (const campaign of dueScheduledCampaigns) {
+        campaignsToDispatchMap.set(campaign.campaign_id, campaign);
+      }
+      for (const campaign of currentlyActiveCampaigns) {
+        campaignsToDispatchMap.set(campaign.campaign_id, campaign);
+      }
+      const campaignsToDispatch = Array.from(campaignsToDispatchMap.values());
+
+      logger.info(
+        `[CAMPAIGN-SCHEDULER] Picked ${campaignsToDispatch.length} campaign(s) for execution`,
+      );
+      recordCampaignDiagnosticEvent({
+        source: "scheduler",
+        type: "campaign_picked",
+        message: `Picked ${campaignsToDispatch.length} campaign(s)`,
+        meta: { active_campaign_count: campaignsToDispatch.length },
+      });
+
+      if (campaignsToDispatch.length === 0) return;
 
       // ── BullMQ path: enqueue a dispatch job per active campaign ──────────
       if (isCampaignQueueAvailable()) {
         const dispatchQueue = getCampaignDispatchQueue();
         let queued = 0;
 
-        for (const campaign of activeCampaigns) {
+        for (const campaign of campaignsToDispatch) {
           try {
-            // jobId dedup: if a dispatch job for this campaign is already
-            // waiting or active, BullMQ ignores this add — no double-dispatch.
+            // Use per-minute job IDs so dispatch cannot get permanently blocked
+            // by stale completed jobs with static IDs.
             await dispatchQueue.add(
               "campaign-dispatch",
               {
@@ -1799,18 +1941,57 @@ export const startCampaignSchedulerService = () => {
                 tenant_id: campaign.tenant_id,
                 after_id: 0,
               },
-              { jobId: `dispatch:${campaign.campaign_id}:0` },
+              { jobId: `dispatch:${campaign.campaign_id}:tick:${tickBucket}` },
             );
             queued++;
+            logger.info(
+              `[CAMPAIGN-SCHEDULER] Queued dispatch job for campaign=${campaign.campaign_id} tenant=${campaign.tenant_id}`,
+            );
+            recordCampaignDiagnosticEvent({
+              source: "scheduler",
+              type: "jobs_added",
+              message: `Queued dispatch for campaign ${campaign.campaign_id}`,
+              meta: {
+                campaign_id: campaign.campaign_id,
+                tenant_id: campaign.tenant_id,
+              },
+            });
           } catch (enqueueErr) {
             logger.error(
               `[CAMPAIGN-SCHEDULER] Failed to enqueue dispatch for ${campaign.campaign_id}: ${enqueueErr.message}`,
             );
+            recordCampaignDiagnosticEvent({
+              source: "scheduler",
+              type: "error",
+              level: "error",
+              message: `Enqueue failed for ${campaign.campaign_id}: ${enqueueErr.message}`,
+              meta: {
+                campaign_id: campaign.campaign_id,
+                tenant_id: campaign.tenant_id,
+              },
+            });
+
+            // Safety fallback: if queue enqueue fails for this campaign,
+            // execute one synchronous batch so scheduled campaigns do not stall.
+            try {
+              const fallbackResult = await executeCampaignBatchService(
+                campaign.campaign_id,
+                campaign.tenant_id,
+                schedulerBatchSize,
+              );
+              logger.warn(
+                `[CAMPAIGN-SCHEDULER] Queue enqueue fallback executed for ${campaign.campaign_id} — processed=${fallbackResult.processedCount ?? 0} sent=${fallbackResult.sentCount ?? 0} failed=${fallbackResult.failCount ?? 0}`,
+              );
+            } catch (fallbackErr) {
+              logger.error(
+                `[CAMPAIGN-SCHEDULER] Fallback batch failed for ${campaign.campaign_id}: ${fallbackErr.message}`,
+              );
+            }
           }
         }
 
         logger.info(
-          `[CAMPAIGN-SCHEDULER] Enqueued dispatch jobs for ${queued}/${activeCampaigns.length} active campaign(s)`,
+          `[CAMPAIGN-SCHEDULER] Enqueued dispatch jobs for ${queued}/${campaignsToDispatch.length} active campaign(s)`,
         );
         return;
       }
@@ -1822,7 +2003,7 @@ export const startCampaignSchedulerService = () => {
         "[CAMPAIGN-SCHEDULER] Queue unavailable — running campaigns synchronously (fallback mode)",
       );
 
-      for (const campaign of activeCampaigns) {
+      for (const campaign of campaignsToDispatch) {
         try {
           // Pre-execution billing check
           try {
@@ -1850,7 +2031,7 @@ export const startCampaignSchedulerService = () => {
                 is_deleted: false,
               },
             });
-            const batchEstimate = Math.min(pendingCount, 15);
+            const batchEstimate = Math.min(pendingCount, schedulerBatchSize);
             const batchCost = cost.totalCostInr * batchEstimate;
             const billingCheck = await canSendCampaign(
               campaign.tenant_id,
@@ -1875,7 +2056,7 @@ export const startCampaignSchedulerService = () => {
           const batchResult = await executeCampaignBatchService(
             campaign.campaign_id,
             campaign.tenant_id,
-            15,
+            schedulerBatchSize,
           );
           logger.info(
             `[CAMPAIGN-SCHEDULER] Campaign ${campaign.campaign_id} batch done — processed=${batchResult.processedCount ?? 0} sent=${batchResult.sentCount ?? 0} failed=${batchResult.failCount ?? 0}`,
@@ -1889,6 +2070,12 @@ export const startCampaignSchedulerService = () => {
       }
     } catch (err) {
       logger.error(`[CAMPAIGN-SCHEDULER] Tick error: ${err.message}`);
+      recordCampaignDiagnosticEvent({
+        source: "scheduler",
+        type: "error",
+        level: "error",
+        message: `Scheduler tick error: ${err.message}`,
+      });
     }
   });
 };
@@ -1920,6 +2107,7 @@ export const updateCampaignStatusService = async (
   const allowed = new Set([
     "draft->scheduled",
     "scheduled->active",
+    "failed->active",
     "active->paused",
     "paused->active",
     "active->completed",
@@ -1957,9 +2145,9 @@ export const updateCampaignStatusService = async (
     logger.info(
       `[CAMPAIGN-STATUS] Campaign ${campaign_id} paused by ${acted_by} at ${new Date().toISOString()} — ${pendingCount} recipients still pending`,
     );
-  } else if (next === "active" && current === "paused") {
+  } else if (next === "active" && ["paused", "failed"].includes(current)) {
     const pendingCount = await db.WhatsappCampaignRecipients.count({
-      where: { campaign_id, status: "pending", is_deleted: false },
+      where: buildOutstandingRecipientWhere(campaign_id),
     });
     logger.info(
       `[CAMPAIGN-STATUS] Campaign ${campaign_id} resumed by ${acted_by} at ${new Date().toISOString()} — ${pendingCount} recipients remaining`,
