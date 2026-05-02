@@ -32,8 +32,8 @@ export const WhatsappAccountTable = (sequelize, Sequelize) => {
       },
 
       access_token: {
-        type: Sequelize.TEXT, // encrypted token
-        allowNull: false,
+        type: Sequelize.TEXT, // encrypted token (deprecated - now stored in tenant_secrets)
+        allowNull: true, // Made nullable since tokens are now stored in tenant_secrets
       },
 
       app_id: {

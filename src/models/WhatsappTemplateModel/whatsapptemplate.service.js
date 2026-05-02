@@ -348,6 +348,41 @@ const validateTemplateHeaderMediaBeforeMetaSubmit = async ({
   };
 };
 
+const resolveTemplateHeaderMediaHandleForPayload = async ({
+  template,
+  header,
+  assetMetadata,
+  format,
+  whatsappAccount,
+}) => {
+  const tenantId = whatsappAccount?.tenant_id || template?.tenant_id;
+  const sampleUrl = header?.media_url || assetMetadata?.preview_url || null;
+
+  const canUploadFromUrl = (() => {
+    try {
+      const parsedUrl = new URL(sampleUrl);
+      return ["http:", "https:"].includes(parsedUrl.protocol);
+    } catch {
+      return false;
+    }
+  })();
+
+  if (!sampleUrl || !canUploadFromUrl || !tenantId) {
+    return header?.media_handle || assetMetadata?.media_handle || null;
+  }
+
+  const { uploadMediaToMetaForTemplate } = await import(
+    "../../utils/whatsapp/metaMediaUpload.js"
+  );
+
+  return uploadMediaToMetaForTemplate(
+    tenantId,
+    sampleUrl,
+    format,
+    { mimeType: assetMetadata?.mime_type || null },
+  );
+};
+
 const deriveTemplateTypeFromComponents = (
   components = [],
   fallbackType = "text",
@@ -390,6 +425,7 @@ const buildMetaTemplatePayload = async ({
   whatsappAccount,
   includeIdentity = true,
   includeCategory = true,
+  transaction = null,
 }) => {
   const body = components.find((c) => c.component_type === "body");
   if (!body || !body.text_content) {
@@ -488,10 +524,16 @@ const buildMetaTemplatePayload = async ({
         await validateTemplateHeaderMediaBeforeMetaSubmit({
           template,
           header,
+          transaction,
         });
 
-      const resolvedMediaHandle =
-        sanitizedHeader?.media_handle || assetMetadata?.media_handle || null;
+      const resolvedMediaHandle = await resolveTemplateHeaderMediaHandleForPayload({
+        template,
+        header: sanitizedHeader,
+        assetMetadata,
+        format,
+        whatsappAccount,
+      });
 
       if (resolvedMediaHandle) {
         headerObj.example = { header_handle: [resolvedMediaHandle] };
@@ -988,6 +1030,7 @@ export const submitWhatsappTemplateService = async ({
       whatsappAccount,
       includeIdentity: true,
       includeCategory: true,
+      transaction,
     });
 
     console.log(
@@ -1944,6 +1987,7 @@ export const updateWhatsappTemplateService = async (
         whatsappAccount,
         includeIdentity: false,
         includeCategory: true,
+        transaction,
       });
 
       try {

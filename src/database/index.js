@@ -10,6 +10,8 @@ import { ProcessedMessagesTable } from "./tables/ProcessedMessagesTable/index.js
 import { ChatLocksTable } from "./tables/ChatLocksTable/index.js";
 import { TenantsTable } from "./tables/TenantsTable/index.js";
 import { LeadsTable } from "./tables/LeadsTable/index.js";
+import { MessageUnderstandingTable } from "./tables/MessageUnderstandingTable/index.js";
+import { LeadScoreHistoryTable } from "./tables/LeadScoreHistoryTable/index.js";
 import { ContactsTable } from "./tables/ContactsTable/index.js";
 import { LiveChatTable } from "./tables/LiveChatTable/index.js";
 import { TenantUsersTable } from "./tables/TenantUsersTable/index.js";
@@ -55,6 +57,7 @@ import { AppointmentTable } from "./tables/AppointmentTable/index.js";
 import { SavedPaymentMethodTable } from "./tables/SavedPaymentMethod/SavedPaymentMethod.js";
 import { TaxSettingsTable } from "./tables/TaxSettingsTable/index.js";
 import { TenantSecretsTable } from "./tables/TenantSecretsTable/index.js";
+import { UserPreferencesTable } from "./tables/UserPreferencesTable/index.js";
 
 const dbconfig =
   ServerEnvironmentConfig?.server?.line === "production"
@@ -66,16 +69,25 @@ const dbconfig =
         : DatabaseEnvironmentConfig?.local;
 
 const sequelize = new Sequelize(
-  dbconfig?.databse,
+  dbconfig?.database,
   dbconfig?.user,
   dbconfig?.password,
   {
     host: dbconfig?.host,
+    port: dbconfig?.port ?? 3306,
     dialect: "mysql",
     timezone: "+05:30",
 
     dialectOptions: {
       charset: "utf8mb4",
+      connectTimeout: 60000,
+    },
+
+    pool: {
+      max: 10,
+      min: 0,
+      acquire: 60000,
+      idle: 10000,
     },
 
     define: {
@@ -128,6 +140,8 @@ db.Messages = MessagesTable(sequelize, Sequelize);
 db.ProcessedMessage = ProcessedMessagesTable(sequelize, Sequelize);
 db.ChatLocks = ChatLocksTable(sequelize, Sequelize);
 db.Leads = LeadsTable(sequelize, Sequelize);
+db.MessageUnderstanding = MessageUnderstandingTable(sequelize, Sequelize);
+db.LeadScoreHistory = LeadScoreHistoryTable(sequelize, Sequelize);
 db.LiveChat = LiveChatTable(sequelize, Sequelize);
 db.Sequences = SequencesTable(sequelize, Sequelize);
 db.OtpVerification = OtpVerificationTable(sequelize, Sequelize);
@@ -159,6 +173,7 @@ db.BookingSessions = BookingSessionTable(sequelize, Sequelize); // NEW
 db.SavedPaymentMethod = SavedPaymentMethodTable(sequelize, Sequelize);
 db.TaxSettings = TaxSettingsTable(sequelize, Sequelize);
 db.TenantSecrets = TenantSecretsTable(sequelize, Sequelize);
+db.UserPreferences = UserPreferencesTable(sequelize, Sequelize);
 
 defineAssociations(db);
 

@@ -59,6 +59,8 @@ import { tableNames } from "../../database/tableName.js";
 const FIXED_MISSING_INFO_FALLBACK =
   "Our team will get back to you shortly. Please feel free to ask any other questions in the meantime ?";
 
+const ENABLE_APPOINTMENT_BUTTONS = false;
+
 const MISSING_INFO_TAGS = new Set([
   "MISSING_KNOWLEDGE",
   "MISSING_KNOWLEDGEBASE_HOOK",
@@ -99,9 +101,11 @@ const resolveAiReplyEnvelope = (aiResult, userText) => {
       ? ""
       : "Our team will review your message and contact you shortly.";
 
-  const messageToSend = isMissingInfoSignal
-    ? FIXED_MISSING_INFO_FALLBACK
-    : finalReply && finalReply.trim()
+  // When MISSING_KNOWLEDGE is detected but the AI DID provide a real answer,
+  // send the AI's actual reply (not the fallback). Only use the fallback
+  // when the AI reply is empty/null (true missing info scenario).
+  const messageToSend =
+    finalReply && finalReply.trim()
       ? finalReply.trim()
       : fallback;
 
@@ -389,7 +393,7 @@ export const receiveMessage = async (req, res) => {
               status: effectiveStatus,
               error_message:
                 effectiveStatus === "failed" ||
-                effectiveStatus === "permanently_failed"
+                  effectiveStatus === "permanently_failed"
                   ? statusUpdate.errors?.[0]?.title
                   : null,
             };
@@ -832,7 +836,12 @@ export const receiveMessage = async (req, res) => {
         lead_source,
       );
     }
-    await updateLeadService(tenant_id, leadSaved?.contact_id);
+    await updateLeadService(tenant_id, leadSaved?.contact_id, {
+      sourceEvent: "user_message",
+      message_id: savedMsg?.id,
+      message_text: text,
+      skipIntentAi: true,
+    });
     io.to(`tenant-${tenant_id}`).emit("lead-updated", {
       tenant_id,
       contact_id: contactsaved?.contact_id,
@@ -882,7 +891,24 @@ export const receiveMessage = async (req, res) => {
 
         // NEW: Build a contact object that the appointment orchestrator expects
         const contactObj = { ...contactsaved, phone_number: phone }; // NEW
-        const effectiveText = buttonReplyId || text; // NEW — use button ID when available
+        const isAppointmentButtonTrigger = Boolean(
+          buttonReplyId &&
+            (buttonReplyId === "create_appointment" ||
+              buttonReplyId === "view_my_appointments" ||
+              buttonReplyId.startsWith("reschedule_") ||
+              buttonReplyId.startsWith("cancel_") ||
+              buttonReplyId.startsWith("slot_") ||
+              buttonReplyId.startsWith("doctor_")),
+        );
+        const ignoreAppointmentButton =
+          !ENABLE_APPOINTMENT_BUTTONS && isAppointmentButtonTrigger;
+        const effectiveText = ignoreAppointmentButton ? text : buttonReplyId || text; // NEW — use button ID when available
+
+        console.log(
+          "[AI FLOW]",
+          "Appointment buttons enabled:",
+          ENABLE_APPOINTMENT_BUTTONS,
+        );
 
         // NEW: Audio / voice guard — appointments are text-only
         if (type === "audio") { // NEW
@@ -894,18 +920,20 @@ export const receiveMessage = async (req, res) => {
         } // NEW
 
         // NEW: Check if user is in a pending confirmation state (YES/NO for any booking flow)
-        const confirmResult = await appointmentOrchestrator.handleConfirmation( // NEW
-          effectiveText, contactObj, tenant_id, // NEW
-        ); // NEW
-        if (confirmResult) { // NEW
-          await handleAppointmentResponse( // NEW
-            confirmResult, tenant_id, phone, contactsaved, phone_number_id, name, // NEW
+        if (!ignoreAppointmentButton) {
+          const confirmResult = await appointmentOrchestrator.handleConfirmation( // NEW
+            effectiveText, contactObj, tenant_id, // NEW
           ); // NEW
-          return; // NEW
-        } // NEW
+          if (confirmResult) { // NEW
+            await handleAppointmentResponse( // NEW
+              confirmResult, tenant_id, phone, contactsaved, phone_number_id, name, // NEW
+            ); // NEW
+            return; // NEW
+          } // NEW
+        }
 
         // NEW: Route button replies that map directly to appointment intents
-        if (buttonReplyId) { // NEW
+        if (ENABLE_APPOINTMENT_BUTTONS && isAppointmentButtonTrigger) { // NEW
           let apptIntent = null; // NEW
           let resolvedMessage = effectiveText; // NEW — may be overridden for slot/doctor decoding
 
@@ -953,7 +981,8 @@ export const receiveMessage = async (req, res) => {
 
         if (
           activeSession &&
-          !["confirming", "processing", "completed", "cancelled"].includes(activeSession.current_step)
+          !["confirming", "processing", "completed", "cancelled"].includes(activeSession.current_step) &&
+          !ignoreAppointmentButton
         ) {
           const apptResult = await appointmentOrchestrator.handleAppointmentIntent(
             "APPOINTMENT_ACTION",
@@ -1046,6 +1075,28 @@ export const receiveMessage = async (req, res) => {
           ); // NEW
           return; // NEW
         } // NEW
+        try {
+          await updateLeadService(tenant_id, contactsaved?.contact_id, {
+            sourceEvent: "user_message",
+            message_id: savedMsg?.id,
+            message_text: text,
+            intentResult: {
+              intent: aiResult?.intent,
+              requires: aiResult?.requires,
+              lead_intelligence: aiResult?.lead_intelligence,
+            },
+          });
+
+          io.to(`tenant-${tenant_id}`).emit("lead-updated", {
+            tenant_id,
+            contact_id: contactsaved?.contact_id,
+          });
+        } catch (leadErr) {
+          console.error(
+            "[WEBHOOK] Failed to apply async intent lead-score update:",
+            leadErr.message,
+          );
+        }
 
         const { messageToSend, tagToExecute, tagPayloadToExecute } =
           resolveAiReplyEnvelope(aiResult, text);
@@ -1147,6 +1198,8 @@ export const receiveMessage = async (req, res) => {
               phone,
               phone_number_id,
               userMessage: text,
+              messageId: messageId || null, // WhatsApp Message ID (wamid)
+              message_db_id: savedMsg?.id || null, // Local database message ID
             },
             text,
           );
@@ -1207,6 +1260,29 @@ export const receiveMessage = async (req, res) => {
                   pending.contact_id,
                   phone_number_id,
                 );
+
+                try {
+                  await updateLeadService(tenant_id, pending.contact_id, {
+                    sourceEvent: "user_message",
+                    message_text: pending.text,
+                    intentResult: {
+                      intent: aiResult?.intent,
+                      requires: aiResult?.requires,
+                      lead_intelligence: aiResult?.lead_intelligence,
+                    },
+                  });
+
+                  io.to(`tenant-${tenant_id}`).emit("lead-updated", {
+                    tenant_id,
+                    contact_id: pending.contact_id,
+                  });
+                } catch (leadErr) {
+                  console.error(
+                    "[WEBHOOK] Failed queued async lead-score update:",
+                    leadErr.message,
+                  );
+                }
+
                 const {
                   messageToSend,
                   tagToExecute: queuedTagToExecute,
@@ -1319,7 +1395,7 @@ export const receiveMessage = async (req, res) => {
                       status: false,
                     });
                   }
-                } catch (_) {}
+                } catch (_) { }
               }
             });
           }
@@ -1356,10 +1432,10 @@ async function handleAppointmentResponse( // NEW
             ? [{ title: "Confirm" }, { title: "Cancel" }] // NEW
             : result.buttonType === "greeting_menu" // NEW
               ? [ // NEW
-                  { title: "Book appointment" }, // NEW
-                  { title: "My appointments" }, // NEW
-                  { title: "Cancel / Reschedule" }, // NEW
-                ] // NEW
+                { title: "Book appointment" }, // NEW
+                { title: "My appointments" }, // NEW
+                { title: "Cancel / Reschedule" }, // NEW
+              ] // NEW
               : result.buttonType === "book_prompt" // NEW
                 ? [{ title: "Book appointment" }] // NEW
                 : result.buttonType === "post_booking" // NEW
@@ -1421,7 +1497,7 @@ async function handleAppointmentResponse( // NEW
     } // NEW
   } catch (err) { // NEW
     console.error("[APPT-RESPONSE] Failed to send appointment response:", err.message); // NEW
-    await sendWhatsAppMessage(tenant_id, phone, result.message || "Done.").catch(() => {}); // NEW
+    await sendWhatsAppMessage(tenant_id, phone, result.message || "Done.").catch(() => { }); // NEW
   } // NEW
 
   // ── Persist bot message to DB + emit to dashboard socket ──────────────
@@ -1430,10 +1506,10 @@ async function handleAppointmentResponse( // NEW
     const messageTypeToSave = isInteractive ? "interactive" : "text"; // NEW
     const savedBotMsg = contact_id // NEW
       ? await createUserMessageService( // NEW
-          tenant_id, contact_id, phone_number_id, // NEW
-          phone, null, name, "bot", null, // NEW
-          textToSave, messageTypeToSave, null, null, null, null, null, interactive_payload, // NEW
-        ) // NEW
+        tenant_id, contact_id, phone_number_id, // NEW
+        phone, null, name, "bot", null, // NEW
+        textToSave, messageTypeToSave, null, null, null, null, null, interactive_payload, // NEW
+      ) // NEW
       : null; // NEW
 
     const io = getIO(); // NEW

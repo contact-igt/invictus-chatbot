@@ -203,6 +203,8 @@ export const uploadMediaService = async (
     );
 
     // Create MediaAsset record
+    const shouldMarkReadyImmediately = metadata.readyImmediately === true;
+
     const mediaAsset = await db.MediaAsset.create({
       media_asset_id: assetId,
       tenant_id: tenantId,
@@ -214,7 +216,7 @@ export const uploadMediaService = async (
       preview_url: previewUrl,
       tags: metadata.tags || [],
       folder: metadata.folder || "root",
-      is_approved: false,
+      is_approved: shouldMarkReadyImmediately,
       templates_used: [],
       campaigns_used: [],
       uploaded_by: userId,

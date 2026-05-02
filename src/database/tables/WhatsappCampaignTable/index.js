@@ -1,166 +1,177 @@
 import { tableNames } from "../../tableName.js";
 
 export const WhatsappCampaignTable = (sequelize, Sequelize) => {
-    return sequelize.define(
-        tableNames.WHATSAPP_CAMPAIGN,
+  return sequelize.define(
+    tableNames.WHATSAPP_CAMPAIGN,
+    {
+      id: {
+        type: Sequelize.INTEGER,
+        allowNull: false,
+        autoIncrement: true,
+        primaryKey: true,
+      },
+
+      campaign_id: {
+        type: Sequelize.STRING,
+        allowNull: false,
+      },
+
+      tenant_id: {
+        type: Sequelize.STRING,
+        allowNull: false,
+      },
+
+      campaign_name: {
+        type: Sequelize.STRING,
+        allowNull: false,
+      },
+
+      campaign_type: {
+        type: Sequelize.ENUM("broadcast", "api", "scheduled", "immediate"),
+        allowNull: false,
+      },
+
+      template_id: {
+        type: Sequelize.STRING,
+        allowNull: false,
+      },
+
+      status: {
+        type: Sequelize.ENUM(
+          "draft",
+          "scheduled",
+          "active",
+          "completed",
+          "failed",
+          "paused",
+          "cancelled",
+          "deleted",
+        ),
+        defaultValue: "draft",
+        allowNull: false,
+      },
+
+      total_audience: {
+        type: Sequelize.INTEGER,
+        allowNull: false,
+        defaultValue: 0,
+      },
+
+      delivered_count: {
+        type: Sequelize.INTEGER,
+        allowNull: false,
+        defaultValue: 0,
+      },
+
+      read_count: {
+        type: Sequelize.INTEGER,
+        allowNull: false,
+        defaultValue: 0,
+      },
+
+      replied_count: {
+        type: Sequelize.INTEGER,
+        allowNull: false,
+        defaultValue: 0,
+      },
+
+      scheduled_at: {
+        type: Sequelize.DATE,
+        allowNull: true,
+      },
+
+      header_media_url: {
+        type: Sequelize.TEXT,
+        allowNull: true,
+      },
+
+      header_file_name: {
+        type: Sequelize.STRING,
+        allowNull: true,
+      },
+
+      location_params: {
+        type: Sequelize.JSON,
+        allowNull: true,
+      },
+
+      card_media_urls: {
+        type: Sequelize.JSON,
+        allowNull: true,
+      },
+
+      media_asset_id: {
+        type: Sequelize.STRING,
+        allowNull: true,
+      },
+
+      media_handle: {
+        type: Sequelize.TEXT,
+        allowNull: true,
+      },
+
+      is_deleted: {
+        type: Sequelize.BOOLEAN,
+        allowNull: false,
+        defaultValue: false,
+      },
+
+      deleted_at: {
+        type: Sequelize.DATE,
+        allowNull: true,
+      },
+
+      created_by: {
+        type: Sequelize.STRING,
+        allowNull: true,
+      },
+
+      updated_by: {
+        type: Sequelize.STRING,
+        allowNull: true,
+      },
+
+      createdAt: {
+        type: Sequelize.DATE,
+        allowNull: false,
+        defaultValue: sequelize.literal("CURRENT_TIMESTAMP"),
+        field: "created_at",
+      },
+
+      updatedAt: {
+        type: Sequelize.DATE,
+        allowNull: false,
+        defaultValue: sequelize.literal("CURRENT_TIMESTAMP"),
+        field: "updated_at",
+      },
+    },
+    {
+      tableName: tableNames.WHATSAPP_CAMPAIGN,
+      timestamps: true,
+      underscored: true,
+      indexes: [
         {
-            id: {
-                type: Sequelize.INTEGER,
-                allowNull: false,
-                autoIncrement: true,
-                primaryKey: true,
-            },
-
-            campaign_id: {
-                type: Sequelize.STRING,
-                allowNull: false,
-            },
-
-            tenant_id: {
-                type: Sequelize.STRING,
-                allowNull: false,
-            },
-
-            campaign_name: {
-                type: Sequelize.STRING,
-                allowNull: false,
-            },
-
-            campaign_type: {
-                type: Sequelize.ENUM("broadcast", "api", "scheduled", "immediate"),
-                allowNull: false,
-            },
-
-            template_id: {
-                type: Sequelize.STRING,
-                allowNull: false,
-            },
-
-            status: {
-                type: Sequelize.ENUM("draft", "scheduled", "active", "completed", "failed", "paused", "cancelled"),
-                defaultValue: "draft",
-                allowNull: false,
-            },
-
-            total_audience: {
-                type: Sequelize.INTEGER,
-                allowNull: false,
-                defaultValue: 0,
-            },
-
-            delivered_count: {
-                type: Sequelize.INTEGER,
-                allowNull: false,
-                defaultValue: 0,
-            },
-
-            read_count: {
-                type: Sequelize.INTEGER,
-                allowNull: false,
-                defaultValue: 0,
-            },
-
-            replied_count: {
-                type: Sequelize.INTEGER,
-                allowNull: false,
-                defaultValue: 0,
-            },
-
-            scheduled_at: {
-                type: Sequelize.DATE,
-                allowNull: true,
-            },
-
-            header_media_url: {
-                type: Sequelize.TEXT,
-                allowNull: true,
-            },
-
-            header_file_name: {
-                type: Sequelize.STRING,
-                allowNull: true,
-            },
-
-            location_params: {
-                type: Sequelize.JSON,
-                allowNull: true,
-            },
-
-            card_media_urls: {
-                type: Sequelize.JSON,
-                allowNull: true,
-            },
-
-            media_asset_id: {
-                type: Sequelize.STRING,
-                allowNull: true,
-            },
-
-            media_handle: {
-                type: Sequelize.TEXT,
-                allowNull: true,
-            },
-
-            is_deleted: {
-                type: Sequelize.BOOLEAN,
-                allowNull: false,
-                defaultValue: false,
-            },
-
-            deleted_at: {
-                type: Sequelize.DATE,
-                allowNull: true,
-            },
-
-            created_by: {
-                type: Sequelize.STRING,
-                allowNull: true,
-            },
-
-            updated_by: {
-                type: Sequelize.STRING,
-                allowNull: true,
-            },
-
-            createdAt: {
-                type: Sequelize.DATE,
-                allowNull: false,
-                defaultValue: sequelize.literal("CURRENT_TIMESTAMP"),
-                field: "created_at",
-            },
-
-            updatedAt: {
-                type: Sequelize.DATE,
-                allowNull: false,
-                defaultValue: sequelize.literal("CURRENT_TIMESTAMP"),
-                field: "updated_at",
-            },
+          name: "unique_campaign_id",
+          unique: true,
+          fields: ["campaign_id"],
         },
         {
-            tableName: tableNames.WHATSAPP_CAMPAIGN,
-            timestamps: true,
-            underscored: true,
-            indexes: [
-                {
-                    name: "unique_campaign_id",
-                    unique: true,
-                    fields: ["campaign_id"],
-                },
-                {
-                    name: "idx_campaign_tenant",
-                    fields: ["tenant_id"],
-                },
-                {
-                    name: "idx_campaign_status",
-                    fields: ["status"],
-                },
-                {
-                    name: "idx_campaign_deleted",
-                    fields: ["is_deleted"],
-                },
-            ],
+          name: "idx_campaign_tenant",
+          fields: ["tenant_id"],
         },
-    );
+        {
+          name: "idx_campaign_status",
+          fields: ["status"],
+        },
+        {
+          name: "idx_campaign_status_scheduled_at",
+          fields: ["status", "scheduled_at"],
+        },
+        {
+          name: "idx_campaign_deleted",
+          fields: ["is_deleted"],
+        },
+      ],
+    },
+  );
 };
-
-

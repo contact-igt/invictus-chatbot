@@ -14,6 +14,8 @@ import {
   getDeletedTenantUserListController,
   restoreTenantUserController,
   getLoggedTenantUserController,
+  getLoggedTenantUserPreferencesController,
+  updateLoggedTenantUserPreferencesController,
   updateTenantOrganizationController,
   updateLoggedTenantProfileController,
     forgotTenantPasswordController,
@@ -43,6 +45,26 @@ Router.get(
     roles: ["tenant_admin", "doctor", "staff", "agent"],
   }),
   getLoggedTenantUserController,
+);
+
+Router.get(
+  "/user/preferences",
+  authenticate,
+  authorize({
+    user_type: "tenant",
+    roles: ["tenant_admin", "doctor", "staff", "agent"],
+  }),
+  getLoggedTenantUserPreferencesController,
+);
+
+Router.put(
+  "/user/preferences",
+  authenticate,
+  authorize({
+    user_type: "tenant",
+    roles: ["tenant_admin", "doctor", "staff", "agent"],
+  }),
+  updateLoggedTenantUserPreferencesController,
 );
 
 Router.put(

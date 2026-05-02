@@ -43,6 +43,10 @@ import {
   checkOTPVerificationService,
 } from "../OtpVerificationModel/otpverification.service.js";
 import { DEFAULT_USD_TO_INR } from "../../config/billing.config.js";
+import {
+  getUserPreferencesService,
+  upsertUserPreferencesService,
+} from "../UserPreferencesModel/userPreferences.service.js";
 
 export const registerManagementController = async (req, res) => {
   try {
@@ -171,6 +175,12 @@ export const loginManagementController = async (req, res) => {
     const userDetails = { ...user, user_type: "management" };
     delete userDetails.password;
 
+    const userPrefs = await getUserPreferencesService(
+      user.management_id,
+      "management",
+    );
+    userDetails.preferences = { theme: userPrefs?.theme || "light" };
+
     return res.status(200).send({
       message: "Login successful",
       user: userDetails,
@@ -259,9 +269,72 @@ export const getLoggedManagementController = async (req, res) => {
     const userDetails = { ...data, user_type: "management" };
     delete userDetails.password;
 
+    const userPrefs = await getUserPreferencesService(unique_id, "management");
+    userDetails.preferences = { theme: userPrefs?.theme || "light" };
+
     return res.status(200).send({
       message: "Logged-in management profile fetched successfully",
       data: userDetails,
+    });
+  } catch (err) {
+    return res.status(500).send({ message: err.message });
+  }
+};
+
+export const getLoggedManagementPreferencesController = async (req, res) => {
+  try {
+    const { unique_id } = req.user;
+
+    if (!unique_id) {
+      return res.status(400).send({
+        message: "Management ID not found in session",
+      });
+    }
+
+    const userPrefs = await getUserPreferencesService(unique_id, "management");
+
+    return res.status(200).send({
+      message: "Management preferences fetched successfully",
+      data: {
+        theme: userPrefs?.theme || "light",
+      },
+    });
+  } catch (err) {
+    return res.status(500).send({ message: err.message });
+  }
+};
+
+export const updateLoggedManagementPreferencesController = async (req, res) => {
+  try {
+    const { unique_id } = req.user;
+    const { preferences } = req.body;
+
+    if (!unique_id) {
+      return res.status(400).send({
+        message: "Management ID not found in session",
+      });
+    }
+
+    if (!preferences || typeof preferences !== "object") {
+      return res.status(400).send({
+        message: "Preferences payload is required",
+      });
+    }
+
+    await upsertUserPreferencesService(
+      unique_id,
+      null,
+      preferences,
+      "management",
+    );
+
+    const updatedPrefs = await getUserPreferencesService(unique_id, "management");
+
+    return res.status(200).send({
+      message: "Management preferences updated successfully",
+      data: {
+        theme: updatedPrefs?.theme || "light",
+      },
     });
   } catch (err) {
     return res.status(500).send({ message: err.message });
@@ -273,7 +346,8 @@ export const updateManagementController = async (req, res) => {
     const loggedInUser = req.user;
     const targetUserId = req.params.id;
 
-    const { title, username, country_code, mobile, profile } = req.body;
+    const { title, username, country_code, mobile, profile, preferences } =
+      req.body;
 
     if (loggedInUser.role === "platform_admin") {
       if (targetUserId !== loggedInUser.unique_id) {
@@ -304,25 +378,62 @@ export const updateManagementController = async (req, res) => {
       }
     }
 
-    const cleanedCC = country_code ? cleanCountryCode(country_code) : null;
+    if (preferences && targetUserId !== loggedInUser.unique_id) {
+      return res.status(403).send({
+        message: "You can update preferences only for your own account",
+      });
+    }
 
-    await updateManagementService(
-      targetUserId,
-      title,
-      username,
-      cleanedCC,
-      normalizeMobile(cleanedCC, mobile),
-      profile,
-      loggedInUser.role === "super_admin" && req.body.role
-        ? req.body.role
-        : null,
-      loggedInUser.role === "super_admin" && req.body.status
-        ? req.body.status
-        : null,
+    const cleanedCC = country_code ? cleanCountryCode(country_code) : null;
+    const hasProfileUpdates = Boolean(
+      title ||
+        username ||
+        country_code ||
+        mobile ||
+        profile ||
+        (loggedInUser.role === "super_admin" && req.body.role) ||
+        (loggedInUser.role === "super_admin" && req.body.status),
     );
+
+    if (hasProfileUpdates) {
+      await updateManagementService(
+        targetUserId,
+        title,
+        username,
+        cleanedCC,
+        mobile ? normalizeMobile(cleanedCC, mobile) : null,
+        profile,
+        loggedInUser.role === "super_admin" && req.body.role
+          ? req.body.role
+          : null,
+        loggedInUser.role === "super_admin" && req.body.status
+          ? req.body.status
+          : null,
+      );
+    }
+
+    if (preferences && typeof preferences === "object") {
+      await upsertUserPreferencesService(
+        targetUserId,
+        null,
+        preferences,
+        "management",
+      );
+    }
+
+    const updatedUser = await getManagementByIdService(targetUserId);
+    if (updatedUser) {
+      delete updatedUser.password;
+      const updatedPrefs = await getUserPreferencesService(
+        targetUserId,
+        "management",
+      );
+      updatedUser.preferences = { theme: updatedPrefs?.theme || "light" };
+    }
 
     return res.status(200).send({
       message: "Management profile updated successfully",
+      data: updatedUser ? { ...updatedUser, user_type: "management" } : null,
     });
   } catch (err) {
     if (err.original?.code === "ER_DUP_ENTRY") {

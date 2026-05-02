@@ -146,50 +146,56 @@ export const manualConnectWhatsappController = async (req, res) => {
 };
 
 export const testWhatsappAccountController = async (req, res) => {
-  const tenant_id = req.user.tenant_id;
-
-  const account = await getWhatsappAccountByTenantService(tenant_id);
-
-  if (!account) {
-    return res.status(404).send({ message: "WhatsApp account not found" });
-  }
-
   try {
-    await axios.get(
-      `https://graph.facebook.com/v19.0/${account.phone_number_id}`,
-      {
-        headers: {
-          Authorization: `Bearer ${account.access_token}`,
+    const tenant_id = req.user.tenant_id;
+
+    const account = await getWhatsappAccountByTenantService(tenant_id);
+
+    if (!account) {
+      return res.status(404).send({ message: "WhatsApp account not found. Please save your credentials first." });
+    }
+
+    if (!account.access_token) {
+      return res.status(400).send({ message: "Access token not found. Please re-enter and save your credentials." });
+    }
+
+    try {
+      await axios.get(
+        `https://graph.facebook.com/v25.0/${account.phone_number_id}`,
+        {
+          headers: {
+            Authorization: `Bearer ${account.access_token}`,
+          },
+          timeout: 10000,
         },
-      },
-    );
+      );
 
-    await updateWhatsappAccountStatusService(account.id, "verified", null);
+      await updateWhatsappAccountStatusService(account.id, "verified", null);
 
-    return res.status(200).send({
-      message:
-        "WhatsApp connection verified successfully! You can now activate your account.",
-      status: "verified",
-    });
+      return res.status(200).send({
+        message: "WhatsApp connection verified successfully! You can now activate your account.",
+        status: "verified",
+      });
+    } catch (err) {
+      const isNetworkError = err.code === "ENOTFOUND" || err.code === "ECONNREFUSED" || err.code === "ETIMEDOUT";
+
+      const metaError =
+        err.response?.data?.error?.message || err.response?.data || err.message;
+
+      await updateWhatsappAccountStatusService(
+        account.id,
+        "failed",
+        isNetworkError ? "Server cannot reach Meta (DNS/network issue)" : metaError,
+      );
+
+      return res.status(500).send({
+        message: isNetworkError
+          ? "Server network issue. Please contact support."
+          : `WhatsApp verification failed: ${metaError}`,
+      });
+    }
   } catch (err) {
-    const isNetworkError = err.code === "ENOTFOUND";
-
-    const metaError =
-      err.response?.data?.error?.message || err.response?.data || err.message;
-
-    await updateWhatsappAccountStatusService(
-      account.id,
-      "failed",
-      isNetworkError
-        ? "Server cannot reach Meta (DNS/network issue)"
-        : metaError,
-    );
-
-    return res.status(500).send({
-      message: isNetworkError
-        ? "Server network issue. Please contact support."
-        : `WhatsApp verification failed: ${metaError}`,
-    });
+    return res.status(500).send({ message: err.message || "Unexpected error during connection test." });
   }
 };
 
@@ -363,7 +369,7 @@ export const getWhatsappAccountController = async (req, res) => {
     const account = await getWhatsappAccountByTenantService(tenant_id);
 
     if (!account) {
-      return res.status(404).send({ message: "WhatsApp account not found" });
+      return res.status(200).send({ data: null });
     }
 
     // Non-blocking: refresh quality & tier from Meta in background
@@ -388,7 +394,7 @@ export const getTierLimitController = async (req, res) => {
     const account = await getWhatsappAccountByTenantService(tenant_id);
 
     if (!account) {
-      return res.status(404).send({ message: "WhatsApp account not found" });
+      return res.status(200).send({ data: null });
     }
 
     // Trigger background sync so data stays fresh without blocking the response

@@ -15,6 +15,7 @@ import {
   campaignEventWebhookController,
   getCampaignStatsController,
   uploadCampaignMediaController,
+  getCampaignDiagnosticsController,
 } from "./whatsappcampaign.controller.js";
 import {
   softDeleteCampaignController,
@@ -26,6 +27,25 @@ import {
 const router = express.Router();
 
 const tenantRoles = ["tenant_admin", "doctor", "staff", "agent"];
+
+const requireCampaignEventSecret = (req, res, next) => {
+  const configuredSecret = process.env.CAMPAIGN_EVENT_WEBHOOK_SECRET;
+  if (!configuredSecret) {
+    return next();
+  }
+
+  const providedSecret =
+    req.get("x-campaign-event-secret") || req.query?.secret || req.body?.secret;
+
+  if (providedSecret !== configuredSecret) {
+    return res.status(401).json({
+      success: false,
+      message: "Unauthorized campaign event webhook request",
+    });
+  }
+
+  return next();
+};
 
 router.post(
   "/whatsapp-campaign",
@@ -67,6 +87,13 @@ router.get(
   authenticate,
   authorize({ user_type: "tenant", roles: tenantRoles }),
   getDeletedCampaignsController,
+);
+
+router.get(
+  "/whatsapp-campaign/diagnostics",
+  authenticate,
+  authorize({ user_type: "tenant", roles: tenantRoles }),
+  getCampaignDiagnosticsController,
 );
 
 router.get(
@@ -131,7 +158,11 @@ router.post(
   updateCampaignStatusController,
 );
 
-router.post("/whatsapp-campaign/event", campaignEventWebhookController);
+router.post(
+  "/whatsapp-campaign/event",
+  requireCampaignEventSecret,
+  campaignEventWebhookController,
+);
 
 router.get(
   "/whatsapp-campaign/:campaign_id/stats",

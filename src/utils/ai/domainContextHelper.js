@@ -9,7 +9,7 @@ import { tableNames } from "../../database/tableName.js";
  *
  * Sources joined:
  *   1. tenants.company_name + tenants.type
- *   2. Active ai_prompt.prompt (first 300 chars of instructions)
+ *   2. Active ai_prompt.prompt (first 500 chars of instructions)
  *   3. Top 5 active knowledge_sources titles (what topics this business covers)
  *
  * The summary is persisted in tenants.ai_settings.domain_summary so it is
@@ -113,14 +113,14 @@ const _buildSummary = async (tenantId) => {
   const companyName = tenantRows[0]?.company_name || "this business";
   const tenantType = tenantRows[0]?.type || "organization";
 
-  // Active business instructions (first 300 chars)
+  // Active business instructions (first 500 chars)
   const [promptRows] = await db.sequelize.query(
     `SELECT prompt FROM ${tableNames.AIPROMPT}
      WHERE tenant_id = ? AND is_active = true AND is_deleted = false
      ORDER BY created_at DESC LIMIT 1`,
     { replacements: [tenantId] },
   );
-  const promptSnippet = promptRows[0]?.prompt?.substring(0, 300)?.trim() || "";
+  const promptSnippet = promptRows[0]?.prompt?.substring(0, 500)?.trim() || "";
 
   // Top 5 active knowledge source titles (what topics the business has documented)
   const [sourceRows] = await db.sequelize.query(

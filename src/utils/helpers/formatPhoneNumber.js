@@ -14,22 +14,26 @@ export const formatPhoneNumber = (phone) => {
 
   if (!cleaned) return null;
 
-  // If it's a 10-digit number, prepend 91 (default India)
+  // New rule: accept either a local 10-digit number or a country-code-prefixed 12-digit number.
+  // - If 10 digits are provided, normalize by prepending default country code '91' and return 12-digit string.
+  // - If 11 digits starting with 0 (leading trunk), drop the 0 and treat result as 10 digits (then prepend '91').
+  // - If 12 digits are provided (already include country code), accept as-is.
+  // Any other lengths are considered invalid for this project's stricter validation.
+
   if (cleaned.length === 10) {
-    return `91${cleaned}`;
+    return `91${cleaned}`; // normalize to 12-digit (default country code)
   }
 
-  // If it starts with 0 and then has 10 digits, remove 0 and prepend 91
   if (cleaned.length === 11 && cleaned.startsWith("0")) {
+    // e.g. 0XXXXXXXXXX -> strip leading 0 and treat as local 10-digit
     return `91${cleaned.slice(1)}`;
   }
 
-  // Number with country code should be > 10 digits and max 15 digits (E.164 standard)
-  if (cleaned.length > 10 && cleaned.length <= 15) {
-    return cleaned;
+  if (cleaned.length === 12) {
+    return cleaned; // already country-code + local number (12 digits)
   }
 
-  // Less than 10 digits or more than 15 digits — invalid
+  // Anything else is invalid under the stricter 10/12 digit rule
   return null;
 };
 
@@ -43,5 +47,6 @@ export const formatPhoneNumber = (phone) => {
 export const hasCountryCode = (phone) => {
   if (!phone) return false;
   const cleaned = phone.toString().replace(/\D/g, "");
-  return cleaned.length > 10 && cleaned.length <= 15;
+  // Under the stricter rule, country-code-included numbers are 12 digits.
+  return cleaned.length === 12;
 };

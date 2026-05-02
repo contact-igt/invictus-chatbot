@@ -23,6 +23,8 @@ export const tableNames = {
   PROCESSEDMESSAGE: "processed_messages",
   CHATLOCKS: "chat_locks",
   LEADS: "leads",
+  MESSAGE_UNDERSTANDING: "message_understanding",
+  LEAD_SCORE_HISTORY: "lead_score_history",
   LIVECHAT: "live_chats",
   SEQUENCES: "sequences",
   OTP_VERIFICATIONS: "otp_verifications",
@@ -53,4 +55,5 @@ export const tableNames = {
   SAVE_PAYMENT_METHOD: "saved_payment_methods",
   TAX_SETTINGS: "tax_settings",
   TENANT_SECRETS: "tenant_secrets",
+  USER_PREFERENCES: "user_preferences",
 };

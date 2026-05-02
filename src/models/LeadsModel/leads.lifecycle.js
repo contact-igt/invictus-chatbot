@@ -26,7 +26,7 @@ export const softDeleteLead = async (leadId, tenant_id) => {
     if (row.is_deleted) throw new Error("Lead is already deleted");
     await db.sequelize.query(
       `UPDATE ${tableNames.LEADS}
-       SET is_deleted = true, deleted_at = NOW(), status = 'closed', updated_at = NOW()
+       SET is_deleted = true, deleted_at = NOW(), status = 'archived', updated_at = NOW()
        WHERE lead_id = ? AND tenant_id = ?`,
       { replacements: [leadId, tenant_id], transaction: t },
     );
@@ -41,7 +41,7 @@ export const restoreLead = async (leadId, tenant_id) => {
     if (!isRestoreEligible(row.deleted_at)) throw new RestoreExpiredError();
     await db.sequelize.query(
       `UPDATE ${tableNames.LEADS}
-       SET is_deleted = false, deleted_at = NULL, status = 'open', updated_at = NOW()
+       SET is_deleted = false, deleted_at = NULL, status = 'active', updated_at = NOW()
        WHERE lead_id = ? AND tenant_id = ?`,
       { replacements: [leadId, tenant_id], transaction: t },
     );

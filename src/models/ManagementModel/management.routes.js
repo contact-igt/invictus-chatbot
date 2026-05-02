@@ -4,6 +4,8 @@ import {
   getManagementByIdController,
   getManagementController,
   getLoggedManagementController,
+  getLoggedManagementPreferencesController,
+  updateLoggedManagementPreferencesController,
   loginManagementController,
   registerManagementController,
   softDeleteManagementController,
@@ -51,6 +53,26 @@ Router.get(
     roles: ["platform_admin", "super_admin"],
   }),
   getLoggedManagementController,
+);
+
+Router.get(
+  "/preferences",
+  authenticate,
+  authorize({
+    user_type: "management",
+    roles: ["platform_admin", "super_admin"],
+  }),
+  getLoggedManagementPreferencesController,
+);
+
+Router.put(
+  "/preferences",
+  authenticate,
+  authorize({
+    user_type: "management",
+    roles: ["platform_admin", "super_admin"],
+  }),
+  updateLoggedManagementPreferencesController,
 );
 
 Router.get(
