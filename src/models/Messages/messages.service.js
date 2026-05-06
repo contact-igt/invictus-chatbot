@@ -84,7 +84,9 @@ export const createUserMessageService = async (
     ];
 
     const [result] = await db.sequelize.query(Query, { replacements: values });
-    return { id: result };
+    // result is a ResultSetHeader — extract the actual auto-increment ID
+    const insertId = result?.insertId ?? result;
+    return { id: insertId };
   } catch (err) {
     throw err;
   }
@@ -166,7 +168,7 @@ export const getChatByPhoneService = async (phone, tenant_id) => {
     }
 
     const Query = `
-    SELECT id, contact_id, sender, sender_id, message, message_type, interactive_payload, media_url, media_mime_type, media_filename, seen, status, created_at
+    SELECT id, contact_id, sender, sender_id, message, message_type, interactive_payload, media_url, media_mime_type, media_filename, seen, status, wamid, created_at
     FROM ${tableNames?.MESSAGES}
     WHERE ${whereClause} AND is_deleted = false
     ORDER BY created_at ASC

@@ -41,6 +41,7 @@ import {
   getOrCreateContactService,
   updateContactService,
 } from "../ContactsModel/contacts.service.js";
+import { MISSING_INFO_FALLBACK_REPLY } from "../../utils/ai/prompts/system.js";
 import {
   createLeadService,
   getLeadByContactIdService,
@@ -56,8 +57,14 @@ import {
 import { markMediaAsApprovedService } from "../GalleryModel/gallery.service.js";
 import { tableNames } from "../../database/tableName.js";
 
-const FIXED_MISSING_INFO_FALLBACK =
-  "Our team will get back to you shortly. Please feel free to ask any other questions in the meantime ?";
+const FIXED_MISSING_INFO_FALLBACK = MISSING_INFO_FALLBACK_REPLY;
+
+// Trace helper — mirrors the one in the service file
+const faqTrace = (label, data) => {
+  const line = `[${new Date().toISOString()}] ${label} ${JSON.stringify(data)}\n`;
+  process.stdout.write(line);
+  try { fs.appendFileSync("/tmp/faq_trace.log", line); } catch {}
+};
 
 const ENABLE_APPOINTMENT_BUTTONS = false;
 
@@ -68,7 +75,7 @@ const MISSING_INFO_TAGS = new Set([
 ]);
 
 const MISSING_INFO_REPLY_PATTERN =
-  /(i\s*do\s*not|i\s*don't|i\s*cannot|i\s*can't|unable\s+to|not\s+enough\s+information|outside\s+(my|our)\s+(scope|knowledge)|our team will get back to you shortly|let me check with the team)/i;
+  /(i\s*do\s*not|i\s*don't|i\s*cannot|i\s*can't|i\s+do\s+not\s+have\s+that\s+detail\s+right\s+now|unable\s+to|not\s+enough\s+information|outside\s+(my|our)\s+(scope|knowledge)|our team will get back to you shortly|let me check with the team)/i;
 
 const normalizeRequestedTopic = (text = "") =>
   String(text || "")
@@ -99,7 +106,7 @@ const resolveAiReplyEnvelope = (aiResult, userText) => {
     ? FIXED_MISSING_INFO_FALLBACK
     : aiResult?.tagDetected
       ? ""
-      : "Our team will review your message and contact you shortly.";
+      : "I don't have a confirmed answer for that right now. Please feel free to ask another question.";
 
   // When MISSING_KNOWLEDGE is detected but the AI DID provide a real answer,
   // send the AI's actual reply (not the fallback). Only use the fallback
@@ -997,6 +1004,8 @@ export const receiveMessage = async (req, res) => {
         }
 
         // NEW: Greeting detection — keyword-based, no AI cost
+        // Only intercept greetings when appointment buttons are enabled;
+        // otherwise let the AI handle greetings naturally through the normal flow.
         const lowerTrimmed = effectiveText.toLowerCase().trim(); // NEW
         const wordCount = effectiveText.trim().split(/\s+/).length; // NEW
         const isGreeting = // NEW
@@ -1004,7 +1013,7 @@ export const receiveMessage = async (req, res) => {
           GREETING_KEYWORDS.some( // NEW
             (kw) => lowerTrimmed === kw || lowerTrimmed.startsWith(kw + " "), // NEW
           ); // NEW
-        if (isGreeting) { // NEW
+        if (isGreeting && ENABLE_APPOINTMENT_BUTTONS) { // NEW — gated behind feature flag
           await handleAppointmentResponse( // NEW
             { message: "Welcome! How can I help you today?", buttonType: "greeting_menu" }, // NEW
             tenant_id, phone, contactsaved, phone_number_id, name, // NEW
@@ -1058,6 +1067,7 @@ export const receiveMessage = async (req, res) => {
           contactsaved?.contact_id,
           phone_number_id,
           cachedData,
+          messageId || null,
         );
 
         // Log AI result for debugging UPDATE/CANCEL issues
@@ -1069,6 +1079,9 @@ export const receiveMessage = async (req, res) => {
 
         // NEW: If getOpenAIReply routed an appointment intent, handle interactive response
         // handleAppointmentResponse saves to DB and emits socket internally
+        const _apptTrace = { _apptResult: !!aiResult?._apptResult, tagDetected: aiResult?.tagDetected, msgPreview: String(aiResult?.message || "").substring(0, 60) };
+        try { import("fs").then(fs => fs.default.appendFileSync("/tmp/faq_trace.log", `[${new Date().toISOString()}] [CONTROLLER] aiResult check ${JSON.stringify(_apptTrace)}\n`)); } catch {}
+        console.log("[FAQ-PIPELINE][CTRL] aiResult:", JSON.stringify(_apptTrace));
         if (aiResult?._apptResult) { // NEW
           await handleAppointmentResponse( // NEW
             aiResult._apptResult, tenant_id, phone, contactsaved, phone_number_id, name, // NEW
@@ -1183,26 +1196,32 @@ export const receiveMessage = async (req, res) => {
 
         // Execute tag handler AFTER sending the AI reply
         // This ensures correct message ordering (e.g., "Let me check..." before slots list)
+        faqTrace("[CONTROLLER] pre-executeTagHandler", { tagToExecute: tagToExecute ?? null, isMissingInfo: resolveAiReplyEnvelope(aiResult, text).isMissingInfoSignal, aiTag: aiResult?.tagDetected ?? null, msgPreview: String(aiResult?.message || "").substring(0, 60) });
         if (tagToExecute) {
-          console.log(
-            `[WEBHOOK] Executing tag handler: ${tagToExecute}, payload: ${String(tagPayloadToExecute || "").substring(0, 100)}`,
-          );
-          const { executeTagHandler } =
-            await import("../../utils/ai/aiTagHandlers/index.js");
-          await executeTagHandler(
-            tagToExecute,
-            tagPayloadToExecute,
-            {
-              tenant_id,
-              contact_id: contactsaved?.contact_id,
-              phone,
-              phone_number_id,
-              userMessage: text,
-              messageId: messageId || null, // WhatsApp Message ID (wamid)
-              message_db_id: savedMsg?.id || null, // Local database message ID
-            },
-            text,
-          );
+          faqTrace("[CONTROLLER] ▶ invoking executeTagHandler", { tag: tagToExecute, payload: String(tagPayloadToExecute || "").substring(0, 100), tenant_id, phone, messageId: messageId || null, message_db_id: savedMsg?.id || null });
+          try {
+            const { executeTagHandler } =
+              await import("../../utils/ai/aiTagHandlers/index.js");
+            await executeTagHandler(
+              tagToExecute,
+              tagPayloadToExecute,
+              {
+                tenant_id,
+                contact_id: contactsaved?.contact_id,
+                phone,
+                phone_number_id,
+                userMessage: text,
+                messageId: messageId || null, // WhatsApp Message ID (wamid)
+                message_db_id: savedMsg?.id || null, // Local database message ID
+              },
+              text,
+            );
+            faqTrace("[CONTROLLER] ✓ executeTagHandler completed", { tag: tagToExecute });
+          } catch (tagErr) {
+            faqTrace("[CONTROLLER] ✗ executeTagHandler FAILED", { tag: tagToExecute, error: tagErr.message, stack: tagErr.stack?.substring(0, 300) });
+          }
+        } else {
+          faqTrace("[CONTROLLER] ✗ tagToExecute is null — FAQ NOT created", { aiTag: aiResult?.tagDetected ?? null });
         }
       } catch (err) {
         console.error("Background AI error:", err);
@@ -1259,6 +1278,8 @@ export const receiveMessage = async (req, res) => {
                   pending.text,
                   pending.contact_id,
                   phone_number_id,
+                  {}, // cachedData
+                  pending.messageId || null,
                 );
 
                 try {
@@ -1363,20 +1384,28 @@ export const receiveMessage = async (req, res) => {
                   });
 
                   if (queuedTagToExecute) {
-                    const { executeTagHandler } =
-                      await import("../../utils/ai/aiTagHandlers/index.js");
-                    await executeTagHandler(
-                      queuedTagToExecute,
-                      queuedTagPayloadToExecute,
-                      {
-                        tenant_id,
-                        contact_id: pending.contact_id,
-                        phone,
-                        phone_number_id,
-                        userMessage: pending.text,
-                      },
-                      pending.text,
-                    );
+                    faqTrace("[CONTROLLER][QUEUED] ▶ invoking executeTagHandler", { tag: queuedTagToExecute, payload: String(queuedTagPayloadToExecute || "").substring(0, 100), tenant_id, phone });
+                    try {
+                      const { executeTagHandler } =
+                        await import("../../utils/ai/aiTagHandlers/index.js");
+                      await executeTagHandler(
+                        queuedTagToExecute,
+                        queuedTagPayloadToExecute,
+                        {
+                          tenant_id,
+                          contact_id: pending.contact_id,
+                          phone,
+                          phone_number_id,
+                          userMessage: pending.text,
+                          messageId: pending.messageId || null,
+                          message_db_id: pending.message_db_id || null,
+                        },
+                        pending.text,
+                      );
+                      faqTrace("[CONTROLLER][QUEUED] ✓ executeTagHandler completed", { tag: queuedTagToExecute });
+                    } catch (tagErr) {
+                      faqTrace("[CONTROLLER][QUEUED] ✗ executeTagHandler FAILED", { tag: queuedTagToExecute, error: tagErr.message, stack: tagErr.stack?.substring(0, 300) });
+                    }
                   }
                 }
               } catch (qErr) {

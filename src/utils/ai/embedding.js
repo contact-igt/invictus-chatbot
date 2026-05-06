@@ -10,22 +10,23 @@ const sanitizeInput = (text = "") =>
 
 export const generateTextEmbedding = async (text, tenant_id = null) => {
   const input = sanitizeInput(text);
-  if (!input) return null;
-
-  try {
-    const openai = await getOpenAIClient(tenant_id);
-    const response = await openai.embeddings.create({
-      model: EMBEDDING_MODEL,
-      input,
-    });
-
-    const embedding = response?.data?.[0]?.embedding;
-    if (!Array.isArray(embedding) || embedding.length === 0) return null;
-    return embedding;
-  } catch (err) {
-    console.error("[EMBEDDING] Failed to generate embedding:", err.message);
-    return null;
+  if (!input) {
+    throw new Error("[EMBEDDING] Empty input after sanitization — cannot generate embedding");
   }
+
+  const openai = await getOpenAIClient(tenant_id);
+  const response = await openai.embeddings.create({
+    model: EMBEDDING_MODEL,
+    input,
+  });
+
+  const embedding = response?.data?.[0]?.embedding;
+  if (!Array.isArray(embedding) || embedding.length === 0) {
+    throw new Error(`[EMBEDDING] API returned empty/invalid embedding vector for input: "${input.substring(0, 60)}"`);
+  }
+
+  console.log(`[EMBEDDING] Generated embedding: vector length ${embedding.length}`);
+  return embedding;
 };
 
 export const parseEmbedding = (rawEmbedding) => {

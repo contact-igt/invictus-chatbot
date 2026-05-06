@@ -9,6 +9,7 @@ import { detectLanguageAI } from "../../utils/ai/detectLanguageStyle.js";
 import { buildChatHistory } from "../../utils/chat/buildChatHistory.js";
 import { processResponse } from "../../utils/ai/aiTagHandlers/index.js";
 import { callAI } from "../../utils/ai/coreAi.js";
+import { MISSING_INFO_FALLBACK_REPLY } from "../../utils/ai/prompts/system.js";
 import { searchKnowledgeChunks } from "../Knowledge/knowledge.search.js";
 import { getActivePromptService } from "../AiPrompt/aiprompt.service.js";
 import { getIO } from "../../middlewares/socket/socket.js";
@@ -20,8 +21,7 @@ const httpsAgent = new https.Agent({
   keepAlive: true,
 });
 
-const FIXED_MISSING_INFO_FALLBACK =
-  "Our team will get back to you shortly. Please feel free to ask any other questions in the meantime ?";
+const FIXED_MISSING_INFO_FALLBACK = MISSING_INFO_FALLBACK_REPLY;
 
 const ENABLE_APPOINTMENT_FLOW = false;
 
@@ -72,6 +72,14 @@ const buildForcedMissingKnowledgeResult = (message = "") => ({
   tagDetected: "MISSING_KNOWLEDGEBASE_HOOK",
   tagPayload: normalizeMissingKnowledgeTopic(message),
 });
+
+const faqTrace = (label, data) => {
+  const line = `[${new Date().toISOString()}] ${label} ${JSON.stringify(data)}\n`;
+  process.stdout.write(line);
+  try {
+    import("fs").then(fs => fs.default.appendFileSync("/tmp/faq_trace.log", line));
+  } catch {}
+};
 
 export const sendWhatsAppMessage = async (tenant_id, to, message) => {
   try {
@@ -544,6 +552,7 @@ export const getOpenAIReply = async (
   contact_id = null,
   phone_number_id = null,
   cachedData = {},
+  messageId = null,
 ) => {
   try {
     if (!userMessage) return null;
@@ -586,6 +595,8 @@ export const getOpenAIReply = async (
       "Appointment flow enabled:",
       ENABLE_APPOINTMENT_FLOW,
     );
+
+    faqTrace("[AI-FLOW] intent classified", { intent: intentResult.intent, requires: intentResult.requires, msg: cleanMessage.substring(0, 60) });
 
     // NEW: Route appointment intents directly — skip heavy AI call and knowledge search
     if (
@@ -646,15 +657,18 @@ export const getOpenAIReply = async (
       ? knowledgeResult.chunks.length
       : 0;
 
+    // Also check: did the intent classifier require knowledge, but we found zero chunks?
+    // This is a definitive missing-knowledge signal regardless of factual keyword matching.
+    const knowledgeRequiredButMissing =
+      intentResult.requires.knowledge && !hasKnowledgeGrounding;
+
     console.log(
-      `[WHATSAPP-AI] Grounding precheck | strict:${strictGroundingRequired} | chunks:${groundingChunkCount}`,
+      `[WHATSAPP-AI] Grounding precheck | strict:${strictGroundingRequired} | knowledgeRequiredButMissing:${knowledgeRequiredButMissing} | chunks:${groundingChunkCount}`,
     );
 
-    if (strictGroundingRequired && !hasKnowledgeGrounding) {
+    if ((strictGroundingRequired || knowledgeRequiredButMissing) && !hasKnowledgeGrounding) {
       const forcedMissing = buildForcedMissingKnowledgeResult(cleanMessage);
-      console.warn(
-        `[WHATSAPP-AI] Forced missing-knowledge before AI generation. topic:${forcedMissing.tagPayload}`,
-      );
+      faqTrace("[AI-FLOW] FORCED missing-knowledge (pre-AI)", { tag: forcedMissing.tagDetected, payload: forcedMissing.tagPayload, strict: strictGroundingRequired, knowledgeRequiredButMissing, chunks: groundingChunkCount });
       return {
         ...forcedMissing,
         intent: intentResult.intent,
@@ -685,7 +699,7 @@ export const getOpenAIReply = async (
       );
       // Use a minimal fallback prompt so AI can still respond
       systemPrompt =
-        "You are a helpful AI assistant. Answer the user's question.";
+        "You are a helpful AI assistant. Answer briefly, never promise a team follow-up, and if information is missing say you do not have that detail right now.";
     }
 
     const aiMessages = [
@@ -735,19 +749,19 @@ export const getOpenAIReply = async (
         contact_id,
         phone,
         phone_number_id,
+        messageId: messageId || null,
       });
     } catch (procErr) {
       console.error("[WHATSAPP-AI] processResponse failed:", procErr.message);
       processed = { message: rawReply, tagDetected: null, tagPayload: null };
     }
 
-    if (strictGroundingRequired && !hasKnowledgeGrounding) {
+    if ((strictGroundingRequired || knowledgeRequiredButMissing) && !hasKnowledgeGrounding) {
       processed = buildForcedMissingKnowledgeResult(cleanMessage);
-      console.warn(
-        `[WHATSAPP-AI] Forced missing-knowledge after AI generation safety override. topic:${processed.tagPayload}`,
-      );
+      faqTrace("[AI-FLOW] FORCED missing-knowledge (post-AI)", { tag: processed.tagDetected, payload: processed.tagPayload });
     }
 
+    faqTrace("[AI-FLOW] getOpenAIReply FINAL", { tagDetected: processed.tagDetected, tagPayload: processed.tagPayload, msgPreview: (processed.message || "").substring(0, 60) });
     const finalReply = processed.message;
 
     console.log("[WHATSAPP-AI-FINAL]", finalReply);

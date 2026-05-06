@@ -2,6 +2,30 @@ import db from "../../database/index.js";
 import { tableNames } from "../../database/tableName.js";
 import { generateTextEmbedding } from "./embedding.js";
 
+const EMBED_MAX_RETRIES = 3;
+const EMBED_BASE_DELAY_MS = 500;
+
+const delay = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Generates an embedding with exponential-backoff retry.
+ * Returns the embedding array on success, or null after all retries exhausted.
+ */
+const generateEmbeddingWithRetry = async (text, tenantId) => {
+  for (let attempt = 1; attempt <= EMBED_MAX_RETRIES; attempt++) {
+    try {
+      const result = await generateTextEmbedding(text, tenantId);
+      if (result && Array.isArray(result) && result.length > 0) return result;
+    } catch (err) {
+      console.warn(`[FAQ-SYNC] Embedding attempt ${attempt}/${EMBED_MAX_RETRIES} failed: ${err.message}`);
+    }
+    if (attempt < EMBED_MAX_RETRIES) {
+      await delay(EMBED_BASE_DELAY_MS * Math.pow(2, attempt - 1));
+    }
+  }
+  return null;
+};
+
 const parsePayload = (rawPayload) => {
   if (!rawPayload) return null;
 
@@ -60,12 +84,20 @@ export const syncFaqKnowledgeChunks = async (
     { replacements: [tenant_id, source_id], transaction },
   );
 
+  let synced = 0;
   for (const row of rows) {
     const payload = parsePayload(row.faq_payload);
     const chunkText = buildFaqChunkText(payload || {}, row);
     if (!chunkText) continue;
 
-    const embedding = await generateTextEmbedding(chunkText, tenant_id);
+    const embedding = await generateEmbeddingWithRetry(chunkText, tenant_id);
+
+    if (!embedding) {
+      console.error(
+        `[FAQ-SYNC] Row ${row.id}: embedding FAILED after ${EMBED_MAX_RETRIES} retries — skipped`,
+      );
+      continue;
+    }
 
     await db.sequelize.query(
       `INSERT INTO ${tableNames.KNOWLEDGECHUNKS}
@@ -76,12 +108,20 @@ export const syncFaqKnowledgeChunks = async (
           tenant_id,
           source_id,
           chunkText,
-          JSON.stringify(embedding || []),
+          JSON.stringify(embedding),
         ],
         transaction,
       },
     );
+    synced += 1;
+    console.log(
+      `[FAQ-SYNC] Row ${row.id}: embedding OK (${embedding.length}d)`,
+    );
   }
+
+  console.log(
+    `[FAQ-SYNC] tenant=${tenant_id} synced ${synced}/${rows.length} chunks`,
+  );
 };
 
 export const syncFaqKnowledgeChunksIfStale = async (
