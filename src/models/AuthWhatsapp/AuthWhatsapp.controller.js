@@ -649,11 +649,6 @@ export const receiveMessage = async (req, res) => {
     if (ismessage?.length > 0) return res.sendStatus(200);
     await markMessageProcessed(tenant_id, phone_number_id, messageId, phone);
 
-    // 4.5 Send Read Receipt to Meta (Blue Tick only — typing indicator sent later if AI will respond)
-    setImmediate(() => {
-      sendReadReceipt(tenant_id, phone_number_id, messageId);
-    });
-
     // 5. Manage Contact and LiveChat
     // Use WhatsApp profile name directly
     const finalName = name || null;
@@ -893,7 +888,8 @@ export const receiveMessage = async (req, res) => {
           return;
         }
 
-        // AI will respond — send typing indicator now
+        // AI will respond — send read receipt (blue tick) and typing indicator
+        sendReadReceipt(tenant_id, phone_number_id, messageId);
         sendTypingIndicator(tenant_id, phone_number_id, phone, messageId);
 
         // NEW: Build a contact object that the appointment orchestrator expects
