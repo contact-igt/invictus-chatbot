@@ -30,10 +30,19 @@ export const listFaqReviewsService = async (tenant_id, status, page, limit) => {
   const persistedPublishedFilter =
     status === "published" ? "AND fk.id IS NOT NULL" : "";
 
+  // Priority sort for pending_review: HIGH PRIORITY (ask_count>1) first by count desc, then VALID FAQ oldest first
+  const orderByClause = status === "pending_review"
+    ? `ORDER BY
+         CASE WHEN fr.ask_count > 1 THEN 0 ELSE 1 END ASC,
+         fr.ask_count DESC,
+         fr.created_at ASC`
+    : `ORDER BY fr.created_at DESC`;
+
   const dataQuery = `
     SELECT fr.id, fr.question, fr.normalized_question, fr.agent_category, fr.agent_reason,
            fr.doctor_answer, fr.whatsapp_number, fr.status, fr.add_to_kb, fr.is_active,
-           fr.reviewed_by,
+           fr.reviewed_by, fr.wamid, fr.message_id, fr.ask_count, fr.similar_questions,
+           fr.potential_duplicate_of, fr.match_similarity,
            CASE
              WHEN fr.reviewed_by IS NOT NULL
               AND TRIM(fr.reviewed_by) <> ''
@@ -51,7 +60,7 @@ export const listFaqReviewsService = async (tenant_id, status, page, limit) => {
     WHERE fr.tenant_id = ?
       AND fr.status = ?
       ${persistedPublishedFilter}
-    ORDER BY fr.created_at DESC
+    ${orderByClause}
     LIMIT ? OFFSET ?
   `;
 

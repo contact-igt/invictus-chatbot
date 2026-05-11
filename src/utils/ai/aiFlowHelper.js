@@ -5,9 +5,12 @@ import {
   getCommonBasePrompt,
   getLeadSourcePrompt,
   DEFAULT_SYSTEM_PROMPT,
+  MISSING_INFO_FALLBACK_REPLY,
 } from "./prompts/index.js";
 import { getLeadByContactIdService } from "../../models/LeadsModel/leads.service.js";
 import { getTenantSettingsService } from "../../models/TenantModel/tenant.service.js";
+import { syncFaqKnowledgeChunksIfStale } from "./faqKnowledgeChunkSync.js";
+import { getFaqMasterSource } from "./faqSourceHelper.js";
 import {
   getCurrentDateTimeForAI,
   getCalendarReferenceForAI,
@@ -86,6 +89,19 @@ export const buildAiSystemPrompt = async (
   let sources = [];
 
   if (requires.knowledge) {
+    // Ensure published FAQ chunks are current in knowledge_chunks before
+    // vector search — same embedding pipeline as KB.
+    // syncFaqKnowledgeChunksIfStale is cheap: 2 COUNT queries, exits immediately
+    // if already in sync. Only re-embeds when count or timestamp is stale.
+    try {
+      const faqMasterSource = await getFaqMasterSource(tenant_id);
+      if (faqMasterSource?.id) {
+        await syncFaqKnowledgeChunksIfStale(tenant_id, faqMasterSource.id);
+      }
+    } catch (faqSyncErr) {
+      console.error("[AI-FLOW-HELPER] FAQ chunk sync check failed:", faqSyncErr.message);
+    }
+
     if (cachedData.knowledgeResult) {
       chunks = cachedData.knowledgeResult.chunks || [];
       resolvedLogs = cachedData.knowledgeResult.resolvedLogs || [];
@@ -233,7 +249,7 @@ KNOWLEDGE BASE RULE
     1) mark as missing_info using [MISSING_KNOWLEDGEBASE_HOOK: topic]
     2) not guess or invent details
     3) send this exact fallback reply:
-      "Our team will get back to you shortly. Please feel free to ask any other questions in the meantime ?"
+      "${MISSING_INFO_FALLBACK_REPLY}"
   - Never make up or guess factual information.`
       : "";
 

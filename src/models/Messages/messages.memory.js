@@ -20,7 +20,7 @@ export const getConversationMemory = async (tenant_id, phone, contact_id = null)
 
   const [rows] = await db.sequelize.query(
     `
-    SELECT sender, message, message_type, created_at
+    SELECT sender, message, message_type, media_filename, created_at
     FROM ${tableNames.MESSAGES}
     WHERE ${whereClause}
     ORDER BY created_at DESC

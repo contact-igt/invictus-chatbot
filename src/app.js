@@ -20,6 +20,7 @@ import TenantUserRouter from "./models/TenantUserModel/tenantuser.routes.js";
 import WhatsappTemplateRouter from "./models/WhatsappTemplateModel/whatsapptemplate.routes.js";
 import WhatsappCampaignRouter from "./models/WhatsappCampaignModel/whatsappcampaign.routes.js";
 import GalleryRouter from "./models/GalleryModel/gallery.routes.js";
+import AttachmentRouter from "./models/AttachmentModel/attachment.routes.js";
 import ContactGroupRouter from "./models/ContactGroupModel/contactGroup.routes.js";
 import AppointmentRouter from "./models/AppointmentModel/appointment.routes.js";
 import { startCampaignSchedulerService } from "./models/WhatsappCampaignModel/whatsappcampaign.service.js";
@@ -87,7 +88,7 @@ app.use((req, res, next) => {
 
 app.use(
   fileUpload({
-    limits: { fileSize: 20 * 1024 * 1024 },
+    limits: { fileSize: 25 * 1024 * 1024 }, // 25 MB — covers document uploads (largest allowed type)
     abortOnLimit: true,
   }),
 );
@@ -124,6 +125,7 @@ app.use(
   WhatsappOtpRouter,
   PaymentRouter,
   FaqRouter,
+  AttachmentRouter,
 );
 
 app.use(

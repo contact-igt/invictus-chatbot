@@ -3,8 +3,8 @@
  *
  * Queue topology:
  *   campaign-dispatch           - global queue used by scheduler/dispatch worker
- *   campaignQueue:{tenant_id}   - per-tenant send queue
- *   campaignDLQ:{tenant_id}     - per-tenant dead-letter queue
+ *   campaignQueue-{tenant_id}   - per-tenant send queue
+ *   campaignDLQ-{tenant_id}     - per-tenant dead-letter queue
  *
  * Falls back gracefully to cron-based execution when Redis is unavailable.
  */
@@ -85,10 +85,10 @@ const normalizeTenantId = (tenant_id) => {
 };
 
 export const getTenantQueueName = (tenant_id) =>
-  `campaignQueue:${normalizeTenantId(tenant_id)}`;
+  `campaignQueue-${normalizeTenantId(tenant_id)}`;
 
 export const getTenantDLQName = (tenant_id) =>
-  `campaignDLQ:${normalizeTenantId(tenant_id)}`;
+  `campaignDLQ-${normalizeTenantId(tenant_id)}`;
 
 export const getTenantRateLimit = (tenant_id) => {
   const normalizedTenantId = normalizeTenantId(tenant_id);

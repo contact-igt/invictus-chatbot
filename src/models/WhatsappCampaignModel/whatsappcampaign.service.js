@@ -486,6 +486,37 @@ export const createCampaignService = async (tenant_id, data, created_by) => {
       { transaction },
     );
 
+    // Attach quick aggregates for sent/failed counts to the returned campaign
+    if (campaign) {
+      try {
+        const [countsRow] = await db.sequelize.query(
+          `SELECT 
+             SUM(CASE WHEN status IN ('sent','delivered','read') THEN 1 ELSE 0 END) as sent_count,
+             SUM(CASE WHEN status = 'permanently_failed' THEN 1 ELSE 0 END) as failed_count
+           FROM whatsapp_campaign_recipients
+           WHERE campaign_id = :campaign_id`,
+          {
+            replacements: { campaign_id },
+            type: db.sequelize.QueryTypes.SELECT,
+          },
+        );
+
+        const sent_count = Number(countsRow?.sent_count || 0);
+        const failed_count = Number(countsRow?.failed_count || 0);
+
+        // Attach to dataValues so controller/JSON serialization includes them
+        campaign.dataValues = campaign.dataValues || {};
+        campaign.dataValues.sent_count = sent_count;
+        campaign.dataValues.failed_count = failed_count;
+      } catch (e) {
+        // ignore aggregation errors — don't fail the whole request for stats
+        console.error(
+          "[CAMPAIGN-BY-ID] Failed to compute sent/failed aggregates:",
+          e.message,
+        );
+      }
+    }
+
     // 4. Bulk Create Recipients with dynamic_variables
     const recipientData = recipients.map((r) => ({
       campaign_id,

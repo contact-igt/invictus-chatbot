@@ -19,6 +19,26 @@ const MAX_EMBEDDING_BACKFILL_PER_QUERY = Number(
   process.env.KNOWLEDGE_EMBEDDING_BACKFILL_LIMIT || 200,
 );
 
+const BACKFILL_MAX_RETRIES = 3;
+const BACKFILL_BASE_DELAY_MS = 500;
+
+const backfillDelay = (ms) => new Promise((r) => setTimeout(r, ms));
+
+const generateEmbeddingWithBackfillRetry = async (text, tenantId) => {
+  for (let attempt = 1; attempt <= BACKFILL_MAX_RETRIES; attempt++) {
+    try {
+      const result = await generateTextEmbedding(text, tenantId);
+      if (result && Array.isArray(result) && result.length > 0) return result;
+    } catch (err) {
+      console.warn(`[KNOWLEDGE-BACKFILL] Embedding attempt ${attempt}/${BACKFILL_MAX_RETRIES} failed: ${err.message}`);
+    }
+    if (attempt < BACKFILL_MAX_RETRIES) {
+      await backfillDelay(BACKFILL_BASE_DELAY_MS * Math.pow(2, attempt - 1));
+    }
+  }
+  return null;
+};
+
 const hydrateMissingEmbeddings = async (rows, tenant_id) => {
   if (!Array.isArray(rows) || !rows.length) return rows;
 
@@ -33,8 +53,16 @@ const hydrateMissingEmbeddings = async (rows, tenant_id) => {
 
     if (backfilledCount >= MAX_EMBEDDING_BACKFILL_PER_QUERY) continue;
 
-    const generated = await generateTextEmbedding(row.chunk_text, tenant_id);
-    if (!generated) continue;
+    const generated = await generateEmbeddingWithBackfillRetry(
+      row.chunk_text,
+      tenant_id,
+    );
+    if (!generated) {
+      console.warn(
+        `[KNOWLEDGE-BACKFILL] chunk ${row.chunk_id}: embedding failed after ${BACKFILL_MAX_RETRIES} retries`,
+      );
+      continue;
+    }
 
     row.embedding_vector = generated;
     row.embedding = generated;
@@ -47,6 +75,9 @@ const hydrateMissingEmbeddings = async (rows, tenant_id) => {
       {
         replacements: [JSON.stringify(generated), row.chunk_id, tenant_id],
       },
+    );
+    console.log(
+      `[KNOWLEDGE-BACKFILL] chunk ${row.chunk_id}: embedding backfilled OK (${generated.length}d)`,
     );
   }
 
@@ -98,7 +129,12 @@ export const searchKnowledgeChunks = async (tenant_id, question) => {
   if (!tenant_id || !question)
     return { chunks: [], resolvedLogs: [], sources: [] };
 
-  const questionEmbedding = await generateTextEmbedding(question, tenant_id);
+  let questionEmbedding = null;
+  try {
+    questionEmbedding = await generateTextEmbedding(question, tenant_id);
+  } catch (embErr) {
+    console.error(`[KNOWLEDGE-SEARCH] Embedding generation failed: ${embErr.message}`);
+  }
   if (!questionEmbedding) {
     return { chunks: [], resolvedLogs: [], sources: [] };
   }

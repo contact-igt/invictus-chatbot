@@ -1,7 +1,15 @@
 import {
   sendWhatsAppMessage,
   sendWhatsAppTemplate,
+  sendWhatsAppMediaMessage,
+  uploadWhatsAppMedia,
 } from "../AuthWhatsapp/AuthWhatsapp.service.js";
+import {
+  validateChatFile,
+  uploadChatAttachment,
+  rollbackChatAttachment,
+  transcodeAudioToMp3,
+} from "../../services/chatAttachmentService.js";
 import { updateAdminLeadService } from "../LeadsModel/leads.service.js";
 import {
   createUserMessageService,
@@ -91,50 +99,201 @@ export const sendAdminMessage = async (req, res) => {
     }
 
     const formattedPhone = formatPhoneNumber(phone);
-    const msgResponse = await sendWhatsAppMessage(
-      tenant_id,
-      formattedPhone,
-      message,
-    );
 
-    const savedMsg = await createUserMessageService(
-      tenant_id,
-      contact_id,
-      msgResponse.phone_number_id,
-      formattedPhone,
-      msgResponse.wamid,
-      name,
-      "admin",
-      req.user.username || "Admin",
-      message,
-      "text",
-      null,
-      null,
-      "sent",
-    );
+    // ── Resolve files: express-fileupload puts uploads on req.files keyed by field name ──
+    let filesArray = [];
+    if (req.files?.files) {
+      filesArray = Array.isArray(req.files.files)
+        ? req.files.files
+        : [req.files.files];
+    }
+
+    const hasFiles = filesArray.length > 0;
+    const hasText = !!(message && String(message).trim());
+
+    if (!hasFiles && !hasText) {
+      return res.status(400).send({ message: "Message or file is required." });
+    }
+
+    const io = getIO();
+    const senderName = req.user.username || "Admin";
+
+    // ── TEXT-ONLY path (unchanged behaviour) ───────────────────────────────────
+    if (!hasFiles) {
+      const msgResponse = await sendWhatsAppMessage(
+        tenant_id,
+        formattedPhone,
+        message,
+      );
+
+      const savedMsg = await createUserMessageService(
+        tenant_id,
+        contact_id,
+        msgResponse.phone_number_id,
+        formattedPhone,
+        msgResponse.wamid,
+        name,
+        "admin",
+        senderName,
+        message,
+        "text",
+        null,
+        null,
+        "sent",
+      );
+
+      await updateAdminLeadService(tenant_id, contact_id);
+      await updateLiveChatTimestampService(tenant_id, contact_id);
+
+      io.to(`tenant-${tenant_id}`).emit("new-message", {
+        tenant_id,
+        phone: formattedPhone,
+        id: savedMsg?.id,
+        contact_id,
+        phone_number_id: msgResponse.phone_number_id,
+        name,
+        message,
+        message_type: "text",
+        media_url: null,
+        status: "sent",
+        sender: "admin",
+        sender_id: senderName,
+        created_at: new Date(),
+      });
+
+      return res.status(200).send({ message: "Message sent successfully" });
+    }
+
+    // ── Transcode audio/webm → audio/mpeg before any processing ──────────────
+    // Chrome's MediaRecorder always produces audio/webm which WhatsApp rejects.
+    // ffmpeg converts the container + codec to MP3 server-side, no browser encoding needed.
+    for (const file of filesArray) {
+      const normalizedMime = (file.mimetype || "").split(";")[0].trim().toLowerCase();
+      if (normalizedMime === "audio/webm") {
+        try {
+          const mp3Buffer = await transcodeAudioToMp3(file.data);
+          file.data     = mp3Buffer;
+          file.mimetype = "audio/mpeg";
+          file.size     = mp3Buffer.length;
+          file.name     = file.name.replace(/\.webm$/i, ".mp3");
+        } catch (transcodeErr) {
+          console.error("[CHAT-ATTACH] audio/webm transcode failed:", transcodeErr.message);
+          return res.status(500).send({ message: "Could not process voice message format. Please try again." });
+        }
+      }
+    }
+
+    // ── FILE path — validate all files first before touching storage ───────────
+    for (const file of filesArray) {
+      const { valid, error } = validateChatFile(file, tenant_id);
+      if (!valid) {
+        return res.status(400).send({ message: error });
+      }
+    }
+
+    // Send one WhatsApp message per file (WhatsApp only supports one media per message)
+    const sentResults = [];
+    for (let idx = 0; idx < filesArray.length; idx++) {
+      const file = filesArray[idx];
+      const { fileType } = validateChatFile(file, null); // skip rate limit on 2nd call
+
+      // Upload to R2
+      let attachment;
+      try {
+        attachment = await uploadChatAttachment(file, tenant_id, contact_id);
+      } catch (uploadErr) {
+        console.error("[CHAT-ATTACH] R2 upload failed:", uploadErr.message);
+        return res.status(500).send({ message: "File upload failed. Please try again." });
+      }
+
+      // Caption only on the first file (if admin typed a message)
+      const caption = idx === 0 && hasText ? String(message).trim() : "";
+
+      // Send via WhatsApp — rollback R2 if this fails.
+      // All audio goes through the WhatsApp Media Upload API (id-based send) regardless
+      // of MIME type. This is more reliable than link-based send: WhatsApp downloads
+      // from our R2 URL only for non-audio types where public CDN access is guaranteed.
+      // For audio, passing the raw bytes + normalized MIME lets WhatsApp validate the
+      // format itself and avoids public-URL accessibility issues.
+      const needsMediaUpload = attachment.fileType === "audio";
+
+      let msgResponse;
+      try {
+        let whatsappMediaId = null;
+        if (needsMediaUpload) {
+          // Strip codec params (e.g. "audio/webm;codecs=opus" → "audio/webm") so the
+          // MIME sent to Meta matches the container, not the codec string.
+          const normalizedMime = (file.mimetype || "").split(";")[0].trim();
+          const { mediaId } = await uploadWhatsAppMedia(
+            tenant_id,
+            file.data,
+            normalizedMime,
+            attachment.originalName,
+          );
+          whatsappMediaId = mediaId;
+        }
+
+        msgResponse = await sendWhatsAppMediaMessage(
+          tenant_id,
+          formattedPhone,
+          attachment.fileType,
+          attachment.url,
+          caption,
+          attachment.originalName,
+          whatsappMediaId,
+        );
+      } catch (waErr) {
+        await rollbackChatAttachment(attachment.url, attachment.thumbnailUrl);
+        const isMetaError = waErr.message?.startsWith("Meta API Error:");
+        return res.status(isMetaError ? 400 : 500).send({ message: waErr.message || "Failed to send file." });
+      }
+
+      // Persist to DB
+      const savedMsg = await createUserMessageService(
+        tenant_id,
+        contact_id,
+        msgResponse.phone_number_id,
+        formattedPhone,
+        msgResponse.wamid,
+        name,
+        "admin",
+        senderName,
+        caption || null,
+        attachment.fileType,
+        attachment.url,
+        attachment.mimeType,
+        "sent",
+        null,
+        attachment.originalName,
+      );
+
+      io.to(`tenant-${tenant_id}`).emit("new-message", {
+        tenant_id,
+        phone: formattedPhone,
+        id: savedMsg?.id,
+        contact_id,
+        phone_number_id: msgResponse.phone_number_id,
+        name,
+        message: caption || null,
+        message_type: attachment.fileType,
+        media_url: attachment.url,
+        media_mime_type: attachment.mimeType,
+        media_filename: attachment.originalName,
+        thumbnail_url: attachment.thumbnailUrl,
+        status: "sent",
+        sender: "admin",
+        sender_id: senderName,
+        created_at: new Date(),
+      });
+
+      sentResults.push(savedMsg?.id);
+    }
 
     await updateAdminLeadService(tenant_id, contact_id);
     await updateLiveChatTimestampService(tenant_id, contact_id);
 
-    const io = getIO();
-    io.to(`tenant-${tenant_id}`).emit("new-message", {
-      tenant_id,
-      phone: formattedPhone,
-      id: savedMsg?.id,
-      contact_id,
-      phone_number_id: msgResponse.phone_number_id,
-      name,
-      message,
-      message_type: "text",
-      media_url: null,
-      status: "sent",
-      sender: "admin",
-      sender_id: req.user.username || "Admin",
-      created_at: new Date(),
-    });
-
     return res.status(200).send({
-      message: "Message sent successfully",
+      message: `${sentResults.length} file(s) sent successfully`,
     });
   } catch (err) {
     const isMetaError = err.message?.startsWith("Meta API Error:");

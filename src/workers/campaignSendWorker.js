@@ -14,12 +14,13 @@
  *     recipient permanently_failed.
  */
 import { Worker } from "bullmq";
+import { pathToFileURL } from "url";
 import { logger } from "../utils/logger.js";
 import {
+  initCampaignQueues,
   getRedisConnection,
   getTenantDLQ,
   getTenantQueueName,
-  getTenantRateLimit,
   isCampaignQueueAvailable,
 } from "../queues/campaignQueue.js";
 import { getTemplateComponents } from "../utils/templateCache.js";
@@ -45,6 +46,111 @@ import {
 } from "../models/LiveChatModel/livechat.service.js";
 import { generateWhatsAppOTPService } from "../models/OtpVerificationModel/otpverification.service.js";
 import { recordCampaignDiagnosticEvent } from "../utils/campaignDiagnosticsEvents.js";
+import {
+  batchInsertMessages,
+  batchUpdateRecipientStatuses,
+} from "../services/campaign/dbBatch.js";
+
+// Batch buffers per-tenant to reduce DB writes
+const TENANT_BUFFERS = new Map();
+const DB_BATCH_SIZE = parseInt(process.env.CAMPAIGN_DB_BATCH_SIZE || "100", 10);
+const DB_BATCH_FLUSH_MS = parseInt(
+  process.env.CAMPAIGN_DB_BATCH_FLUSH_MS || "500",
+  10,
+);
+
+const scheduleTenantFlush = (tenantId) => {
+  const buf = TENANT_BUFFERS.get(tenantId);
+  if (!buf) return;
+  if (buf.flushTimer) return;
+  buf.flushTimer = setTimeout(async () => {
+    try {
+      await flushTenantBuffers(tenantId);
+    } catch (err) {
+      logger.warn(
+        `[SEND-WORKER] flushTenantBuffers failed for ${tenantId}: ${err.message}`,
+      );
+    }
+  }, DB_BATCH_FLUSH_MS);
+};
+
+const flushTenantBuffers = async (tenantId) => {
+  const buf = TENANT_BUFFERS.get(tenantId);
+  if (!buf) return;
+  if (buf.flushTimer) {
+    clearTimeout(buf.flushTimer);
+    buf.flushTimer = null;
+  }
+  const messages = buf.messages.splice(0, buf.messages.length);
+  const recipientUpdates = buf.recipientUpdates.splice(
+    0,
+    buf.recipientUpdates.length,
+  );
+  if (messages.length === 0 && recipientUpdates.length === 0) return;
+  try {
+    if (recipientUpdates.length > 0) {
+      await batchUpdateRecipientStatuses(recipientUpdates);
+      // After updating recipient statuses, check affected campaigns for outstanding recipients.
+      try {
+        const campaignIds = Array.from(
+          new Set(recipientUpdates.map((u) => u.campaign_id).filter(Boolean)),
+        );
+        for (const cid of campaignIds) {
+          const outstandingCount = await db.WhatsappCampaignRecipients.count({
+            where: {
+              campaign_id: cid,
+              is_deleted: false,
+              [db.Sequelize.Op.or]: [
+                { status: "pending" },
+                {
+                  status: "failed",
+                  retry_count: { [db.Sequelize.Op.lt]: 3 },
+                  next_retry_at: { [db.Sequelize.Op.ne]: null },
+                },
+              ],
+            },
+          });
+
+          if (outstandingCount === 0) {
+            try {
+              const campaign = await db.WhatsappCampaigns.findOne({
+                where: { campaign_id: cid },
+              });
+              if (
+                campaign &&
+                campaign.status !== "paused" &&
+                campaign.status !== "completed"
+              ) {
+                await campaign.update({ status: "completed" });
+                logger.info(
+                  `[SEND-WORKER] Campaign ${cid} marked completed (no outstanding recipients)`,
+                );
+              }
+            } catch (upErr) {
+              logger.warn(
+                `[SEND-WORKER] Failed to mark campaign ${cid} completed: ${upErr.message}`,
+              );
+            }
+          }
+        }
+      } catch (checkErr) {
+        logger.warn(
+          `[SEND-WORKER] Post-flush campaign completion check failed: ${checkErr.message}`,
+        );
+      }
+    }
+    if (messages.length > 0) {
+      await batchInsertMessages(messages);
+    }
+  } catch (err) {
+    logger.error(
+      `[SEND-WORKER] Error flushing DB buffers for tenant ${tenantId}: ${err.message}`,
+    );
+    // On failure, re-queue the buffers to attempt later
+    buf.messages.unshift(...messages);
+    buf.recipientUpdates.unshift(...recipientUpdates);
+  }
+};
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -65,8 +171,13 @@ const PERMANENT_ERROR_PATTERNS = [
 
 const isFinallyPermanent = (err) => {
   const lower = String(err?.message || "").toLowerCase();
+  const metaCode = Number(
+    err?.code || err?.error?.code || err?.response?.data?.error?.code,
+  );
   // Errors explicitly flagged permanent by build logic
   if (err?.validation === true) return true;
+  // Meta error 131030 should not be retried for test/fake recipients.
+  if (metaCode === 131030) return true;
   return PERMANENT_ERROR_PATTERNS.some((p) => lower.includes(p));
 };
 
@@ -522,232 +633,168 @@ async function processSendJob(job) {
       }
     }
 
-    // ── Send via Meta API (with circuit breaker protection) ────────────────────────────────────────────────
+    // ── Fire-and-forget Meta API send (do not block worker on response) ───
 
     const circuitBreaker = getMetaApiCircuitBreaker(sendWhatsAppTemplate);
 
-    let result;
-    try {
-      result = await circuitBreaker.execute(
-        tenant_id,
-        formattedPhone,
-        campaign.template.template_name,
-        campaign.template.language,
-        components,
-      );
-    } catch (sendErr) {
-      const errMsg = String(sendErr?.message || "");
-
-      // Unhealthy API (503) — pause 30 s then retry once before propagating
-      const isUnhealthy =
-        errMsg.toLowerCase().includes("unhealthy") ||
-        errMsg.toLowerCase().includes("service unavailable") ||
-        errMsg.toLowerCase().includes("503");
-
-      if (isUnhealthy) {
-        logger.warn(
-          `[SEND-WORKER] Unhealthy API — pausing 30 s before retry (${formattedPhone})`,
-        );
-        await sleep(30000);
-        result = await sendWhatsAppTemplate(
+    Promise.resolve()
+      .then(() =>
+        circuitBreaker.execute(
           tenant_id,
           formattedPhone,
           campaign.template.template_name,
           campaign.template.language,
           components,
-        );
-      } else {
-        // Invalid media ID — retry once with public URL fallback
-        const hasInvalidMediaId =
-          errMsg.includes(
-            "is not a valid whatsapp business account media attachment ID",
-          ) ||
-          errMsg.includes(
-            "template['components'][0]['parameters'][0]['image']['id']",
-          ) ||
-          (errMsg.includes("JSON schema constraint") && errMsg.includes(".id"));
-
-        if (hasInvalidMediaId && campaignHeaderMediaUrl) {
-          const retryComponents = components.map((component) => {
-            if (
-              component?.type !== "header" ||
-              !Array.isArray(component.parameters)
-            ) {
-              return component;
-            }
-            const nextParams = component.parameters.map((param) => {
-              if (!param || typeof param !== "object") return param;
-              if (param.type === "image" && param.image?.id)
-                return { ...param, image: { link: campaignHeaderMediaUrl } };
-              if (param.type === "video" && param.video?.id)
-                return { ...param, video: { link: campaignHeaderMediaUrl } };
-              if (param.type === "document" && param.document?.id)
-                return {
-                  ...param,
-                  document: {
-                    link: campaignHeaderMediaUrl,
-                    ...(campaign.header_file_name
-                      ? { filename: campaign.header_file_name }
-                      : {}),
-                  },
-                };
-              return param;
-            });
-            return { ...component, parameters: nextParams };
-          });
-
-          logger.warn(
-            `[SEND-WORKER] Invalid media ID — retrying with public URL (${formattedPhone})`,
-          );
-          result = await sendWhatsAppTemplate(
-            tenant_id,
-            formattedPhone,
-            campaign.template.template_name,
-            campaign.template.language,
-            retryComponents,
-          );
-        } else {
-          throw sendErr;
-        }
-      }
-    }
-
-    // ── 8. Update recipient status ──────────────────────────────────────────
-
-    await recipient.update({
-      status: "sent",
-      meta_message_id: result.meta_message_id || null,
-      error_message: null,
-    });
-
-    // ── 9. Log to Messages table + activate LiveChat ────────────────────────
-
-    if (contactId && result.meta_message_id) {
-      let personalizedMessage = templateBodyText;
-
-      const bodyVars = Array.isArray(dynamicVariables)
-        ? dynamicVariables
-        : typeof dynamicVariables === "object" &&
-            dynamicVariables !== null &&
-            Array.isArray(dynamicVariables.body)
-          ? dynamicVariables.body
-          : [];
-
-      bodyVars.forEach((val, idx) => {
-        personalizedMessage = personalizedMessage.replace(
-          `{{${idx + 1}}}`,
-          val,
+        ),
+      )
+      .catch((sendErr) => {
+        logger.error(
+          `[SEND-WORKER] Fire-and-forget error: ${sendErr?.message || "unknown error"}`,
         );
       });
 
-      let finalMessageType = "template";
-      let finalMediaUrl = null;
-      if (
-        headerFormat &&
-        ["IMAGE", "VIDEO", "DOCUMENT"].includes(headerFormat.toUpperCase())
-      ) {
-        finalMessageType = headerFormat.toLowerCase();
-        finalMediaUrl = campaignHeaderMediaUrl || null;
-        personalizedMessage = finalMediaUrl
-          ? `[${headerFormat.toUpperCase()}: ${finalMediaUrl}]\n${personalizedMessage}`
-          : `[${headerFormat.toUpperCase()}]\n${personalizedMessage}`;
-      }
+    // ── 8. Buffer recipient status + message insert for batched DB writes ──
 
-      if (footerComponent?.text_content) {
-        personalizedMessage += "\n" + footerComponent.text_content;
-      }
+    // Build personalizedMessage (same as previous logic) but avoid awaiting DB writes here
+    let personalizedMessage = templateBodyText;
+    const bodyVars = Array.isArray(dynamicVariables)
+      ? dynamicVariables
+      : typeof dynamicVariables === "object" &&
+          dynamicVariables !== null &&
+          Array.isArray(dynamicVariables.body)
+        ? dynamicVariables.body
+        : [];
+    bodyVars.forEach((val, idx) => {
+      personalizedMessage = personalizedMessage.replace(`{{${idx + 1}}}`, val);
+    });
 
-      if (buttonsComponent?.text_content) {
-        try {
-          const buttons = JSON.parse(buttonsComponent.text_content);
-          if (Array.isArray(buttons)) {
-            buttons.forEach((btn) => {
-              let btnLabel = btn.text;
-              if (btn.type === "URL" && btn.url) btnLabel += ` (${btn.url})`;
-              else if (btn.type === "PHONE_NUMBER" && btn.phone_number)
-                btnLabel += ` (${btn.phone_number})`;
-              personalizedMessage += `\n[Button: ${btnLabel}]`;
-            });
-          }
-        } catch {
-          /* ignore */
+    let finalMessageType = "template";
+    let finalMediaUrl = null;
+    if (
+      headerFormat &&
+      ["IMAGE", "VIDEO", "DOCUMENT"].includes(headerFormat.toUpperCase())
+    ) {
+      finalMessageType = headerFormat.toLowerCase();
+      finalMediaUrl = campaignHeaderMediaUrl || null;
+      personalizedMessage = finalMediaUrl
+        ? `[${headerFormat.toUpperCase()}: ${finalMediaUrl}]\n${personalizedMessage}`
+        : `[${headerFormat.toUpperCase()}]\n${personalizedMessage}`;
+    }
+
+    if (footerComponent?.text_content)
+      personalizedMessage += "\n" + footerComponent.text_content;
+
+    if (buttonsComponent?.text_content) {
+      try {
+        const buttons = JSON.parse(buttonsComponent.text_content);
+        if (Array.isArray(buttons)) {
+          buttons.forEach((btn) => {
+            let btnLabel = btn.text;
+            if (btn.type === "URL" && btn.url) btnLabel += ` (${btn.url})`;
+            else if (btn.type === "PHONE_NUMBER" && btn.phone_number)
+              btnLabel += ` (${btn.phone_number})`;
+            personalizedMessage += `\n[Button: ${btnLabel}]`;
+          });
         }
-      }
+      } catch {}
+    }
 
-      let campaignMediaMimeType = null;
-      if (finalMessageType === "document" && campaign.header_file_name) {
-        const ext = campaign.header_file_name.split(".").pop()?.toLowerCase();
-        const mimeMap = {
-          pdf: "application/pdf",
-          doc: "application/msword",
-          docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-          xls: "application/vnd.ms-excel",
-          xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        };
-        campaignMediaMimeType = mimeMap[ext] || "application/octet-stream";
-      }
+    let campaignMediaMimeType = null;
+    if (finalMessageType === "document" && campaign.header_file_name) {
+      const ext = campaign.header_file_name.split(".").pop()?.toLowerCase();
+      const mimeMap = {
+        pdf: "application/pdf",
+        doc: "application/msword",
+        docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        xls: "application/vnd.ms-excel",
+        xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      };
+      campaignMediaMimeType = mimeMap[ext] || "application/octet-stream";
+    }
 
-      await createUserMessageService(
-        tenant_id,
-        contactId,
-        result.phone_number_id,
-        recipient.mobile_number,
-        result.meta_message_id,
-        "System",
-        "admin",
-        null,
-        personalizedMessage,
-        finalMessageType,
-        finalMediaUrl,
-        campaignMediaMimeType,
-        "sent",
-        campaign.template.template_name,
+    // Prepare DB rows
+    const messageRow = {
+      tenant_id,
+      contact_id: contactId || null,
+      phone_number_id: null,
+      country_code: null,
+      phone: recipient.mobile_number,
+      wamid: null,
+      name: "System",
+      sender: "admin",
+      sender_id: null,
+      message: personalizedMessage,
+      message_type: finalMessageType,
+      media_url: finalMediaUrl,
+      media_mime_type: campaignMediaMimeType,
+      status: "sent",
+      template_name: campaign.template.template_name || null,
+      interactive_payload: null,
+      media_filename:
         finalMessageType === "document"
           ? campaign.header_file_name || null
           : null,
-      );
+    };
 
-      const livelist = await getLivechatByIdService(tenant_id, contactId);
-      if (!livelist) {
-        await createLiveChatService(tenant_id, contactId);
-      } else {
-        await updateLiveChatTimestampService(tenant_id, contactId);
-      }
+    const recipientUpdate = {
+      id: recipient_id,
+      campaign_id: campaign_id,
+      status: "sent",
+      meta_message_id: null,
+      error_message: null,
+      retry_count: null,
+      next_retry_at: null,
+    };
+
+    // Push to tenant-level buffers
+    const tId = String(tenant_id);
+    if (!TENANT_BUFFERS.has(tId)) {
+      TENANT_BUFFERS.set(tId, {
+        messages: [],
+        recipientUpdates: [],
+        flushTimer: null,
+      });
+    }
+    const buf = TENANT_BUFFERS.get(tId);
+    buf.messages.push(messageRow);
+    buf.recipientUpdates.push(recipientUpdate);
+    // Flush immediately if buffer exceeds threshold
+    if (
+      buf.messages.length >= DB_BATCH_SIZE ||
+      buf.recipientUpdates.length >= DB_BATCH_SIZE
+    ) {
+      void flushTenantBuffers(tId);
+    } else {
+      scheduleTenantFlush(tId);
+    }
+
+    // Fire-and-forget livechat updates (do not block send path)
+    if (contactId) {
+      (async () => {
+        try {
+          const livelist = await getLivechatByIdService(tenant_id, contactId);
+          if (!livelist) {
+            await createLiveChatService(tenant_id, contactId);
+          } else {
+            await updateLiveChatTimestampService(tenant_id, contactId);
+          }
+        } catch (e) {
+          logger.debug(
+            `[SEND-WORKER] LiveChat update failed (tenant=${tenant_id} contact=${contactId}): ${e.message}`,
+          );
+        }
+      })();
     }
 
     logger.info(
-      `[SEND-WORKER] Sent — campaign=${campaign_id} recipient=${recipient_id} phone=${formattedPhone}`,
+      `[SEND-WORKER] Buffered sent — campaign=${campaign_id} recipient=${recipient_id} phone=${formattedPhone}`,
     );
 
-    const remainingRecipients = await db.WhatsappCampaignRecipients.count({
-      where: { campaign_id, status: "pending", is_deleted: false },
-    });
-
-    logger.info(
-      `[SEND-WORKER] campaign_id=${campaign_id} remaining_pending=${remainingRecipients} status=${campaign.status}`,
-    );
-
-    if (remainingRecipients === 0) {
-      await db.WhatsappCampaigns.update(
-        { status: "completed" },
-        {
-          where: {
-            campaign_id,
-            tenant_id,
-            status: { [db.Sequelize.Op.in]: ["active", "scheduled", "failed"] },
-            is_deleted: false,
-          },
-        },
-      );
-      logger.info(
-        `[SEND-WORKER] Campaign ${campaign_id} marked completed (remaining_pending=0)`,
-      );
-    }
-
+    // Emit diagnostic event
     recordCampaignDiagnosticEvent({
       source: "send-worker",
       type: "worker_processed",
-      message: `Recipient sent campaign=${campaign_id} recipient=${recipient_id}`,
+      message: `Recipient buffered campaign=${campaign_id} recipient=${recipient_id}`,
       meta: { campaign_id, tenant_id, recipient_id, phone: formattedPhone },
     });
   } catch (err) {
@@ -755,17 +802,30 @@ async function processSendJob(job) {
     const isPermErr = isFinallyPermanent(err);
 
     if (isPermErr) {
-      // Mark permanently failed right now — never retry
+      // Mark permanently failed right now — buffer update so many updates are batched
       logger.warn(
         `[SEND-WORKER] Permanent failure for recipient ${recipient_id}: ${err.message}`,
       );
-      await recipient.update({
+      const tId = String(tenant_id);
+      if (!TENANT_BUFFERS.has(tId)) {
+        TENANT_BUFFERS.set(tId, {
+          messages: [],
+          recipientUpdates: [],
+          flushTimer: null,
+        });
+      }
+      const buf = TENANT_BUFFERS.get(tId);
+      buf.recipientUpdates.push({
+        id: recipient_id,
+        campaign_id: campaign_id,
         status: "permanently_failed",
         error_message: err.message,
         last_error: err.message,
         retry_count: 3,
         next_retry_at: null,
       });
+      // Flush immediately to persist permanent failure
+      await flushTenantBuffers(tId);
       return; // do NOT throw — BullMQ will treat this as a successful job
     }
 
@@ -815,6 +875,10 @@ const markRecipientPermanentlyFailed = async (recipientId, errorMessage) => {
 const pushFailedJobToTenantDlq = async (tenantId, job, err) => {
   try {
     const dlq = getTenantDLQ(tenantId);
+    const sourceJobId = String(
+      job?.id || `${job?.data?.recipient_id || "unknown"}:${Date.now()}`,
+    );
+    const dlqJobId = `dlq-${sourceJobId.replace(/:/g, "-")}`;
     await dlq.add(
       "campaign-send-dlq",
       {
@@ -827,7 +891,7 @@ const pushFailedJobToTenantDlq = async (tenantId, job, err) => {
         payload: job.data,
       },
       {
-        jobId: `dlq:${job.id || `${job.data?.recipient_id}:${Date.now()}`}`,
+        jobId: dlqJobId,
       },
     );
   } catch (dlqErr) {
@@ -845,19 +909,17 @@ const createTenantSendWorker = (tenantId) => {
   const connection = getRedisConnection();
   const queueName = getTenantQueueName(tenantId);
   const perTenantConcurrency = parseInt(
-    process.env.CAMPAIGN_SEND_CONCURRENCY_PER_TENANT || "5",
+    process.env.WORKER_CONCURRENCY ||
+      process.env.CAMPAIGN_SEND_CONCURRENCY ||
+      "20",
     10,
   );
-  const rateDuration = parseInt(
-    process.env.CAMPAIGN_SEND_RATE_DURATION || "60000",
-    10,
-  );
-  const tenantLimit = getTenantRateLimit(tenantId);
+  const workerLimiter = { max: 1000, duration: 1000 };
 
   const worker = new Worker(queueName, processSendJob, {
     connection,
     concurrency: perTenantConcurrency,
-    limiter: { max: tenantLimit, duration: rateDuration },
+    limiter: workerLimiter,
   });
 
   worker.on("failed", async (job, err) => {
@@ -890,7 +952,7 @@ const createTenantSendWorker = (tenantId) => {
 
   sendWorkers.set(tenantId, worker);
   logger.info(
-    `[SEND-WORKER] Started tenant worker queue=${queueName} concurrency=${perTenantConcurrency} limiter=${tenantLimit}/${rateDuration}ms`,
+    `[SEND-WORKER] Started tenant worker queue=${queueName} concurrency=${perTenantConcurrency} limiter=${workerLimiter.max}/${workerLimiter.duration}ms`,
   );
   recordCampaignDiagnosticEvent({
     source: "send-worker",
@@ -900,10 +962,18 @@ const createTenantSendWorker = (tenantId) => {
       tenant_id: tenantId,
       queue_name: queueName,
       concurrency: perTenantConcurrency,
-      tenant_limit: tenantLimit,
-      rate_duration: rateDuration,
+      tenant_limit: workerLimiter.max,
+      rate_duration: workerLimiter.duration,
     },
   });
+  // Initialize per-tenant buffers
+  if (!TENANT_BUFFERS.has(tenantId)) {
+    TENANT_BUFFERS.set(tenantId, {
+      messages: [],
+      recipientUpdates: [],
+      flushTimer: null,
+    });
+  }
   return worker;
 };
 
@@ -941,6 +1011,14 @@ export const startCampaignSendWorker = () => {
 export const closeSendWorker = async () => {
   for (const [tenantId, worker] of sendWorkers.entries()) {
     try {
+      // Flush any pending buffers for tenant before closing
+      try {
+        await flushTenantBuffers(tenantId);
+      } catch (e) {
+        logger.warn(
+          `[SEND-WORKER] flush before close failed for ${tenantId}: ${e.message}`,
+        );
+      }
       await worker.close();
       logger.info(`[SEND-WORKER] Closed worker for tenant ${tenantId}`);
     } catch (err) {
@@ -961,3 +1039,47 @@ export const getSendWorkerStatus = () => {
     active_tenant_ids: tenants,
   };
 };
+
+const isDirectRun =
+  process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+
+if (isDirectRun) {
+  const startStandaloneWorker = async () => {
+    await initCampaignQueues();
+
+    if (!isCampaignQueueAvailable()) {
+      logger.error(
+        "[SEND-WORKER] Campaign queue unavailable. Check REDIS_URL and Redis service before starting worker.",
+      );
+      process.exit(1);
+    }
+
+    startCampaignSendWorker();
+
+    // Pre-create tenant workers so queue worker discovery can see active workers immediately.
+    const tenants = await db.Tenants.findAll({
+      where: { is_deleted: false },
+      attributes: ["tenant_id"],
+      raw: true,
+    });
+
+    for (const tenant of tenants) {
+      ensureTenantSendWorker(tenant.tenant_id);
+    }
+
+    process.on("SIGINT", async () => {
+      await closeSendWorker();
+      process.exit(0);
+    });
+
+    console.log("Worker is running and waiting for jobs...");
+    process.stdin.resume();
+  };
+
+  startStandaloneWorker().catch((err) => {
+    logger.error(
+      `[SEND-WORKER] Failed to start standalone worker: ${err.message}`,
+    );
+    process.exit(1);
+  });
+}

@@ -88,6 +88,37 @@ export const FaqReviewsTable = (sequelize, Sequelize) => {
         allowNull: true,
       },
 
+      // Embedding vector (JSON array) — stored at FAQ creation time for semantic deduplication
+      embedding: {
+        type: Sequelize.TEXT("long"),
+        allowNull: true,
+      },
+
+      // How many users have asked the same question (semantically) — drives priority sort
+      ask_count: {
+        type: Sequelize.INTEGER,
+        allowNull: false,
+        defaultValue: 1,
+      },
+
+      // JSON array of alternate phrasings that were merged into this canonical question
+      similar_questions: {
+        type: Sequelize.TEXT("long"),
+        allowNull: true,
+      },
+
+      // Soft match — FK to another faq_reviews.id when score is 0.65–0.78
+      potential_duplicate_of: {
+        type: Sequelize.INTEGER,
+        allowNull: true,
+      },
+
+      // Cosine similarity score when soft-linked to another FAQ
+      match_similarity: {
+        type: Sequelize.FLOAT,
+        allowNull: true,
+      },
+
       // Moderation lifecycle — status-only model (no extra is_deleted flag)
       status: {
         type: Sequelize.ENUM("pending_review", "published", "deleted"),
@@ -174,6 +205,11 @@ export const FaqReviewsTable = (sequelize, Sequelize) => {
         {
           name: "idx_faq_message_id",
           fields: ["message_id"],
+        },
+        {
+          // Priority sort index — tier FAQs by ask_count per tenant
+          name: "idx_faq_ask_count",
+          fields: ["tenant_id", "ask_count"],
         },
       ],
     },
