@@ -17,6 +17,7 @@ const TOKEN_LIMITS = {
   playground: 1200,
   whatsapp: 1200,
   whatsapp_retry: 1600,
+  whatsapp_vision: 1500,
 };
 
 /**

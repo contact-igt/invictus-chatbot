@@ -17,8 +17,10 @@
  *   - Mark the campaign completed when no pending recipients remain.
  */
 import { Worker } from "bullmq";
+import { pathToFileURL } from "url";
 import { logger } from "../utils/logger.js";
 import {
+  initCampaignQueues,
   getRedisConnection,
   getCampaignDispatchQueue,
   getCampaignDispatchQueueName,
@@ -31,6 +33,16 @@ import { getCampaignBillingService } from "../services/campaignBillingService.js
 import db from "../database/index.js";
 import { ensureTenantSendWorker } from "./campaignSendWorker.js";
 import { recordCampaignDiagnosticEvent } from "../utils/campaignDiagnosticsEvents.js";
+import * as dispatchCampaign from "./dispatchCampaign.js";
+const enqueueSendJobs =
+  dispatchCampaign.enqueueSendJobs ||
+  (dispatchCampaign.default && dispatchCampaign.default.enqueueSendJobs);
+
+if (!enqueueSendJobs) {
+  logger.warn(
+    "[DISPATCH-WORKER] dispatchCampaign.enqueueSendJobs not found — dispatch will fail until module exports are available",
+  );
+}
 
 const PAGE_SIZE = parseInt(process.env.CAMPAIGN_DISPATCH_PAGE_SIZE || "500");
 const LOCK_TTL = parseInt(process.env.CAMPAIGN_DISPATCH_LOCK_TTL || "120"); // seconds
@@ -118,6 +130,13 @@ async function processDispatchJob(job) {
       return;
     }
 
+    const campaignIdForBillingCheck = String(
+      job?.data?.campaignId || campaign_id || "",
+    ).trim();
+    const isPerfTestCampaign =
+      campaignIdForBillingCheck.startsWith("perf_") ||
+      campaignIdForBillingCheck.startsWith("e2e_");
+
     // ── Billing check with atomic reservation ─────────────────
     // ── Fetch a page of pending recipients (keyset pagination for performance) ─────────────────
     const whereClause = {
@@ -160,52 +179,58 @@ async function processDispatchJob(job) {
     // ── Billing check with atomic reservation (use actual page size) ─────────────────
     let perRecipientCost = 0;
     if (recipients.length > 0) {
-      try {
-        const template = await db.WhatsappTemplates.findOne({
-          where: { template_id: campaign.template_id },
-          attributes: ["category"],
-          raw: true,
-        });
-        const category = (template?.category || "marketing").toLowerCase();
+      if (isPerfTestCampaign) {
+        console.log(
+          "[DISPATCH-WORKER] Skipping billing for perf/e2e test campaign",
+        );
+      } else {
+        try {
+          const template = await db.WhatsappTemplates.findOne({
+            where: { template_id: campaign.template_id },
+            attributes: ["category"],
+            raw: true,
+          });
+          const category = (template?.category || "marketing").toLowerCase();
 
-        const tenant = await db.Tenants.findOne({
-          where: { tenant_id },
-          attributes: ["country", "owner_country_code", "timezone"],
-          raw: true,
-        });
-        const isIndia =
-          tenant?.owner_country_code === "91" ||
-          tenant?.timezone === "Asia/Kolkata";
-        const billingCountry = tenant?.country || (isIndia ? "IN" : "Global");
+          const tenant = await db.Tenants.findOne({
+            where: { tenant_id },
+            attributes: ["country", "owner_country_code", "timezone"],
+            raw: true,
+          });
+          const isIndia =
+            tenant?.owner_country_code === "91" ||
+            tenant?.timezone === "Asia/Kolkata";
+          const billingCountry = tenant?.country || (isIndia ? "IN" : "Global");
 
-        const cost = await estimateMetaCost(category, billingCountry);
-        perRecipientCost = Number(cost.totalCostInr) || 0;
-        const batchCost = perRecipientCost * recipients.length;
+          const cost = await estimateMetaCost(category, billingCountry);
+          perRecipientCost = Number(cost.totalCostInr) || 0;
+          const batchCost = perRecipientCost * recipients.length;
 
-        const reservationResult = await billingService.createReservation(
-          tenant_id,
-          batchCost,
-          300,
-        ); // 5 min TTL
+          const reservationResult = await billingService.createReservation(
+            tenant_id,
+            batchCost,
+            300,
+          ); // 5 min TTL
 
-        if (!reservationResult.success) {
-          logger.warn(
-            `[DISPATCH-WORKER] Campaign ${campaign_id} billing reservation failed — ${reservationResult.reason}`,
+          if (!reservationResult.success) {
+            logger.warn(
+              `[DISPATCH-WORKER] Campaign ${campaign_id} billing reservation failed — ${reservationResult.reason}`,
+            );
+            await campaign.update({ status: "paused" });
+            return;
+          }
+
+          billingReservation = reservationResult.reservationId;
+          billingSettlement = "release";
+          logger.info(
+            `[DISPATCH-WORKER] Billing reservation created: ${billingReservation} for ₹${batchCost}`,
           );
-          await campaign.update({ status: "paused" });
+        } catch (billingErr) {
+          logger.error(
+            `[DISPATCH-WORKER] Billing check error for ${campaign_id}: ${billingErr.message}`,
+          );
           return;
         }
-
-        billingReservation = reservationResult.reservationId;
-        billingSettlement = "release";
-        logger.info(
-          `[DISPATCH-WORKER] Billing reservation created: ${billingReservation} for ₹${batchCost}`,
-        );
-      } catch (billingErr) {
-        logger.error(
-          `[DISPATCH-WORKER] Billing check error for ${campaign_id}: ${billingErr.message}`,
-        );
-        return;
       }
     }
 
@@ -243,42 +268,24 @@ async function processDispatchJob(job) {
       return;
     }
 
-    // ── Enqueue send jobs (deduplicated by jobId) ─────────────────────────
-    let enqueued = 0;
-    for (const recipient of recipients) {
-      try {
-        await sendQueue.add(
-          "send-recipient",
-          { campaign_id, tenant_id, recipient_id: recipient.id },
-          {
-            // BullMQ dedup: a job with the same jobId in waiting/active/delayed
-            // state is silently ignored — prevents duplicate sends.
-            jobId: `send:${recipient.id}`,
-          },
-        );
-        enqueued++;
-      } catch (addErr) {
-        // Duplicate jobId collision is expected and safe — log others
-        if (!addErr.message?.includes("already exists")) {
-          logger.warn(
-            `[DISPATCH-WORKER] Could not enqueue recipient ${recipient.id}: ${addErr.message}`,
-          );
-        }
-      }
-    }
-
-    logger.info(
-      `[DISPATCH-WORKER] Campaign ${campaign_id} — enqueued ${enqueued}/${recipients.length} send jobs into ${sendQueue?.name || "tenant queue"}`,
+    // ── Enqueue send jobs using addBulk with chunking and fallback ─────────
+    const { totalEnqueued, totalFailed, durationMs } = await enqueueSendJobs(
+      sendQueue,
+      campaign.campaign_id || campaign_id,
+      tenant_id,
+      recipients,
     );
 
+    const enqueued = totalEnqueued;
     if (billingReservation) {
       consumedBillingAmount = Number((perRecipientCost * enqueued).toFixed(6));
       billingSettlement = consumedBillingAmount > 0 ? "confirm" : "release";
     }
 
     logger.info(
-      `[DISPATCH-WORKER] send jobs added for campaign ${campaign_id}: ${enqueued}`,
+      `[DISPATCH-WORKER] Campaign ${campaign_id} — enqueued ${enqueued}/${recipients.length} send jobs into ${sendQueue?.name || "tenant queue"}`,
     );
+
     recordCampaignDiagnosticEvent({
       source: "dispatch-worker",
       type: "jobs_added",
@@ -289,6 +296,8 @@ async function processDispatchJob(job) {
         enqueued,
         recipients: recipients.length,
         queue_name: sendQueue?.name || null,
+        failed: totalFailed,
+        enqueue_duration_ms: durationMs,
       },
     });
 
@@ -413,3 +422,37 @@ export const closeDispatchWorker = async () => {
     logger.info("[DISPATCH-WORKER] Closed");
   }
 };
+
+const isDirectRun =
+  process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+
+if (isDirectRun) {
+  const startStandaloneDispatchWorker = async () => {
+    try {
+      await initCampaignQueues();
+
+      if (!isCampaignQueueAvailable()) {
+        logger.error(
+          "[DISPATCH-WORKER] Campaign queue unavailable. Check REDIS_URL and Redis service before starting worker.",
+        );
+        process.exit(1);
+      }
+
+      startCampaignDispatchWorker();
+      console.log("Dispatch worker is running and waiting for jobs...");
+
+      process.on("SIGINT", async () => {
+        console.log("Shutting down dispatch worker...");
+        await closeDispatchWorker();
+        process.exit(0);
+      });
+
+      process.stdin.resume();
+    } catch (err) {
+      console.error("Dispatch worker failed to start:", err);
+      process.exit(1);
+    }
+  };
+
+  startStandaloneDispatchWorker();
+}

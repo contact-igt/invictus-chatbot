@@ -1,8 +1,10 @@
 import { createUserMessageService } from "../Messages/messages.service.js";
+import { downloadAndStoreIncomingMedia } from "../../services/chatAttachmentService.js";
 import { formatPhoneNumber } from "../../utils/helpers/formatPhoneNumber.js";
 import fs from "fs";
 import {
   getOpenAIReply,
+  getOpenAIVisionReply,
   isChatLocked,
   isMessageProcessed,
   lockChat,
@@ -733,6 +735,47 @@ export const receiveMessage = async (req, res) => {
       created_at: new Date(),
     });
 
+    // Download-on-receive: immediately download Meta media to R2 so it never expires.
+    // Meta media IDs are only valid for ~5 minutes after delivery.
+    // We save the meta_media_id to DB first (fast, no user delay), then async-download
+    // and update the DB + re-emit so the frontend swaps to the permanent R2 URL.
+    const DOWNLOADABLE_TYPES = ["image", "video", "audio", "document"];
+    if (DOWNLOADABLE_TYPES.includes(type) && media_url?.startsWith("meta_media_id:")) {
+      const rawMediaId = media_url.replace("meta_media_id:", "");
+      const msgId = savedMsg?.id;
+      const capturedContactId = contactsaved?.contact_id;
+      const capturedTenantId = tenant_id;
+
+      setImmediate(async () => {
+        try {
+          const result = await downloadAndStoreIncomingMedia(
+            rawMediaId,
+            media_mime_type,
+            type,
+            capturedTenantId,
+            capturedContactId,
+          );
+          if (!result?.r2Url) return;
+
+          // Update the DB row with the permanent R2 URL
+          await db.sequelize.query(
+            `UPDATE messages SET media_url = ? WHERE id = ?`,
+            { replacements: [result.r2Url, msgId] },
+          );
+
+          // Re-emit with the permanent URL so the frontend swaps immediately
+          ioInstance.to(`tenant-${capturedTenantId}`).emit("media-url-updated", {
+            messageId: msgId,
+            media_url: result.r2Url,
+          });
+
+          console.log(`[MEDIA-DOWNLOAD] Stored incoming ${type} → ${result.r2Url}`);
+        } catch (err) {
+          console.error("[MEDIA-DOWNLOAD] Async download failed:", err.message);
+        }
+      });
+    }
+
     // 8. Campaign Reply Tracking
     const cleanPhone = phone.replace(/\D/g, "");
     const phoneSuffix = cleanPhone.slice(-10);
@@ -888,6 +931,13 @@ export const receiveMessage = async (req, res) => {
           return;
         }
 
+        // Build cached data once — shared by text, vision, and appointment paths
+        const cachedData = {
+          tenantSettings,
+          contact: contactsaved,
+          lead: leadSaved,
+        };
+
         // AI will respond — send read receipt (blue tick) and typing indicator
         sendReadReceipt(tenant_id, phone_number_id, messageId);
         sendTypingIndicator(tenant_id, phone_number_id, phone, messageId);
@@ -913,14 +963,85 @@ export const receiveMessage = async (req, res) => {
           ENABLE_APPOINTMENT_BUTTONS,
         );
 
-        // NEW: Audio / voice guard — appointments are text-only
-        if (type === "audio") { // NEW
-          await sendWhatsAppMessage( // NEW
-            tenant_id, phone, // NEW
-            "Sorry, I can only handle text messages for appointments. Please type your request.", // NEW
-          ); // NEW
-          return; // NEW
-        } // NEW
+        // ── Vision: Image messages → GPT-4o reads the image + conversation history ──
+        if (type === "image") {
+          let imageUrl = media_url;
+
+          // If download-on-receive hasn't finished yet, fetch inline — Meta URL is still
+          // valid within the same webhook window (well under the ~5-min expiry).
+          if (imageUrl?.startsWith("meta_media_id:")) {
+            const rawId = imageUrl.replace("meta_media_id:", "");
+            const dlResult = await downloadAndStoreIncomingMedia(
+              rawId, media_mime_type, "image", tenant_id, contactsaved?.contact_id,
+            ).catch(() => null);
+            imageUrl = dlResult?.r2Url || null;
+          }
+
+          if (!imageUrl) {
+            await sendWhatsAppMessage(
+              tenant_id, phone,
+              "I received your image but couldn't open it. Please try sending it again.",
+            ).catch(() => {});
+            return;
+          }
+
+          const visionResult = await getOpenAIVisionReply(
+            tenant_id, phone, imageUrl, text,
+            contactsaved?.contact_id, phone_number_id, cachedData,
+          );
+
+          const visionReply = visionResult?.message;
+          if (!visionReply) return;
+
+          let visionWamid = null;
+          try {
+            const visionSend = await sendWhatsAppMessage(tenant_id, phone, visionReply);
+            visionWamid = visionSend?.wamid || null;
+          } catch (sendErr) {
+            console.error("[VISION-AI] Failed to send reply:", sendErr.message);
+          }
+
+          const savedVisionMsg = await createUserMessageService(
+            tenant_id, contactsaved?.contact_id, phone_number_id, phone,
+            visionWamid, name, "bot", null, visionReply, "text", null, null,
+            visionWamid ? "sent" : null,
+          );
+
+          const ioVision = getIO();
+          ioVision.to(`tenant-${tenant_id}`).emit("ai-typing", { tenant_id, phone, status: false });
+          ioVision.to(`tenant-${tenant_id}`).emit("new-message", {
+            tenant_id, phone,
+            id: savedVisionMsg?.id,
+            contact_id: contactsaved?.contact_id,
+            phone_number_id,
+            name: contactsaved?.name || name,
+            message: visionReply,
+            message_type: "text",
+            media_url: null,
+            sender: "bot",
+            status: "sent",
+            created_at: new Date(),
+          });
+          return;
+        }
+
+        // ── Audio / voice guard — send polite fallback (audio transcription is future work) ──
+        if (type === "audio") {
+          await sendWhatsAppMessage(
+            tenant_id, phone,
+            "I received your voice message! If you have a question, please type it and I'll be happy to help.",
+          ).catch(() => {});
+          return;
+        }
+
+        // ── Video / document — acknowledge receipt, invite text question ──
+        if (type === "video" || type === "document") {
+          await sendWhatsAppMessage(
+            tenant_id, phone,
+            "Thanks for sharing! If you have any questions, please type them and I'll be happy to help.",
+          ).catch(() => {});
+          return;
+        }
 
         // NEW: Check if user is in a pending confirmation state (YES/NO for any booking flow)
         if (!ignoreAppointmentButton) {
@@ -1049,13 +1170,6 @@ export const receiveMessage = async (req, res) => {
           return;
         }
 
-        // Pass cached data to avoid redundant DB calls in AI flow
-        const cachedData = {
-          tenantSettings,
-          contact: contactsaved,
-          lead: leadSaved,
-        };
-
         const aiResult = await getOpenAIReply(
           tenant_id,
           phone,
@@ -1076,7 +1190,7 @@ export const receiveMessage = async (req, res) => {
         // NEW: If getOpenAIReply routed an appointment intent, handle interactive response
         // handleAppointmentResponse saves to DB and emits socket internally
         const _apptTrace = { _apptResult: !!aiResult?._apptResult, tagDetected: aiResult?.tagDetected, msgPreview: String(aiResult?.message || "").substring(0, 60) };
-        try { import("fs").then(fs => fs.default.appendFileSync("/tmp/faq_trace.log", `[${new Date().toISOString()}] [CONTROLLER] aiResult check ${JSON.stringify(_apptTrace)}\n`)); } catch {}
+        try { import("fs").then(fs => fs.default.appendFileSync("/tmp/faq_trace.log", `[${new Date().toISOString()}] [CONTROLLER] aiResult check ${JSON.stringify(_apptTrace)}\n`)).catch(() => {}); } catch {}
         console.log("[FAQ-PIPELINE][CTRL] aiResult:", JSON.stringify(_apptTrace));
         if (aiResult?._apptResult) { // NEW
           await handleAppointmentResponse( // NEW

@@ -1,5 +1,6 @@
 import axios from "axios";
 import https from "https";
+import FormData from "form-data";
 import db from "../../database/index.js";
 import { tableNames } from "../../database/tableName.js";
 import { getSecret } from "../TenantSecretsModel/tenantSecrets.service.js";
@@ -77,7 +78,7 @@ const faqTrace = (label, data) => {
   const line = `[${new Date().toISOString()}] ${label} ${JSON.stringify(data)}\n`;
   process.stdout.write(line);
   try {
-    import("fs").then(fs => fs.default.appendFileSync("/tmp/faq_trace.log", line));
+    import("fs").then(fs => fs.default.appendFileSync("/tmp/faq_trace.log", line)).catch(() => {});
   } catch {}
 };
 
@@ -163,6 +164,154 @@ export const sendWhatsAppMessage = async (tenant_id, to, message) => {
         }
 
         throw new Error(`Meta API Error: ${metaMsg}${code}${subcode}`);
+      }
+      throw axiosErr;
+    }
+
+    return { phone_number_id, wamid };
+  } catch (err) {
+    throw err;
+  }
+};
+
+/**
+ * Upload a media file directly to WhatsApp's Media API.
+ * Returns a { mediaId, phone_number_id } — use mediaId for id-based message sends.
+ * This is required for audio (webm/ogg) because link-based sends fail format validation.
+ */
+export const uploadWhatsAppMedia = async (tenant_id, fileBuffer, mimeType, filename) => {
+  const [rows] = await db.sequelize.query(
+    `SELECT phone_number_id FROM ${tableNames.WHATSAPP_ACCOUNT}
+     WHERE tenant_id = ? AND status IN ('active', 'verified') LIMIT 1`,
+    { replacements: [tenant_id] },
+  );
+  if (!rows.length) throw new Error("No active WhatsApp account for tenant");
+
+  const { phone_number_id } = rows[0];
+  const access_token = await getSecret(tenant_id, "whatsapp");
+  if (!access_token) throw new Error("WhatsApp access token not found");
+
+  const META_API_VERSION = process.env.META_API_VERSION || "v23.0";
+
+  const form = new FormData();
+  form.append("file", fileBuffer, { filename, contentType: mimeType });
+  form.append("type", mimeType);
+  form.append("messaging_product", "whatsapp");
+
+  try {
+    const resp = await axios.post(
+      `https://graph.facebook.com/${META_API_VERSION}/${phone_number_id}/media`,
+      form,
+      {
+        headers: {
+          Authorization: `Bearer ${access_token}`,
+          ...form.getHeaders(),
+        },
+        httpsAgent,
+        maxContentLength: 20 * 1024 * 1024,
+      },
+    );
+    const mediaId = resp.data?.id;
+    if (!mediaId) throw new Error("WhatsApp media upload returned no id");
+    return { mediaId, phone_number_id };
+  } catch (axiosErr) {
+    if (axiosErr.response) {
+      const metaErr = axiosErr.response.data?.error || {};
+      const metaMsg = metaErr.message || axiosErr.message;
+      const code = metaErr.code ? ` (Code: ${metaErr.code})` : "";
+      throw new Error(`Meta API Error: ${metaMsg}${code}`);
+    }
+    throw axiosErr;
+  }
+};
+
+/**
+ * Send a media message via WhatsApp Cloud API.
+ * Supports both id-based sends (mediaId, preferred for audio) and link-based sends (mediaUrl).
+ *
+ * @param {string} tenant_id
+ * @param {string} to
+ * @param {"image"|"video"|"audio"|"document"} mediaType
+ * @param {string} mediaUrl   - R2 public URL (used for link-based sends)
+ * @param {string} [caption]
+ * @param {string} [filename] - shown in WhatsApp for document type
+ * @param {string|null} [mediaId] - WhatsApp media_id from uploadWhatsAppMedia(); if set, id-based send is used
+ * @returns {Promise<{ phone_number_id: string, wamid: string }>}
+ */
+export const sendWhatsAppMediaMessage = async (
+  tenant_id,
+  to,
+  mediaType,
+  mediaUrl,
+  caption = "",
+  filename = "",
+  mediaId = null,
+) => {
+  try {
+    const [rows] = await db.sequelize.query(
+      `SELECT phone_number_id FROM ${tableNames.WHATSAPP_ACCOUNT}
+       WHERE tenant_id = ? AND status IN ('active', 'verified') LIMIT 1`,
+      { replacements: [tenant_id] },
+    );
+
+    if (!rows.length) throw new Error("No active WhatsApp account for tenant");
+
+    const { phone_number_id } = rows[0];
+    const access_token = await getSecret(tenant_id, "whatsapp");
+    if (!access_token) throw new Error("WhatsApp access token not found");
+
+    const META_API_VERSION = process.env.META_API_VERSION || "v23.0";
+
+    // id-based send (WhatsApp Media API upload) — reliable for audio/webm
+    // link-based send — works for image/video/document with public R2 URL
+    let mediaPayload;
+    if (mediaId) {
+      if (mediaType === "document") {
+        mediaPayload = { id: mediaId, ...(filename ? { filename } : {}), ...(caption ? { caption } : {}) };
+      } else if (mediaType === "audio") {
+        mediaPayload = { id: mediaId };
+      } else {
+        mediaPayload = { id: mediaId, ...(caption ? { caption } : {}) };
+      }
+    } else {
+      if (mediaType === "image") {
+        mediaPayload = { link: mediaUrl, ...(caption ? { caption } : {}) };
+      } else if (mediaType === "video") {
+        mediaPayload = { link: mediaUrl, ...(caption ? { caption } : {}) };
+      } else if (mediaType === "audio") {
+        mediaPayload = { link: mediaUrl };
+      } else if (mediaType === "document") {
+        mediaPayload = { link: mediaUrl, ...(filename ? { filename } : {}), ...(caption ? { caption } : {}) };
+      } else {
+        throw new Error(`Unsupported media type: ${mediaType}`);
+      }
+    }
+
+    let wamid = null;
+    try {
+      const response = await axios.post(
+        `https://graph.facebook.com/${META_API_VERSION}/${phone_number_id}/messages`,
+        {
+          messaging_product: "whatsapp",
+          to,
+          type: mediaType,
+          [mediaType]: mediaPayload,
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${access_token}`,
+            "Content-Type": "application/json",
+          },
+          httpsAgent,
+        },
+      );
+      wamid = response?.data?.messages?.[0]?.id || null;
+    } catch (axiosErr) {
+      if (axiosErr.response) {
+        const metaErr = axiosErr.response.data?.error || {};
+        const metaMsg = metaErr.message || axiosErr.message;
+        const code = metaErr.code ? ` (Code: ${metaErr.code})` : "";
+        throw new Error(`Meta API Error: ${metaMsg}${code}`);
       }
       throw axiosErr;
     }
@@ -784,5 +933,82 @@ export const getOpenAIReply = async (
       requires: null,
       lead_intelligence: null,
     };
+  }
+};
+
+/**
+ * Vision-aware AI reply for incoming user images.
+ *
+ * Skips intent classification, knowledge search, and FAQ pipeline — those are
+ * text-only paths. Vision reply is a direct GPT-4o call with:
+ *   - The tenant system prompt (business context + persona)
+ *   - Last 30 conversation messages as text context
+ *   - The image + user caption as the final user turn
+ *
+ * @param {string} tenant_id
+ * @param {string} phone          - User's phone number (for memory lookup)
+ * @param {string} imageUrl       - Public R2 URL of the image
+ * @param {string} caption        - User's caption typed alongside the image (may be empty)
+ * @param {string} contact_id
+ * @param {string} phone_number_id
+ * @param {object} cachedData     - Pre-fetched tenant/contact/lead data
+ * @returns {Promise<{ message: string|null }>}
+ */
+export const getOpenAIVisionReply = async (
+  tenant_id,
+  phone,
+  imageUrl,
+  caption = "",
+  contact_id = null,
+  phone_number_id = null,
+  cachedData = {},
+) => {
+  try {
+    const { analyzeImageAndReply } = await import("../../utils/ai/visionAi.js");
+
+    // Fetch conversation memory and active prompt in parallel
+    const [memory, activePrompt] = await Promise.all([
+      getConversationMemory(tenant_id, phone, contact_id).catch((err) => {
+        console.error("[VISION-AI] Memory fetch failed:", err.message);
+        return [];
+      }),
+      getActivePromptService(tenant_id).catch((err) => {
+        console.error("[VISION-AI] Active prompt fetch failed:", err.message);
+        return null;
+      }),
+    ]);
+
+    const chatHistory = buildChatHistory(memory);
+
+    // Build system prompt (business context, persona, language settings)
+    let systemPrompt = "";
+    try {
+      const promptResult = await buildAiSystemPrompt(
+        tenant_id,
+        contact_id,
+        { language: "unknown", style: "unknown", label: "unknown" },
+        caption || "image",
+        { ...cachedData, activePrompt, knowledgeResult: { chunks: [], resolvedLogs: [], sources: [] } },
+      );
+      systemPrompt = promptResult.systemPrompt;
+    } catch (err) {
+      console.error("[VISION-AI] System prompt build failed:", err.message);
+      systemPrompt =
+        "You are a helpful AI assistant. Analyze the image the user sent and respond helpfully based on the conversation context.";
+    }
+
+    const reply = await analyzeImageAndReply({
+      imageUrl,
+      caption,
+      history: chatHistory,
+      systemPrompt,
+      tenantId: tenant_id,
+    });
+
+    console.log("[VISION-AI] Reply generated:", reply?.substring(0, 120));
+    return { message: reply || null };
+  } catch (err) {
+    console.error("[VISION-AI] getOpenAIVisionReply failed:", err.message);
+    return { message: null };
   }
 };
