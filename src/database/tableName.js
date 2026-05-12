@@ -56,4 +56,6 @@ export const tableNames = {
   TAX_SETTINGS: "tax_settings",
   TENANT_SECRETS: "tenant_secrets",
   USER_PREFERENCES: "user_preferences",
+  MENTORS: "mentors",
+  COURSES: "courses",
 };

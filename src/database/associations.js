@@ -615,5 +615,23 @@ export const defineAssociations = (db) => {
     constraints: false,
   });
 
+  // ========================================
+  // COURSES & MENTORS RELATIONSHIPS
+  // ========================================
+
+  // Mentor → Courses (One-to-Many)
+  db.Mentors.hasMany(db.Courses, {
+    foreignKey: "mentor_id",
+    sourceKey: "mentor_id",
+    as: "courses",
+    constraints: false,
+  });
+  db.Courses.belongsTo(db.Mentors, {
+    foreignKey: "mentor_id",
+    targetKey: "mentor_id",
+    as: "Mentor",
+    constraints: false,
+  });
+
   return db;
 };

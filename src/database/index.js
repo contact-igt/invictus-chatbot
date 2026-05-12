@@ -58,6 +58,8 @@ import { SavedPaymentMethodTable } from "./tables/SavedPaymentMethod/SavedPaymen
 import { TaxSettingsTable } from "./tables/TaxSettingsTable/index.js";
 import { TenantSecretsTable } from "./tables/TenantSecretsTable/index.js";
 import { UserPreferencesTable } from "./tables/UserPreferencesTable/index.js";
+import { MentorsTable } from "./tables/MentorsTable/index.js";
+import { CoursesTable } from "./tables/CoursesTable/index.js";
 
 const dbconfig =
   ServerEnvironmentConfig?.server?.line === "production"
@@ -174,6 +176,8 @@ db.SavedPaymentMethod = SavedPaymentMethodTable(sequelize, Sequelize);
 db.TaxSettings = TaxSettingsTable(sequelize, Sequelize);
 db.TenantSecrets = TenantSecretsTable(sequelize, Sequelize);
 db.UserPreferences = UserPreferencesTable(sequelize, Sequelize);
+db.Mentors = MentorsTable(sequelize, Sequelize);
+db.Courses = CoursesTable(sequelize, Sequelize);
 
 defineAssociations(db);
 

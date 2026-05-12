@@ -40,6 +40,8 @@ import {
   runInvoiceRetryCron,
 } from "./models/BillingModel/billingCycle.service.js";
 import FaqRouter from "./models/Faq/faq.routes.js";
+import CoursesRouter from "./models/CoursesModel/courses.routes.js";
+import MentorsRouter from "./models/MentorsModel/mentors.routes.js";
 import { checkHealthAlerts } from "./utils/billing/billingHealthMonitor.js";
 import { runDailyReconciliation } from "./utils/billing/paymentReconciler.js";
 import { initBillingQueue } from "./utils/billing/billingQueue.js";
@@ -125,7 +127,12 @@ app.use(
   WhatsappOtpRouter,
   PaymentRouter,
   FaqRouter,
+<<<<<<< Updated upstream
   AttachmentRouter,
+=======
+  MentorsRouter,
+  CoursesRouter,
+>>>>>>> Stashed changes
 );
 
 app.use(
