@@ -616,6 +616,46 @@ export const defineAssociations = (db) => {
   });
 
   // ========================================
+  // APPOINTMENT MODULE RELATIONSHIPS
+  // ========================================
+
+  // Appointment → Doctor (Many-to-One)
+  db.Appointments.belongsTo(db.Doctors, {
+    foreignKey: "doctor_id",
+    targetKey: "doctor_id",
+    as: "doctor",
+    constraints: false,
+  });
+  db.Doctors.hasMany(db.Appointments, {
+    foreignKey: "doctor_id",
+    sourceKey: "doctor_id",
+    as: "appointments",
+    constraints: false,
+  });
+
+  // Appointment → Contact (Many-to-One)
+  db.Appointments.belongsTo(db.Contacts, {
+    foreignKey: "contact_id",
+    targetKey: "contact_id",
+    as: "contact",
+    constraints: false,
+  });
+  db.Contacts.hasMany(db.Appointments, {
+    foreignKey: "contact_id",
+    sourceKey: "contact_id",
+    as: "appointments",
+    constraints: false,
+  });
+
+  // BookingSession → Contact (Many-to-One)
+  db.BookingSessions.belongsTo(db.Contacts, {
+    foreignKey: "contact_id",
+    targetKey: "contact_id",
+    as: "contact",
+    constraints: false,
+  });
+
+  // ========================================
   // COURSES & MENTORS RELATIONSHIPS
   // ========================================
 
