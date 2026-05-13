@@ -127,12 +127,9 @@ app.use(
   WhatsappOtpRouter,
   PaymentRouter,
   FaqRouter,
-<<<<<<< Updated upstream
   AttachmentRouter,
-=======
   MentorsRouter,
   CoursesRouter,
->>>>>>> Stashed changes
 );
 
 app.use(
