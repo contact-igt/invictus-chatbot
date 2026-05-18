@@ -8,6 +8,9 @@ const VALID_STATUSES = [
   "Noshow",
 ];
 
+const parseBooleanQueryFlag = (value) =>
+  value === true || value === "true" || value === "1";
+
 
 export const createAppointment = async (req, res) => {
   try {
@@ -51,10 +54,17 @@ export const createAppointment = async (req, res) => {
 
 export const getAllAppointments = async (req, res) => {
   try {
-    const { search, status, date, doctor_id } = req.query;
+    const { search, status, date, doctor_id, lead_id, include_lead } = req.query;
     const appointments = await AppointmentService.getAllAppointmentsService(
       req.user.tenant_id,
-      { search, status, date, doctor_id },
+      {
+        search,
+        status,
+        date,
+        doctor_id,
+        lead_id,
+        includeLead: parseBooleanQueryFlag(include_lead),
+      },
     );
     return res.status(200).json({ success: true, data: appointments });
   } catch (err) {
@@ -65,10 +75,12 @@ export const getAllAppointments = async (req, res) => {
 export const getContactAppointments = async (req, res) => {
   try {
     const { contact_id } = req.params;
+    const { include_lead } = req.query;
     const appointments =
       await AppointmentService.getAppointmentsByContactIdService(
         req.user.tenant_id,
         contact_id,
+        { includeLead: parseBooleanQueryFlag(include_lead) },
       );
     return res.status(200).json({ success: true, data: appointments });
   } catch (err) {
@@ -92,6 +104,7 @@ export const updateStatus = async (req, res) => {
       req.user.tenant_id,
       appointment_id,
       status,
+      { allowTerminalStatuses: false },
     );
     return res.status(200).json({
       success: true,
@@ -178,5 +191,129 @@ export const getAvailableSlots = async (req, res) => {
     return res.status(200).json({ success: true, data: result });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+export const completeWithOutcome = async (req, res) => {
+  try {
+    const {
+      appointment_id,
+      notes,
+      follow_up_required,
+      follow_up_date,
+      follow_up_type,
+    } = req.body;
+
+    if (!appointment_id) {
+      return res.status(400).json({
+        success: false,
+        message: "appointment_id is required.",
+      });
+    }
+
+    if (!notes || !String(notes).trim()) {
+      return res.status(400).json({
+        success: false,
+        message: "Visit outcome notes are required.",
+      });
+    }
+
+    const result = await AppointmentService.completeAppointmentWithOutcomeService(
+      {
+        tenant_id: req.user.tenant_id,
+        appointment_id,
+        notes,
+        follow_up_required,
+        follow_up_date,
+        follow_up_type,
+      },
+    );
+
+    return res.status(200).json({
+      success: true,
+      data: result,
+      message: "Appointment completed successfully with outcome.",
+    });
+  } catch (err) {
+    return res.status(400).json({ success: false, message: err.message });
+  }
+};
+
+export const noShowWithAction = async (req, res) => {
+  try {
+    const { appointment_id, action, follow_up_date, follow_up_type } = req.body;
+
+    if (!appointment_id) {
+      return res.status(400).json({
+        success: false,
+        message: "appointment_id is required.",
+      });
+    }
+
+    if (!action) {
+      return res.status(400).json({
+        success: false,
+        message: "action is required.",
+      });
+    }
+
+    const result = await AppointmentService.markNoShowWithActionService({
+      tenant_id: req.user.tenant_id,
+      appointment_id,
+      action,
+      follow_up_date,
+      follow_up_type,
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: result,
+      message: "Appointment marked as no-show.",
+    });
+  } catch (err) {
+    return res.status(400).json({ success: false, message: err.message });
+  }
+};
+
+export const createAppointmentOutcome = async (req, res) => {
+  try {
+    const {
+      appointment_id,
+      notes,
+      follow_up_required,
+      follow_up_date,
+      follow_up_type,
+    } = req.body;
+
+    if (!appointment_id) {
+      return res.status(400).json({
+        success: false,
+        message: "appointment_id is required.",
+      });
+    }
+
+    if (!notes || !String(notes).trim()) {
+      return res.status(400).json({
+        success: false,
+        message: "Visit outcome notes are required.",
+      });
+    }
+
+    const outcome = await AppointmentService.createAppointmentOutcomeService({
+      tenant_id: req.user.tenant_id,
+      appointment_id,
+      notes,
+      follow_up_required,
+      follow_up_date,
+      follow_up_type,
+    });
+
+    return res.status(201).json({
+      success: true,
+      data: outcome,
+      message: "Appointment outcome saved successfully.",
+    });
+  } catch (err) {
+    return res.status(400).json({ success: false, message: err.message });
   }
 };

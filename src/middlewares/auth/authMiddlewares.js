@@ -247,6 +247,9 @@ export const refreshToken = (req, res) => {
     return res.status(200).json({
       accessToken: generateAccessToken(user),
       refreshToken: generateRefreshToken(user),
+      user_type: user?.user_type || null,
+      tenant_id: user?.tenant_id || null,
+      role: user?.role || null,
     });
   });
 };

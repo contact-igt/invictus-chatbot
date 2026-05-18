@@ -1,5 +1,5 @@
 import db from "../../database/index.js";
-import { Op, fn, col, where as seqWhere } from "sequelize";
+import { Op } from "sequelize";
 import { generateReadableIdFromLast } from "../../utils/helpers/generateReadableIdFromLast.js";
 import {
   formatTimeToAMPM,
@@ -34,6 +34,51 @@ const normalizeTimeFormat = (time) => {
   return formatTimeToAMPM(time);
 };
 
+const DATE_ONLY_PREFIX_REGEX = /^(\d{4}-\d{2}-\d{2})/;
+
+const toLocalDateOnly = (dateObj) =>
+  `${dateObj.getFullYear()}-${String(dateObj.getMonth() + 1).padStart(2, "0")}-${String(dateObj.getDate()).padStart(2, "0")}`;
+
+const normalizeDateOnly = (value, fieldName = "date") => {
+  if (!value) return value;
+
+  if (value instanceof Date) {
+    if (Number.isNaN(value.getTime())) {
+      throw new Error(`Invalid ${fieldName} value.`);
+    }
+    return toLocalDateOnly(value);
+  }
+
+  const raw = String(value).trim();
+  const prefixed = raw.match(DATE_ONLY_PREFIX_REGEX);
+  if (prefixed) {
+    return prefixed[1];
+  }
+
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) {
+    throw new Error(`Invalid ${fieldName} format. Expected YYYY-MM-DD.`);
+  }
+
+  return toLocalDateOnly(parsed);
+};
+
+const nextDateOnly = (dateOnly) => {
+  const d = new Date(`${dateOnly}T00:00:00`);
+  d.setDate(d.getDate() + 1);
+  return toLocalDateOnly(d);
+};
+
+const buildAppointmentDateWhere = (dateValue) => {
+  const normalized = normalizeDateOnly(dateValue, "appointment_date");
+  return {
+    [Op.gte]: normalized,
+    [Op.lt]: nextDateOnly(normalized),
+  };
+};
+
+const toUtcMidnightIso = (dateOnly) => `${dateOnly}T00:00:00.000Z`;
+
 const getDayOfWeekFromDate = (date) => {
   const dateObj = new Date(`${date}T12:00:00`);
   const days = [
@@ -49,17 +94,85 @@ const getDayOfWeekFromDate = (date) => {
   return days[dateObj.getDay()];
 };
 
+const ALLOWED_FOLLOW_UP_TYPES = new Set(["Call", "Visit", "WhatsApp"]);
+
+const createFollowUpPlaceholder = async ({
+  appointment_id,
+  tenant_id,
+  follow_up_date,
+  follow_up_type,
+}) => {
+  // Placeholder hook for future follow-up system integration.
+  console.log(
+    `[APPOINTMENT-OUTCOME] Follow-up queued for future module: appointment=${appointment_id}, tenant=${tenant_id}, date=${follow_up_date}, type=${follow_up_type}`,
+  );
+};
+
+const parseBooleanFlag = (value) =>
+  value === true || value === "true" || value === 1 || value === "1";
+const isAppointmentsDebugEnabled = process.env.DEBUG_APPOINTMENTS === "true";
+
+const resolveLeadIdForAppointment = async (tenant_id, lead_id, contact_id) => {
+  const normalizedLeadId = lead_id ? String(lead_id).trim() : "";
+
+  try {
+    if (normalizedLeadId) {
+      const lead = await db.Leads.findOne({
+        where: {
+          tenant_id,
+          lead_id: normalizedLeadId,
+          is_deleted: false,
+        },
+        attributes: ["lead_id"],
+        raw: true,
+      });
+
+      if (!lead) {
+        console.warn(
+          `[APPOINTMENT] Ignoring unknown lead_id '${normalizedLeadId}' for tenant '${tenant_id}'`,
+        );
+        return null;
+      }
+
+      return lead.lead_id;
+    }
+
+    // Fallback: when lead_id not passed, derive from contact_id for linkage safety.
+    if (contact_id) {
+      const leadByContact = await db.Leads.findOne({
+        where: {
+          tenant_id,
+          contact_id,
+          is_deleted: false,
+        },
+        attributes: ["lead_id"],
+        order: [["created_at", "DESC"]],
+        raw: true,
+      });
+      return leadByContact?.lead_id || null;
+    }
+
+    return null;
+  } catch (err) {
+    console.warn(
+      `[APPOINTMENT] lead_id verification skipped for '${normalizedLeadId || contact_id || "unknown"}': ${err.message}`,
+    );
+    // Strict integrity: persist lead_id only when validation succeeds.
+    return null;
+  }
+};
+
 export const createAppointmentService = async (data) => {
   let {
     tenant_id,
     contact_id,
+    lead_id,
     doctor_id,
     patient_name,
     country_code,
     contact_number,
     appointment_date,
     age,
-    status = "Pending",
     notes,
     email,
   } = data;
@@ -97,6 +210,17 @@ export const createAppointmentService = async (data) => {
 
   // Normalize time to consistent format (e.g. "09:00 AM" not "9:00 AM")
   appointment_time = normalizeTimeFormat(appointment_time);
+  appointment_date = normalizeDateOnly(appointment_date, "appointment_date");
+  if (isAppointmentsDebugEnabled) {
+    console.log("[APPOINTMENT-CREATE] normalized payload:", {
+      tenant_id,
+      contact_id,
+      doctor_id,
+      appointment_date,
+      appointment_date_midnight_utc: toUtcMidnightIso(appointment_date),
+      appointment_time,
+    });
+  }
 
   let doctor = null;
   let doctorDuration = 30;
@@ -173,6 +297,14 @@ export const createAppointmentService = async (data) => {
     );
   }
 
+  const resolvedLeadId = await resolveLeadIdForAppointment(
+    tenant_id,
+    lead_id,
+    contact_id,
+  );
+  const appointmentLeadId = resolvedLeadId || null;
+  const status = "Pending";
+
   // Use a transaction to prevent race conditions on duplicate/slot checks
   const transaction = await db.sequelize.transaction();
 
@@ -183,9 +315,7 @@ export const createAppointmentService = async (data) => {
         tenant_id,
         contact_id,
         is_deleted: false,
-        [Op.and]: [
-          seqWhere(fn("DATE", col("appointment_date")), appointment_date),
-        ],
+        appointment_date: buildAppointmentDateWhere(appointment_date),
         appointment_time,
         status: { [Op.not]: "Cancelled" },
       },
@@ -207,9 +337,7 @@ export const createAppointmentService = async (data) => {
           tenant_id,
           doctor_id,
           is_deleted: false,
-          [Op.and]: [
-            seqWhere(fn("DATE", col("appointment_date")), appointment_date),
-          ],
+          appointment_date: buildAppointmentDateWhere(appointment_date),
           status: { [Op.in]: ["Pending", "Confirmed"] },
         },
         attributes: ["appointment_time"],
@@ -253,9 +381,7 @@ export const createAppointmentService = async (data) => {
         tenant_id,
         doctor_id,
         is_deleted: false,
-        [Op.and]: [
-          seqWhere(fn("DATE", col("appointment_date")), appointment_date),
-        ],
+        appointment_date: buildAppointmentDateWhere(appointment_date),
       },
       transaction,
     });
@@ -267,6 +393,7 @@ export const createAppointmentService = async (data) => {
         tenant_id,
         doctor_id,
         contact_id,
+        lead_id: appointmentLeadId,
         patient_name,
         country_code,
         contact_number,
@@ -387,13 +514,265 @@ export const getRecentAppointmentsForAIService = async (
   }
 };
 
+export const createAppointmentOutcomeService = async ({
+  tenant_id,
+  appointment_id,
+  notes,
+  follow_up_required = false,
+  follow_up_date = null,
+  follow_up_type = null,
+}) => {
+  const normalizedNotes = typeof notes === "string" ? notes.trim() : "";
+  if (!normalizedNotes) {
+    throw new Error("Visit notes are required.");
+  }
+
+  const appointment = await db.Appointments.findOne({
+    where: { tenant_id, appointment_id, is_deleted: false },
+    attributes: ["appointment_id"],
+    raw: true,
+  });
+
+  if (!appointment) {
+    throw new Error("Appointment not found");
+  }
+
+  const requiresFollowUp = parseBooleanFlag(follow_up_required);
+
+  const safeFollowUpDate = requiresFollowUp ? follow_up_date || null : null;
+  const safeFollowUpType = requiresFollowUp ? follow_up_type || null : null;
+
+  if (requiresFollowUp && !safeFollowUpDate) {
+    throw new Error("Follow-up date is required when follow-up is enabled.");
+  }
+
+  if (requiresFollowUp && !safeFollowUpType) {
+    throw new Error("Follow-up type is required when follow-up is enabled.");
+  }
+
+  if (safeFollowUpType && !ALLOWED_FOLLOW_UP_TYPES.has(safeFollowUpType)) {
+    throw new Error("Invalid follow-up type.");
+  }
+
+  const outcome = await db.sequelize.transaction(async (transaction) => {
+    const existingOutcome = await db.AppointmentOutcomes.findOne({
+      where: { appointment_id, tenant_id },
+      transaction,
+      lock: transaction.LOCK.UPDATE,
+    });
+
+    if (existingOutcome) {
+      await existingOutcome.update(
+        {
+          notes: normalizedNotes,
+          follow_up_required: requiresFollowUp,
+          follow_up_date: safeFollowUpDate,
+          follow_up_type: safeFollowUpType,
+        },
+        { transaction },
+      );
+      return existingOutcome;
+    }
+
+    return db.AppointmentOutcomes.create(
+      {
+        appointment_id,
+        tenant_id,
+        notes: normalizedNotes,
+        follow_up_required: requiresFollowUp,
+        follow_up_date: safeFollowUpDate,
+        follow_up_type: safeFollowUpType,
+      },
+      { transaction },
+    );
+  });
+
+  if (requiresFollowUp) {
+    await createFollowUpPlaceholder({
+      appointment_id,
+      tenant_id,
+      follow_up_date: safeFollowUpDate,
+      follow_up_type: safeFollowUpType,
+    });
+  }
+
+  return outcome;
+};
+
+export const completeAppointmentWithOutcomeService = async ({
+  tenant_id,
+  appointment_id,
+  notes,
+  follow_up_required = false,
+  follow_up_date = null,
+  follow_up_type = null,
+}) => {
+  return db.sequelize.transaction(async (transaction) => {
+    const appointment = await db.Appointments.findOne({
+      where: { tenant_id, appointment_id, is_deleted: false },
+      transaction,
+      lock: transaction.LOCK.UPDATE,
+    });
+
+    if (!appointment) {
+      throw new Error("Appointment not found");
+    }
+
+    const normalizedNotes = typeof notes === "string" ? notes.trim() : "";
+    if (!normalizedNotes) {
+      throw new Error("Visit notes are required.");
+    }
+
+    const requiresFollowUp = parseBooleanFlag(follow_up_required);
+    const safeFollowUpDate = requiresFollowUp ? follow_up_date || null : null;
+    const safeFollowUpType = requiresFollowUp ? follow_up_type || null : null;
+
+    if (requiresFollowUp && !safeFollowUpDate) {
+      throw new Error("Follow-up date is required when follow-up is enabled.");
+    }
+    if (requiresFollowUp && !safeFollowUpType) {
+      throw new Error("Follow-up type is required when follow-up is enabled.");
+    }
+    if (safeFollowUpType && !ALLOWED_FOLLOW_UP_TYPES.has(safeFollowUpType)) {
+      throw new Error("Invalid follow-up type.");
+    }
+
+    const existingOutcome = await db.AppointmentOutcomes.findOne({
+      where: { appointment_id, tenant_id },
+      transaction,
+      lock: transaction.LOCK.UPDATE,
+    });
+
+    if (existingOutcome) {
+      await existingOutcome.update(
+        {
+          notes: normalizedNotes,
+          follow_up_required: requiresFollowUp,
+          follow_up_date: safeFollowUpDate,
+          follow_up_type: safeFollowUpType,
+        },
+        { transaction },
+      );
+    } else {
+      await db.AppointmentOutcomes.create(
+        {
+          appointment_id,
+          tenant_id,
+          notes: normalizedNotes,
+          follow_up_required: requiresFollowUp,
+          follow_up_date: safeFollowUpDate,
+          follow_up_type: safeFollowUpType,
+        },
+        { transaction },
+      );
+    }
+
+    await appointment.update({ status: "Completed" }, { transaction });
+
+    if (requiresFollowUp) {
+      await createFollowUpPlaceholder({
+        appointment_id,
+        tenant_id,
+        follow_up_date: safeFollowUpDate,
+        follow_up_type: safeFollowUpType,
+      });
+    }
+
+    return { appointment_id, status: "Completed" };
+  });
+};
+
+export const markNoShowWithActionService = async ({
+  tenant_id,
+  appointment_id,
+  action,
+  follow_up_date = null,
+  follow_up_type = null,
+}) => {
+  return db.sequelize.transaction(async (transaction) => {
+    const appointment = await db.Appointments.findOne({
+      where: { tenant_id, appointment_id, is_deleted: false },
+      transaction,
+      lock: transaction.LOCK.UPDATE,
+    });
+
+    if (!appointment) {
+      throw new Error("Appointment not found");
+    }
+
+    const normalizedAction = String(action || "").trim().toLowerCase();
+    if (!["follow_up", "close"].includes(normalizedAction)) {
+      throw new Error("Invalid no-show action.");
+    }
+
+    if (normalizedAction === "follow_up") {
+      if (!follow_up_date) {
+        throw new Error("Follow-up date is required.");
+      }
+      if (!follow_up_type) {
+        throw new Error("Follow-up type is required.");
+      }
+      if (!["Call", "WhatsApp"].includes(follow_up_type)) {
+        throw new Error("Invalid follow-up type.");
+      }
+
+      const existingOutcome = await db.AppointmentOutcomes.findOne({
+        where: { appointment_id, tenant_id },
+        transaction,
+        lock: transaction.LOCK.UPDATE,
+      });
+
+      const payload = {
+        notes: "No show - follow-up scheduled",
+        follow_up_required: true,
+        follow_up_date,
+        follow_up_type,
+      };
+
+      if (existingOutcome) {
+        await existingOutcome.update(payload, { transaction });
+      } else {
+        await db.AppointmentOutcomes.create(
+          {
+            appointment_id,
+            tenant_id,
+            ...payload,
+          },
+          { transaction },
+        );
+      }
+
+      await createFollowUpPlaceholder({
+        appointment_id,
+        tenant_id,
+        follow_up_date,
+        follow_up_type,
+      });
+    }
+
+    await appointment.update({ status: "Noshow" }, { transaction });
+    return { appointment_id, status: "Noshow" };
+  });
+};
+
 export const getAppointmentsByContactIdService = async (
   tenant_id,
   contact_id,
+  { includeLead = false } = {},
 ) => {
   try {
+    const include = [];
+    if (includeLead) {
+      include.push({
+        model: db.Leads,
+        as: "lead",
+        required: false,
+      });
+    }
+
     return await db.Appointments.findAll({
       where: { tenant_id, contact_id },
+      include,
       order: [
         ["appointment_date", "DESC"],
         ["appointment_time", "DESC"],
@@ -406,39 +785,66 @@ export const getAppointmentsByContactIdService = async (
 
 export const getAllAppointmentsService = async (
   tenant_id,
-  { search, status, date, doctor_id } = {},
+  { search, status, date, doctor_id, lead_id, includeLead = false } = {},
 ) => {
   try {
     const where = { tenant_id, is_deleted: false };
     if (status) where.status = status;
-    if (date) where.appointment_date = date;
+    if (date) {
+      where.appointment_date = buildAppointmentDateWhere(date);
+    }
+    if (isAppointmentsDebugEnabled) {
+      const normalizedDate = date ? normalizeDateOnly(date, "date") : null;
+      console.log("[APPOINTMENT-LIST] filters:", {
+        tenant_id,
+        search,
+        status,
+        date,
+        normalizedDate,
+        startOfDay: normalizedDate
+          ? toUtcMidnightIso(normalizedDate)
+          : null,
+        startOfNextDay: normalizedDate
+          ? toUtcMidnightIso(nextDateOnly(normalizedDate))
+          : null,
+        doctor_id,
+        lead_id,
+      });
+    }
     if (doctor_id) where.doctor_id = doctor_id;
+    if (lead_id) where.lead_id = lead_id;
+    if (search && search.trim()) {
+      const q = `%${search.trim()}%`;
+      where[Op.or] = [
+        { patient_name: { [Op.like]: q } },
+        { contact_number: { [Op.like]: q } },
+      ];
+    }
 
-    const appointments = await db.Appointments.findAll({
+    const include = [
+      {
+        model: db.Doctors,
+        as: "doctor",
+        attributes: ["doctor_id", "name", "title"],
+      },
+    ];
+
+    if (includeLead) {
+      include.push({
+        model: db.Leads,
+        as: "lead",
+        required: false,
+      });
+    }
+
+    return await db.Appointments.findAll({
       where,
-      include: [
-        {
-          model: db.Doctors,
-          as: "doctor",
-          attributes: ["doctor_id", "name", "title"],
-        },
-      ],
+      include,
       order: [
         ["appointment_date", "DESC"],
         ["appointment_time", "ASC"],
       ],
     });
-
-    if (search && search.trim()) {
-      const q = search.trim().toLowerCase();
-      return appointments.filter(
-        (a) =>
-          (a.patient_name || "").toLowerCase().includes(q) ||
-          (a.contact_number || "").includes(q),
-      );
-    }
-
-    return appointments;
   } catch (err) {
     throw err;
   }
@@ -471,6 +877,7 @@ export const checkAvailabilityService = async (
         "doctor_id, date, and time are required for availability check.",
       );
     }
+    const normalizedDate = normalizeDateOnly(date, "date");
 
     // 1. Verify doctor exists in database
     const doctor = await db.Doctors.findOne({
@@ -493,7 +900,7 @@ export const checkAvailabilityService = async (
     }
 
     // 2. Verify doctor works on this day
-    const dayOfWeek = getDayOfWeekFromDate(date);
+    const dayOfWeek = getDayOfWeekFromDate(normalizedDate);
 
     const doctorAvailability = await db.DoctorAvailability.findOne({
       where: { doctor_id, tenant_id, day_of_week: dayOfWeek },
@@ -516,7 +923,7 @@ export const checkAvailabilityService = async (
       tenant_id,
       doctor_id,
       is_deleted: false,
-      [Op.and]: [seqWhere(fn("DATE", col("appointment_date")), date)],
+      appointment_date: buildAppointmentDateWhere(normalizedDate),
       status: { [Op.in]: ["Pending", "Confirmed"] },
     };
 
@@ -615,8 +1022,18 @@ export const updateAppointmentStatusService = async (
   tenant_id,
   appointment_id,
   status,
+  { allowTerminalStatuses = false } = {},
 ) => {
   try {
+    if (
+      !allowTerminalStatuses &&
+      (status === "Completed" || status === "Noshow")
+    ) {
+      throw new Error(
+        `Direct status update to ${status} is blocked. Use strict lifecycle endpoints.`,
+      );
+    }
+
     const [updatedCount] = await db.Appointments.update(
       { status },
       { where: { appointment_id, tenant_id, is_deleted: false } },
@@ -673,7 +1090,14 @@ export const updateAppointmentService = async (
       updateFields.patient_name = data.patient_name;
     if (data.appointment_date !== undefined)
       updateFields.appointment_date = data.appointment_date;
-    if (data.status !== undefined) updateFields.status = data.status;
+    if (data.status !== undefined) {
+      if (data.status === "Completed" || data.status === "Noshow") {
+        throw new Error(
+          `Direct status update to ${data.status} is blocked. Use strict lifecycle endpoints.`,
+        );
+      }
+      updateFields.status = data.status;
+    }
     if (data.doctor_id !== undefined) updateFields.doctor_id = data.doctor_id;
     if (data.notes !== undefined) updateFields.notes = data.notes;
     if (data.age !== undefined) updateFields.age = data.age;
@@ -723,14 +1147,7 @@ export const updateAppointmentService = async (
     const doctorChanged = updateFields.doctor_id !== undefined;
 
     if (dateChanged || timeChanged) {
-      let checkDate;
-      if (typeof newDate === "string") {
-        checkDate = newDate;
-      } else if (newDate instanceof Date) {
-        checkDate = `${newDate.getFullYear()}-${String(newDate.getMonth() + 1).padStart(2, "0")}-${String(newDate.getDate()).padStart(2, "0")}`;
-      } else {
-        checkDate = newDate;
-      }
+      const checkDate = normalizeDateOnly(newDate, "appointment_date");
 
       const patientConflict = await db.Appointments.findOne({
         where: {
@@ -738,7 +1155,7 @@ export const updateAppointmentService = async (
           contact_id: appointment.contact_id,
           is_deleted: false,
           id: { [Op.ne]: appointment.id },
-          [Op.and]: [seqWhere(fn("DATE", col("appointment_date")), checkDate)],
+          appointment_date: buildAppointmentDateWhere(checkDate),
           appointment_time: newTime,
           status: { [Op.not]: "Cancelled" },
         },
@@ -755,16 +1172,7 @@ export const updateAppointmentService = async (
 
     // 2. Check for doctor slot conflict if date, time, or doctor is being changed
     if ((dateChanged || timeChanged || doctorChanged) && newDoctorId) {
-      // Format date for comparison
-      // Timezone-safe: avoid toISOString() which shifts to UTC
-      let checkDate;
-      if (typeof newDate === "string") {
-        checkDate = newDate;
-      } else if (newDate instanceof Date) {
-        checkDate = `${newDate.getFullYear()}-${String(newDate.getMonth() + 1).padStart(2, "0")}-${String(newDate.getDate()).padStart(2, "0")}`;
-      } else {
-        checkDate = newDate;
-      }
+      const checkDate = normalizeDateOnly(newDate, "appointment_date");
 
       const doctor = await db.Doctors.findOne({
         where: { doctor_id: newDoctorId, tenant_id, is_deleted: false },
@@ -804,7 +1212,7 @@ export const updateAppointmentService = async (
           doctor_id: newDoctorId,
           is_deleted: false,
           id: { [Op.ne]: appointment.id },
-          [Op.and]: [seqWhere(fn("DATE", col("appointment_date")), checkDate)],
+          appointment_date: buildAppointmentDateWhere(checkDate),
           status: { [Op.in]: ["Pending", "Confirmed"] },
         },
         transaction,
@@ -952,6 +1360,7 @@ export const deleteAppointmentService = async (tenant_id, appointment_id) => {
 // ─── Get Available Slots for a Doctor on a Date ───
 export const getAvailableSlotsService = async (tenant_id, doctor_id, date) => {
   try {
+    const normalizedDate = normalizeDateOnly(date, "date");
     // 1. Verify doctor exists in database first
     const doctor = await db.Doctors.findOne({
       where: { doctor_id, tenant_id, is_deleted: false },
@@ -978,7 +1387,7 @@ export const getAvailableSlotsService = async (tenant_id, doctor_id, date) => {
     }
 
     // 2. Determine day_of_week from the date consistently with availability checks.
-    const dayOfWeek = getDayOfWeekFromDate(date);
+    const dayOfWeek = getDayOfWeekFromDate(normalizedDate);
 
     // 3. Get doctor's availability for that day
     const availabilitySlots = await db.DoctorAvailability.findAll({
@@ -1024,7 +1433,7 @@ export const getAvailableSlotsService = async (tenant_id, doctor_id, date) => {
         tenant_id,
         doctor_id,
         is_deleted: false,
-        [Op.and]: [seqWhere(fn("DATE", col("appointment_date")), date)],
+        appointment_date: buildAppointmentDateWhere(normalizedDate),
         status: { [Op.in]: ["Pending", "Confirmed"] },
       },
       attributes: ["appointment_time"],

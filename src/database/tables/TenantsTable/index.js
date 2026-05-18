@@ -47,6 +47,12 @@ export const TenantsTable = (sequelize, Sequelize) => {
         allowNull: false,
       },
 
+      industry_type: {
+        type: Sequelize.ENUM("healthcare", "education", "general"),
+        allowNull: false,
+        defaultValue: "general",
+      },
+
       address: {
         type: Sequelize.TEXT,
         allowNull: true,

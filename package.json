@@ -7,6 +7,9 @@
     "build": "npm install",
     "start:dev": "nodemon src/app.js",
     "seed:superadmin": "node src/scripts/seedSuperAdmin.js",
+    "migrate:appointment-lead-id": "node src/scripts/add_appointment_lead_id.js",
+    "migrate:appointment-lead-latest-index": "node src/scripts/add_appointment_latest_lookup_index.js",
+    "migrate:appointment-lead-status-latest-index": "node src/scripts/add_appointment_lead_status_latest_index.js",
     "db:truncate": "node src/scripts/truncateAllTables.js",
     "seed:allprice": "node src/scripts/seed_all_pricing.js"
   },

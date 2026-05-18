@@ -33,6 +33,12 @@ export const AppointmentTable = (sequelize, Sequelize) => {
         comment: "Link to contacts table",
       },
 
+      lead_id: {
+        type: Sequelize.STRING,
+        allowNull: true,
+        comment: "Optional link to leads table",
+      },
+
       patient_name: {
         type: Sequelize.STRING,
         allowNull: false,
@@ -146,6 +152,18 @@ export const AppointmentTable = (sequelize, Sequelize) => {
         {
           name: "idx_appointment_contact",
           fields: ["contact_id"],
+        },
+        {
+          name: "idx_appointment_lead",
+          fields: ["lead_id"],
+        },
+        {
+          name: "idx_appointment_lead_latest",
+          fields: ["lead_id", "appointment_date", "appointment_time"],
+        },
+        {
+          name: "idx_appointment_lead_status_latest",
+          fields: ["lead_id", "status", "appointment_date", "appointment_time"],
         },
         {
           name: "idx_appointment_doctor",

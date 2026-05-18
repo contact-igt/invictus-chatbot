@@ -23,6 +23,7 @@ export const createTenantService = async (
   verify_token = null,
   ai_settings = null,
   transaction = null,
+  industry_type = "general",
 ) => {
   try {
     // Merge default AI settings with provided ones
@@ -62,6 +63,7 @@ export const createTenantService = async (
         profile,
         verify_token,
         ai_settings: mergedAiSettings,
+        industry_type: industry_type || "general",
       },
       transaction ? { transaction } : undefined,
     );
@@ -135,6 +137,7 @@ export const updateTenantService = async (
   profile,
   ai_settings,
   tenant_id,
+  industry_type = null,
 ) => {
   const updateFields = [];
   const updateValues = [];
@@ -167,6 +170,11 @@ export const updateTenantService = async (
   if (type !== undefined && type !== null) {
     updateFields.push("type = ?");
     updateValues.push(type);
+  }
+
+  if (industry_type !== undefined && industry_type !== null) {
+    updateFields.push("industry_type = ?");
+    updateValues.push(industry_type);
   }
 
   if (status !== undefined && status !== null) {

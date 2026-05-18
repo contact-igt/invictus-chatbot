@@ -54,12 +54,14 @@ import { FaqKnowledgeSourceTable } from "./tables/FaqKnowledgeSourceTable/index.
 import { defineAssociations } from "./associations.js";
 import { MediaAssetTable } from "./tables/MediaAssetTable/index.js";
 import { AppointmentTable } from "./tables/AppointmentTable/index.js";
+import { AppointmentOutcomeTable } from "./tables/AppointmentOutcomeTable/index.js";
 import { SavedPaymentMethodTable } from "./tables/SavedPaymentMethod/SavedPaymentMethod.js";
 import { TaxSettingsTable } from "./tables/TaxSettingsTable/index.js";
 import { TenantSecretsTable } from "./tables/TenantSecretsTable/index.js";
 import { UserPreferencesTable } from "./tables/UserPreferencesTable/index.js";
 import { MentorsTable } from "./tables/MentorsTable/index.js";
 import { CoursesTable } from "./tables/CoursesTable/index.js";
+import { TenantFeatureAccessTable } from "./tables/TenantFeatureAccessTable/index.js";
 
 const dbconfig =
   ServerEnvironmentConfig?.server?.line === "production"
@@ -171,13 +173,15 @@ db.FaqReviews = FaqReviewsTable(sequelize, Sequelize);
 db.FaqKnowledgeSource = FaqKnowledgeSourceTable(sequelize, Sequelize);
 db.MediaAsset = MediaAssetTable(sequelize, Sequelize);
 db.Appointments = AppointmentTable(sequelize, Sequelize);
-db.BookingSessions = BookingSessionTable(sequelize, Sequelize); // NEW
+db.AppointmentOutcomes = AppointmentOutcomeTable(sequelize, Sequelize);
+db.BookingSessions = BookingSessionTable(sequelize, Sequelize);
 db.SavedPaymentMethod = SavedPaymentMethodTable(sequelize, Sequelize);
 db.TaxSettings = TaxSettingsTable(sequelize, Sequelize);
 db.TenantSecrets = TenantSecretsTable(sequelize, Sequelize);
 db.UserPreferences = UserPreferencesTable(sequelize, Sequelize);
 db.Mentors = MentorsTable(sequelize, Sequelize);
 db.Courses = CoursesTable(sequelize, Sequelize);
+db.TenantFeatureAccess = TenantFeatureAccessTable(sequelize, Sequelize);
 
 defineAssociations(db);
 

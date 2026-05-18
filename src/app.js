@@ -42,14 +42,14 @@ import {
 import FaqRouter from "./models/Faq/faq.routes.js";
 import CoursesRouter from "./models/CoursesModel/courses.routes.js";
 import MentorsRouter from "./models/MentorsModel/mentors.routes.js";
+import TenantFeatureAccessTenantRouter from "./models/TenantFeatureAccessModel/tenantFeatureAccess.tenant.routes.js";
+import TenantFeatureAccessManagementRouter from "./models/TenantFeatureAccessModel/tenantFeatureAccess.management.routes.js";
 import { checkHealthAlerts } from "./utils/billing/billingHealthMonitor.js";
 import { runDailyReconciliation } from "./utils/billing/paymentReconciler.js";
 import { initBillingQueue } from "./utils/billing/billingQueue.js";
 import { initCampaignQueues } from "./queues/campaignQueue.js";
-import { startCampaignDispatchWorker } from "./workers/campaignDispatchWorker.js";
-import { startCampaignSendWorker } from "./workers/campaignSendWorker.js";
-import { getDispatchWorkerStatus } from "./workers/campaignDispatchWorker.js";
-import { getSendWorkerStatus } from "./workers/campaignSendWorker.js";
+import { startCampaignDispatchWorker, getDispatchWorkerStatus } from "./workers/campaignDispatchWorker.js";
+import { startCampaignSendWorker, getSendWorkerStatus } from "./workers/campaignSendWorker.js";
 import { validateRazorpayConfig } from "./models/PaymentModel/payment.service.js";
 import { logger } from "./utils/logger.js";
 import { authenticate, authorize } from "./middlewares/auth/authMiddlewares.js";
@@ -58,7 +58,7 @@ import cron from "node-cron";
 import { tableNames } from "./database/tableName.js";
 import { runHardDeleteCron } from "./utils/lifecycle/hardDeleteCron.js";
 import { runMissingMessageBillingReconciliationCron } from "./cron/reconciliationCron.js";
-import { cleanupExpiredSessions } from "./models/AppointmentModel/appointmentConversation.service.js"; // NEW
+import { cleanupExpiredSessions } from "./models/AppointmentModel/appointmentConversation.service.js";
 
 dns.setDefaultResultOrder("ipv4first");
 
@@ -78,15 +78,8 @@ app.use(
   }),
 );
 
-// Handle preflight requests explicitly
-app.options("*", cors());
-
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use((req, res, next) => {
-  res.setHeader("Content-Type", "application/json; charset=utf-8");
-  next();
-});
 
 app.use(
   fileUpload({
@@ -101,7 +94,9 @@ app.use((req, res, next) => {
 });
 
 app.use("/api/management", SuperAdminDashboardRouter, ManagementRouter);
+app.use("/api/management", TenantFeatureAccessManagementRouter);
 
+app.use("/api/tenant", TenantFeatureAccessTenantRouter);
 app.use("/api/tenant", TenantRouter, TenantUserRouter, TenantInvitationRouter);
 
 app.use(
@@ -130,13 +125,6 @@ app.use(
   AttachmentRouter,
   MentorsRouter,
   CoursesRouter,
-);
-
-app.use(
-  "/api/v1",
-  WhatsappTemplateRouter,
-  WhatsappCampaignRouter,
-  GalleryRouter,
 );
 
 app.get("/", (req, res) => {
@@ -174,6 +162,7 @@ app.get(
   }
   if (lastErr) throw lastErr;
 }
+
 logger.info("DB connected");
 
 // Validate Razorpay configuration at startup (fail-fast if misconfigured)
@@ -260,9 +249,8 @@ cron.schedule("0 * * * *", () => {
 }); // Every hour — retry overdue invoice payment reminders
 
 cron.schedule("*/15 * * * *", () => {
-  // NEW
-  cleanupExpiredSessions(); // NEW
-}); // NEW — every 15 min: mark booking_sessions where expires_at < NOW() as 'expired'
+  cleanupExpiredSessions();
+}); // Every 15 min: mark booking_sessions where expires_at < NOW() as 'expired'
 
 cron.schedule("*/15 * * * *", () => {
   checkHealthAlerts();

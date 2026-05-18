@@ -224,6 +224,20 @@ export const defineAssociations = (db) => {
     constraints: false,
   });
 
+  // Tenant -> TenantFeatureAccess (One-to-Many)
+  db.Tenants.hasMany(db.TenantFeatureAccess, {
+    foreignKey: "tenant_id",
+    sourceKey: "tenant_id",
+    as: "featureAccessOverrides",
+    constraints: false,
+  });
+  db.TenantFeatureAccess.belongsTo(db.Tenants, {
+    foreignKey: "tenant_id",
+    targetKey: "tenant_id",
+    as: "tenant",
+    constraints: false,
+  });
+
   // ========================================
   // CONTACT RELATIONSHIPS
   // ========================================
@@ -417,11 +431,7 @@ export const defineAssociations = (db) => {
     constraints: false,
   });
 
-  // ========================================
-  // DOCTOR MODULE RELATIONSHIPS
-  // ========================================
 
-  // Doctor → DoctorAvailability (One-to-Many)
   db.Doctors.hasMany(db.DoctorAvailability, {
     foreignKey: "doctor_id",
     sourceKey: "doctor_id",
@@ -452,6 +462,34 @@ export const defineAssociations = (db) => {
     sourceKey: "specialization_id",
     targetKey: "doctor_id",
     as: "doctors",
+    constraints: false,
+  });
+
+  // Lead → Appointments (One-to-Many)
+  db.Leads.hasMany(db.Appointments, {
+    foreignKey: "lead_id",
+    sourceKey: "lead_id",
+    as: "appointments",
+    constraints: false,
+  });
+  db.Appointments.belongsTo(db.Leads, {
+    foreignKey: "lead_id",
+    targetKey: "lead_id",
+    as: "lead",
+    constraints: false,
+  });
+
+  // Appointment -> Outcomes (One-to-Many)
+  db.Appointments.hasMany(db.AppointmentOutcomes, {
+    foreignKey: "appointment_id",
+    sourceKey: "appointment_id",
+    as: "outcomes",
+    constraints: false,
+  });
+  db.AppointmentOutcomes.belongsTo(db.Appointments, {
+    foreignKey: "appointment_id",
+    targetKey: "appointment_id",
+    as: "appointment",
     constraints: false,
   });
 

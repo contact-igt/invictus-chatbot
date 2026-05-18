@@ -16,6 +16,7 @@ export const tableNames = {
   KNOWLEDGECHUNKS: "knowledge_chunks",
   AIPROMPT: "ai_prompts",
   APPOINTMENTS: "appointments", // NEW
+  APPOINTMENT_OUTCOMES: "appointment_outcomes",
   CONTACTS: "contacts",
   CONTACT_GROUPS: "contact_groups",
   CONTACT_GROUP_MEMBERS: "contact_group_members",
@@ -58,4 +59,5 @@ export const tableNames = {
   USER_PREFERENCES: "user_preferences",
   MENTORS: "mentors",
   COURSES: "courses",
+  TENANT_FEATURE_ACCESS: "tenant_feature_access",
 };

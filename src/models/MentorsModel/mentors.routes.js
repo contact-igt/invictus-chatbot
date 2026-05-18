@@ -10,6 +10,7 @@ import {
   authenticate,
   authorize,
 } from "../../middlewares/auth/authMiddlewares.js";
+import { checkFeatureAccess } from "../../middlewares/feature/checkFeatureAccess.js";
 
 const Router = express.Router();
 
@@ -20,6 +21,7 @@ Router.post(
   "/courses/mentors",
   authenticate,
   authorize({ user_type: "tenant", roles: tenantRoles }),
+  checkFeatureAccess("mentors"),
   createMentorController
 );
 
@@ -28,6 +30,7 @@ Router.get(
   "/courses/mentors",
   authenticate,
   authorize({ user_type: "tenant", roles: tenantRoles }),
+  checkFeatureAccess("mentors"),
   getAllMentorsController
 );
 
@@ -36,6 +39,7 @@ Router.get(
   "/courses/mentors/:mentor_id",
   authenticate,
   authorize({ user_type: "tenant", roles: tenantRoles }),
+  checkFeatureAccess("mentors"),
   getMentorByIdController
 );
 
@@ -44,6 +48,7 @@ Router.put(
   "/courses/mentors/:mentor_id",
   authenticate,
   authorize({ user_type: "tenant", roles: tenantRoles }),
+  checkFeatureAccess("mentors"),
   updateMentorController
 );
 
@@ -52,6 +57,7 @@ Router.delete(
   "/courses/mentors/:mentor_id",
   authenticate,
   authorize({ user_type: "tenant", roles: tenantRoles }),
+  checkFeatureAccess("mentors"),
   deleteMentorController
 );
 
