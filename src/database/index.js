@@ -177,14 +177,10 @@ db.FaqReviews = FaqReviewsTable(sequelize, Sequelize);
 db.FaqKnowledgeSource = FaqKnowledgeSourceTable(sequelize, Sequelize);
 db.MediaAsset = MediaAssetTable(sequelize, Sequelize);
 db.Appointments = AppointmentTable(sequelize, Sequelize);
-<<<<<<< Updated upstream
 db.AppointmentOutcomes = AppointmentOutcomeTable(sequelize, Sequelize);
 db.BookingSessions = BookingSessionTable(sequelize, Sequelize);
-=======
-db.BookingSessions = BookingSessionTable(sequelize, Sequelize); // NEW
 db.AppointmentSlots = AppointmentSlotTable(sequelize, Sequelize);
 db.AppointmentStateLogs = AppointmentStateLogTable(sequelize, Sequelize);
->>>>>>> Stashed changes
 db.SavedPaymentMethod = SavedPaymentMethodTable(sequelize, Sequelize);
 db.TaxSettings = TaxSettingsTable(sequelize, Sequelize);
 db.TenantSecrets = TenantSecretsTable(sequelize, Sequelize);

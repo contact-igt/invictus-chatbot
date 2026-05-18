@@ -58,12 +58,8 @@ import cron from "node-cron";
 import { tableNames } from "./database/tableName.js";
 import { runHardDeleteCron } from "./utils/lifecycle/hardDeleteCron.js";
 import { runMissingMessageBillingReconciliationCron } from "./cron/reconciliationCron.js";
-<<<<<<< Updated upstream
 import { cleanupExpiredSessions } from "./models/AppointmentModel/appointmentConversation.service.js";
-=======
-import { cleanupExpiredSessions } from "./models/AppointmentModel/appointmentConversation.service.js"; // NEW
 import { expireAdvancedAppointmentSessions } from "./models/AppointmentModel/Advanced_Appointment_Booking.service.js";
->>>>>>> Stashed changes
 
 dns.setDefaultResultOrder("ipv4first");
 
