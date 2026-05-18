@@ -15,7 +15,7 @@ import { searchKnowledgeChunks } from "../Knowledge/knowledge.search.js";
 import { getActivePromptService } from "../AiPrompt/aiprompt.service.js";
 import { getIO } from "../../middlewares/socket/socket.js";
 import { classifyIntent, APPOINTMENT_INTENTS } from "../../utils/ai/intentClassifier.js"; // NEW — APPOINTMENT_INTENTS added
-import { appointmentOrchestrator } from "../AppointmentModel/appointmentConversation.service.js"; // NEW
+import { handleAdvancedAppointmentBooking } from "../AppointmentModel/Advanced_Appointment_Booking.service.js";
 
 const httpsAgent = new https.Agent({
   family: 4,
@@ -24,7 +24,7 @@ const httpsAgent = new https.Agent({
 
 const FIXED_MISSING_INFO_FALLBACK = MISSING_INFO_FALLBACK_REPLY;
 
-const ENABLE_APPOINTMENT_FLOW = false;
+const ENABLE_APPOINTMENT_FLOW = true;
 
 const FACTUAL_KEYWORD_PATTERN =
   /\b(price|cost|fee|fees|timing|timings|hours|open|close|policy|policies|service|services|treatment|treatments|procedure|procedures|operation|surgery|medication|medicine|diet|drink|drinks|food|before|after|insurance|package|offer|facility|facilities|address|location|contact|refund|payment|emi|warranty|guarantee|side effects?)\b/i;
@@ -758,15 +758,20 @@ export const getOpenAIReply = async (
         phone, // NEW
         ...(cachedData?.contact || {}), // NEW
       }; // NEW
-      const apptResult = await appointmentOrchestrator.handleAppointmentIntent( // NEW
-        intentResult.intent, cleanMessage, contactObj, tenant_id, // NEW
-      ); // NEW
+      const advancedApptResult = await handleAdvancedAppointmentBooking({
+        tenantId: tenant_id,
+        userPhone: phone,
+        contact: contactObj,
+        message: cleanMessage,
+        interactiveReplyId: null,
+        whatsappMessageId: messageId || null,
+      });
       return { // NEW
-        message: apptResult.message, // NEW
+        message: advancedApptResult.message, // NEW
         tagDetected: null, // NEW
         tagPayload: null, // NEW
         intent: intentResult.intent, // NEW
-        _apptResult: apptResult, // NEW — signals controller to use interactive sending
+        _advancedApptResult: advancedApptResult,
       }; // NEW
     } // NEW
 

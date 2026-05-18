@@ -26,6 +26,11 @@ export const BookingSessionTable = (sequelize, Sequelize) => {
         allowNull: false,
       },
 
+      user_phone: {
+        type: Sequelize.STRING(30),
+        allowNull: true,
+      },
+
       flow_type: {
         type: Sequelize.ENUM("book", "edit", "cancel"),
         allowNull: false,
@@ -33,8 +38,28 @@ export const BookingSessionTable = (sequelize, Sequelize) => {
 
       current_step: {
         type: Sequelize.STRING(30),
-        allowNull: false,
-        defaultValue: "doctor",
+        allowNull: true,
+        defaultValue: null,
+      },
+
+      last_valid_state: {
+        type: Sequelize.STRING(50),
+        allowNull: true,
+      },
+
+      draft_json: {
+        type: Sequelize.JSON,
+        allowNull: true,
+      },
+
+      edit_target: {
+        type: Sequelize.STRING(30),
+        allowNull: true,
+      },
+
+      previous_step: {
+        type: Sequelize.STRING(30),
+        allowNull: true,
       },
 
       // Collected data (NULL = not yet collected)
@@ -97,7 +122,7 @@ export const BookingSessionTable = (sequelize, Sequelize) => {
 
       // Lifecycle
       status: {
-        type: Sequelize.ENUM("active", "completed", "cancelled", "expired"),
+        type: Sequelize.STRING(30),
         allowNull: false,
         defaultValue: "active",
       },

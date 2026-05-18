@@ -34,7 +34,8 @@ router.get(
   authenticate,
   authorize({
     user_type: "tenant",
-    roles: ["tenant_admin", "doctor", "staff", "agent"],
+    // [DOCTOR ROLE UNWIRED – 2026-05-13] "doctor" removed
+    roles: ["tenant_admin", /* "doctor", */ "staff"],
   }),
   getWhatsappAccountController,
 );
@@ -44,7 +45,8 @@ router.get(
   authenticate,
   authorize({
     user_type: "tenant",
-    roles: ["tenant_admin", "doctor", "staff", "agent"],
+    // [DOCTOR ROLE UNWIRED – 2026-05-13] "doctor" removed
+    roles: ["tenant_admin", /* "doctor", */ "staff"],
   }),
   getTierLimitController,
 );

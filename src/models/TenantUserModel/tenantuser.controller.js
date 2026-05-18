@@ -347,6 +347,7 @@ export const updateLoggedTenantProfileController = async (req, res) => {
 export const createTenantUserController = async (req, res) => {
   const { title, username, email, country_code, mobile, profile, role } =
     req.body;
+  const allowedRoles = new Set(["tenant_admin", "staff"]);
 
   const tenant_id = req.user.tenant_id;
   const loginuser = req.user;
@@ -370,6 +371,12 @@ export const createTenantUserController = async (req, res) => {
   if (missingFields.length > 0) {
     return res.status(400).send({
       message: `Missing required field(s): ${missingFields.join(", ")}`,
+    });
+  }
+
+  if (!allowedRoles.has(role)) {
+    return res.status(400).send({
+      message: "Invalid role. Allowed roles are tenant_admin and staff.",
     });
   }
 

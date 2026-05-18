@@ -58,7 +58,12 @@ import cron from "node-cron";
 import { tableNames } from "./database/tableName.js";
 import { runHardDeleteCron } from "./utils/lifecycle/hardDeleteCron.js";
 import { runMissingMessageBillingReconciliationCron } from "./cron/reconciliationCron.js";
+<<<<<<< Updated upstream
 import { cleanupExpiredSessions } from "./models/AppointmentModel/appointmentConversation.service.js";
+=======
+import { cleanupExpiredSessions } from "./models/AppointmentModel/appointmentConversation.service.js"; // NEW
+import { expireAdvancedAppointmentSessions } from "./models/AppointmentModel/Advanced_Appointment_Booking.service.js";
+>>>>>>> Stashed changes
 
 dns.setDefaultResultOrder("ipv4first");
 
@@ -136,7 +141,8 @@ app.get(
   authenticate,
   authorize({
     user_type: "tenant",
-    roles: ["tenant_admin", "doctor", "staff", "agent"],
+    // [DOCTOR ROLE UNWIRED – 2026-05-13] doctor access removed from diagnostics.
+    roles: ["tenant_admin", "staff"],
   }),
   getCampaignDiagnosticsController,
 );
@@ -147,6 +153,18 @@ app.get(
   let lastErr;
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
+      const [, cleanupMeta] = await db.sequelize.query(
+        `UPDATE ${tableNames.TENANT_USERS}
+         SET role = 'staff'
+         WHERE role NOT IN ('tenant_admin', 'staff')`,
+      );
+      const cleanupCount = cleanupMeta?.affectedRows ?? 0;
+      if (cleanupCount > 0) {
+        logger.warn(
+          `[DB] Normalized ${cleanupCount} invalid tenant-user role row(s) before sync`,
+        );
+      }
+
       await db.sequelize.sync({ alter: true });
       lastErr = null;
       break;
@@ -251,6 +269,12 @@ cron.schedule("0 * * * *", () => {
 cron.schedule("*/15 * * * *", () => {
   cleanupExpiredSessions();
 }); // Every 15 min: mark booking_sessions where expires_at < NOW() as 'expired'
+
+cron.schedule("* * * * *", () => {
+  expireAdvancedAppointmentSessions().catch((err) => {
+    logger.error(`[CRON] Advanced appointment expiry failed: ${err.message}`);
+  });
+}); // Every minute — expire advanced appointment sessions and release slot locks
 
 cron.schedule("*/15 * * * *", () => {
   checkHealthAlerts();

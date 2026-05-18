@@ -19,6 +19,11 @@ import {
 } from "./AuthWhatsapp.service.js";
 import { APPOINTMENT_INTENTS, GREETING_KEYWORDS } from "../../utils/ai/intentClassifier.js"; // NEW
 import { appointmentOrchestrator } from "../AppointmentModel/appointmentConversation.service.js"; // NEW
+import {
+  handleAdvancedAppointmentBooking,
+  hasActiveAdvancedAppointmentSession,
+} from "../AppointmentModel/Advanced_Appointment_Booking.service.js";
+import { sendAppointmentPayload } from "../AppointmentModel/whatsappAppointmentTemplates.service.js";
 import { parseButtonReply, sendQuickReply, sendListMessage, sendAppointmentCard } from "./whatsappButtons.service.js"; // NEW
 
 import { processBillingFromWebhook } from "../BillingModel/billing.service.js";
@@ -902,9 +907,13 @@ export const receiveMessage = async (req, res) => {
       // Another message is being processed — queue this one so it's handled after
       queuePendingMessage(tenant_id, phone, {
         text,
+        buttonReplyId,
+        type,
         contact_id: contactsaved?.contact_id,
         phone_number_id,
         messageId,
+        message_db_id: savedMsg?.id || null,
+        name,
         contactsaved,
       });
       return res.sendStatus(200);
@@ -951,6 +960,7 @@ export const receiveMessage = async (req, res) => {
               buttonReplyId.startsWith("reschedule_") ||
               buttonReplyId.startsWith("cancel_") ||
               buttonReplyId.startsWith("slot_") ||
+              buttonReplyId.startsWith("SLOT_") ||
               buttonReplyId.startsWith("doctor_")),
         );
         const ignoreAppointmentButton =
@@ -962,6 +972,21 @@ export const receiveMessage = async (req, res) => {
           "Appointment buttons enabled:",
           ENABLE_APPOINTMENT_BUTTONS,
         );
+
+        const handledByAdvancedAppointment =
+          await tryHandleAdvancedAppointmentFlow({
+            tenant_id,
+            phone,
+            contactObj,
+            contactsaved,
+            phone_number_id,
+            name,
+            message: buttonReplyId || text,
+            interactiveReplyId: buttonReplyId,
+            whatsappMessageId: messageId || null,
+          });
+
+        if (handledByAdvancedAppointment) return;
 
         // ── Vision: Image messages → GPT-4o reads the image + conversation history ──
         if (type === "image") {
@@ -1074,6 +1099,10 @@ export const receiveMessage = async (req, res) => {
             // NEW: Decode encoded slot time back to "HH:MM AM" before passing to flow
             const encodedTime = buttonReplyId.slice("slot_".length); // NEW
             resolvedMessage = decodeSlotTime(encodedTime); // NEW — e.g. "09:00 AM"
+            apptIntent = "APPOINTMENT_ACTION"; // NEW
+          } else if (buttonReplyId.startsWith("SLOT_")) { // NEW
+            // NEW: Uppercase slot/group list IDs are handled by the appointment flow.
+            resolvedMessage = buttonReplyId; // NEW
             apptIntent = "APPOINTMENT_ACTION"; // NEW
           } else if (buttonReplyId.startsWith("doctor_")) { // NEW
             // NEW: Pass raw button ID — orchestrator detects "doctor_" prefix and looks up by ID
@@ -1192,6 +1221,17 @@ export const receiveMessage = async (req, res) => {
         const _apptTrace = { _apptResult: !!aiResult?._apptResult, tagDetected: aiResult?.tagDetected, msgPreview: String(aiResult?.message || "").substring(0, 60) };
         try { import("fs").then(fs => fs.default.appendFileSync("/tmp/faq_trace.log", `[${new Date().toISOString()}] [CONTROLLER] aiResult check ${JSON.stringify(_apptTrace)}\n`)).catch(() => {}); } catch {}
         console.log("[FAQ-PIPELINE][CTRL] aiResult:", JSON.stringify(_apptTrace));
+        if (aiResult?._advancedApptResult) {
+          await handleAdvancedAppointmentResponse(
+            aiResult._advancedApptResult,
+            tenant_id,
+            phone,
+            contactsaved,
+            phone_number_id,
+            name,
+          );
+          return;
+        }
         if (aiResult?._apptResult) { // NEW
           await handleAppointmentResponse( // NEW
             aiResult._apptResult, tenant_id, phone, contactsaved, phone_number_id, name, // NEW
@@ -1363,6 +1403,31 @@ export const receiveMessage = async (req, res) => {
           if (reLock) {
             setImmediate(async () => {
               try {
+                const queuedContactObj = {
+                  ...(pending.contactsaved || {}),
+                  contact_id: pending.contact_id,
+                  phone_number: phone,
+                  phone,
+                };
+                const queuedInteractiveReplyId = pending.buttonReplyId || null;
+                const queuedEffectiveText =
+                  queuedInteractiveReplyId || pending.text || "";
+
+                const queuedHandledByAdvancedAppointment =
+                  await tryHandleAdvancedAppointmentFlow({
+                    tenant_id,
+                    phone,
+                    contactObj: queuedContactObj,
+                    contactsaved: pending.contactsaved || null,
+                    phone_number_id,
+                    name: pending.name || pending.contactsaved?.name || null,
+                    message: queuedEffectiveText,
+                    interactiveReplyId: queuedInteractiveReplyId,
+                    whatsappMessageId: pending.messageId || null,
+                  });
+
+                if (queuedHandledByAdvancedAppointment) return;
+
                 // Check wallet before processing queued message
                 const queuedWalletCheck = await canUseAI(tenant_id, 0.5);
                 if (!queuedWalletCheck.allowed) {
@@ -1385,12 +1450,24 @@ export const receiveMessage = async (req, res) => {
                 const aiResult = await getOpenAIReply(
                   tenant_id,
                   phone,
-                  pending.text,
+                  queuedEffectiveText,
                   pending.contact_id,
                   phone_number_id,
                   {}, // cachedData
                   pending.messageId || null,
                 );
+
+                if (aiResult?._advancedApptResult) {
+                  await handleAdvancedAppointmentResponse(
+                    aiResult._advancedApptResult,
+                    tenant_id,
+                    phone,
+                    pending.contactsaved || null,
+                    phone_number_id,
+                    pending.name || pending.contactsaved?.name || null,
+                  );
+                  return;
+                }
 
                 try {
                   await updateLeadService(tenant_id, pending.contact_id, {
@@ -1547,6 +1624,159 @@ export const receiveMessage = async (req, res) => {
   }
 };
 
+async function tryHandleAdvancedAppointmentFlow({
+  tenant_id,
+  phone,
+  contactObj,
+  contactsaved = null,
+  phone_number_id = null,
+  name = null,
+  message = "",
+  interactiveReplyId = null,
+  whatsappMessageId = null,
+}) {
+  const hasAdvancedAppointmentSession =
+    await hasActiveAdvancedAppointmentSession({
+      tenantId: tenant_id,
+      contactId: contactObj?.contact_id || contactsaved?.contact_id,
+      userPhone: phone,
+    });
+
+  if (!hasAdvancedAppointmentSession) return false;
+
+  const advancedResult = await handleAdvancedAppointmentBooking({
+    tenantId: tenant_id,
+    userPhone: phone,
+    contact: contactObj,
+    message,
+    interactiveReplyId,
+    whatsappMessageId,
+  });
+
+  if (advancedResult?.handoverToNormalRouter) return false;
+
+  await handleAdvancedAppointmentResponse(
+    advancedResult,
+    tenant_id,
+    phone,
+    contactsaved,
+    phone_number_id,
+    name,
+  );
+
+  return true;
+}
+
+async function handleAdvancedAppointmentResponse(
+  result,
+  tenant_id,
+  phone,
+  contactsaved = null,
+  phone_number_id = null,
+  name = null,
+) {
+  if (!result) return;
+
+  const fallbackPayload = {
+    messaging_product: "whatsapp",
+    recipient_type: "individual",
+    to: phone,
+    type: "text",
+    text: { preview_url: false, body: result.message || "Done." },
+  };
+  const payloads =
+    Array.isArray(result.payloads) && result.payloads.length
+      ? result.payloads
+      : [result.payload || fallbackPayload];
+
+  const persistSentPayload = async (payload, wamid) => {
+    const textToSave =
+      payload?.text?.body ||
+      payload?.interactive?.body?.text ||
+      result.message ||
+      "Appointment action processed.";
+    const messageTypeToSave = payload.type === "interactive" ? "interactive" : "text";
+    const interactive_payload = payload.type === "interactive" ? JSON.stringify(payload) : null;
+    const contact_id = contactsaved?.contact_id || null;
+    const savedBotMsg = contact_id
+      ? await createUserMessageService(
+          tenant_id,
+          contact_id,
+          phone_number_id,
+          phone,
+          wamid,
+          name,
+          "bot",
+          null,
+          textToSave,
+          messageTypeToSave,
+          null,
+          null,
+          wamid ? "sent" : null,
+          null,
+          null,
+          interactive_payload,
+        )
+      : null;
+
+    const io = getIO();
+    io.to(`tenant-${tenant_id}`).emit("ai-typing", { tenant_id, phone, status: false });
+    io.to(`tenant-${tenant_id}`).emit("new-message", {
+      tenant_id,
+      phone,
+      id: savedBotMsg?.id || null,
+      contact_id,
+      phone_number_id,
+      name: contactsaved?.name || name || null,
+      message: textToSave,
+      message_type: messageTypeToSave,
+      interactive_payload,
+      media_url: null,
+      status: wamid ? "sent" : null,
+      sender: "bot",
+      created_at: new Date(),
+    });
+  };
+
+  try {
+    for (const payload of payloads) {
+      const wamid = await sendAppointmentPayload(tenant_id, payload);
+      try {
+        await persistSentPayload(payload, wamid);
+      } catch (dbErr) {
+        console.error("[ADV-APPT-RESPONSE] DB/socket persistence failed:", dbErr.message);
+      }
+    }
+  } catch (err) {
+    console.error("[ADV-APPT-RESPONSE] Failed to send appointment payload:", err.message);
+    try {
+      const io = getIO();
+      io.to(`tenant-${tenant_id}`).emit("ai-typing", {
+        tenant_id,
+        phone,
+        status: false,
+      });
+      io.to(`tenant-${tenant_id}`).emit("appointment_failed", {
+        tenantId: tenant_id,
+        userPhone: phone,
+        sessionId: result.session?.session_id || null,
+        state: result.session?.state || null,
+        status: result.session?.status || null,
+        reason: err.message,
+        updatedAt: new Date(),
+      });
+      if (err.isTokenError) {
+        io.to(`tenant-${tenant_id}`).emit("whatsapp-token-error", {
+          tenant_id,
+          message: err.message,
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch {}
+    return;
+  }
+}
+
 // NEW: Route an appointment orchestrator result to the correct WhatsApp message type.
 // Also saves the bot message to the DB and emits to the dashboard socket.
 async function handleAppointmentResponse( // NEW
@@ -1594,12 +1824,21 @@ async function handleAppointmentResponse( // NEW
         { id: "confirm_no", title: "Cancel" }, // NEW
       ]); // NEW
     } else if (result.buttonType === "slot_selection" && result.slots?.length) { // NEW
-      const buttons = result.slots.slice(0, 3).map((s) => ({ // NEW
-        // Store the raw time string in the ID so we can recover it on tap
-        id: "slot_" + encodeSlotTime(s.time), // NEW
-        title: s.time, // NEW
+      const rows = result.slots.slice(0, 10).map((s) => ({ // NEW
+        id:
+          s.id ||
+          (s.time
+            ? "SLOT_" + encodeSlotTime(s.time).replace(/-/g, "_").toUpperCase()
+            : ""), // NEW
+        title: s.title || s.time, // NEW
+        description: s.description || "", // NEW
       })); // NEW
-      await sendQuickReply(tenant_id, phone, result.message, buttons); // NEW
+      await sendListMessage( // NEW
+        tenant_id, phone, // NEW
+        result.message || "Please choose an available time slot.", // NEW
+        "Pick a Time", // NEW
+        [{ title: result.slotSectionTitle || "Available Time Slots", rows }], // NEW
+      ); // NEW
     } else if (result.buttonType === "doctor_list" && result.doctors?.length) { // NEW
       const rows = result.doctors.slice(0, 10).map((d) => ({ // NEW
         id: "doctor_" + d.id, // NEW

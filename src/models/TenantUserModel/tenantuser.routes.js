@@ -42,7 +42,8 @@ Router.get(
   authenticate,
   authorize({
     user_type: "tenant",
-    roles: ["tenant_admin", "doctor", "staff", "agent"],
+    // [DOCTOR ROLE UNWIRED – 2026-05-13] "doctor" removed
+    roles: ["tenant_admin", /* "doctor", */ "staff"],
   }),
   getLoggedTenantUserController,
 );
@@ -52,7 +53,8 @@ Router.get(
   authenticate,
   authorize({
     user_type: "tenant",
-    roles: ["tenant_admin", "doctor", "staff", "agent"],
+    // [DOCTOR ROLE UNWIRED – 2026-05-13] "doctor" removed
+    roles: ["tenant_admin", /* "doctor", */ "staff"],
   }),
   getLoggedTenantUserPreferencesController,
 );
@@ -62,7 +64,8 @@ Router.put(
   authenticate,
   authorize({
     user_type: "tenant",
-    roles: ["tenant_admin", "doctor", "staff", "agent"],
+    // [DOCTOR ROLE UNWIRED – 2026-05-13] "doctor" removed
+    roles: ["tenant_admin", /* "doctor", */ "staff"],
   }),
   updateLoggedTenantUserPreferencesController,
 );
@@ -72,7 +75,8 @@ Router.put(
   authenticate,
   authorize({
     user_type: "tenant",
-    roles: ["tenant_admin", "doctor", "staff", "agent"],
+    // [DOCTOR ROLE UNWIRED – 2026-05-13] "doctor" removed
+    roles: ["tenant_admin", /* "doctor", */ "staff"],
   }),
   updateLoggedTenantProfileController,
 );
@@ -92,7 +96,8 @@ Router.get(
   authenticate,
   authorize({
     user_type: "tenant",
-    roles: ["tenant_admin", "doctor", "staff", "agent"],
+    // [DOCTOR ROLE UNWIRED – 2026-05-13] "doctor" removed
+    roles: ["tenant_admin", /* "doctor", */ "staff"],
   }),
   getAllTenantUsersController,
 );
@@ -102,7 +107,8 @@ Router.get(
   authenticate,
   authorize({
     user_type: "tenant",
-    roles: ["tenant_admin", "doctor", "staff", "agent"],
+    // [DOCTOR ROLE UNWIRED – 2026-05-13] "doctor" removed
+    roles: ["tenant_admin", /* "doctor", */ "staff"],
   }),
   getTenantUserByIdController,
 );
@@ -112,7 +118,8 @@ Router.put(
   authenticate,
   authorize({
     user_type: "tenant",
-    roles: ["tenant_admin", "doctor", "staff", "agent"],
+    // [DOCTOR ROLE UNWIRED – 2026-05-13] "doctor" removed
+    roles: ["tenant_admin", /* "doctor", */ "staff"],
   }),
   updateTenantUserByIdController,
 );
@@ -132,7 +139,8 @@ Router.get(
   authenticate,
   authorize({
     user_type: "tenant",
-    roles: ["tenant_admin", "doctor", "staff", "agent"],
+    // [DOCTOR ROLE UNWIRED – 2026-05-13] "doctor" removed
+    roles: ["tenant_admin", /* "doctor", */ "staff"],
   }),
   getDeletedTenantUserListController,
 );

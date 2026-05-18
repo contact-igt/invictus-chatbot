@@ -162,6 +162,46 @@ const resolveLeadIdForAppointment = async (tenant_id, lead_id, contact_id) => {
   }
 };
 
+const getAvailabilityRowsForDate = async ({
+  tenant_id,
+  doctor_id,
+  date,
+  transaction = null,
+}) => {
+  return db.DoctorAvailability.findAll({
+    where: {
+      doctor_id,
+      tenant_id,
+      day_of_week: getDayOfWeekFromDate(date),
+    },
+    order: [["start_time", "ASC"]],
+    transaction,
+  });
+};
+
+const getDurationFromAvailabilityRow = (row, fallbackDuration = 30) => {
+  if (!row) return fallbackDuration;
+  const start = timeToMinutes(row.start_time);
+  const end = timeToMinutes(row.end_time);
+  return end > start ? end - start : fallbackDuration;
+};
+
+const findAvailabilityRowForTime = (availabilityRows = [], time) => {
+  const requestedStart = timeToMinutes(normalizeTimeFormat(time));
+  return availabilityRows.find(
+    (row) => timeToMinutes(row.start_time) === requestedStart,
+  );
+};
+
+const getDurationForAppointmentTime = ({
+  availabilityRows = [],
+  appointmentTime,
+  fallbackDuration = 30,
+}) => {
+  const row = findAvailabilityRowForTime(availabilityRows, appointmentTime);
+  return getDurationFromAvailabilityRow(row, fallbackDuration);
+};
+
 export const createAppointmentService = async (data) => {
   let {
     tenant_id,
@@ -175,6 +215,8 @@ export const createAppointmentService = async (data) => {
     age,
     notes,
     email,
+    send_creation_email = true,
+    creation_email_type = "Confirmed",
   } = data;
 
   let { appointment_time } = data;
@@ -251,20 +293,28 @@ export const createAppointmentService = async (data) => {
       throw new Error("Selected doctor is currently unavailable.");
     }
 
-    const doctorAvailability = await db.DoctorAvailability.findOne({
-      where: {
-        doctor_id,
-        tenant_id,
-        day_of_week: getDayOfWeekFromDate(appointment_date),
-      },
-      attributes: ["doctor_id"],
+    const availabilityRows = await getAvailabilityRowsForDate({
+      tenant_id,
+      doctor_id,
+      date: appointment_date,
     });
 
-    if (!doctorAvailability) {
+    if (!availabilityRows.length) {
       throw new Error("Selected doctor does not work on the chosen date.");
     }
 
-    doctorDuration = doctor.consultation_duration || 30;
+    const selectedAvailability = findAvailabilityRowForTime(
+      availabilityRows,
+      appointment_time,
+    );
+    if (!selectedAvailability) {
+      throw new Error("Selected time is not available for this doctor.");
+    }
+
+    doctorDuration = getDurationFromAvailabilityRow(
+      selectedAvailability,
+      doctor.consultation_duration || 30,
+    );
   }
 
   // Resolve contact_id from contact_number if not provided
@@ -419,14 +469,15 @@ export const createAppointmentService = async (data) => {
 
     await transaction.commit();
 
-    // 4. Send Confirmation Email (Async, outside transaction)
-    sendAppointmentNotificationEmail(
-      tenant_id,
-      appointment_id,
-      "Confirmed",
-    ).catch((err) =>
-      console.error("[APPOINTMENT-EMAIL] Initial send failed:", err.message),
-    );
+    if (send_creation_email) {
+      sendAppointmentNotificationEmail(
+        tenant_id,
+        appointment_id,
+        creation_email_type,
+      ).catch((err) =>
+        console.error("[APPOINTMENT-EMAIL] Initial send failed:", err.message),
+      );
+    }
 
     return appointment;
   } catch (err) {
@@ -902,11 +953,13 @@ export const checkAvailabilityService = async (
     // 2. Verify doctor works on this day
     const dayOfWeek = getDayOfWeekFromDate(normalizedDate);
 
-    const doctorAvailability = await db.DoctorAvailability.findOne({
-      where: { doctor_id, tenant_id, day_of_week: dayOfWeek },
+    const availabilityRows = await getAvailabilityRowsForDate({
+      tenant_id,
+      doctor_id,
+      date,
     });
 
-    if (!doctorAvailability) {
+    if (!availabilityRows.length) {
       console.log(
         `[CHECK-AVAILABILITY] Doctor ${doctor_id} does not work on ${dayOfWeek}`,
       );
@@ -914,7 +967,22 @@ export const checkAvailabilityService = async (
     }
 
     const formattedTime = normalizeTimeFormat(time);
-    const duration = doctor?.consultation_duration || 30;
+    const selectedAvailability = findAvailabilityRowForTime(
+      availabilityRows,
+      formattedTime,
+    );
+    if (!selectedAvailability) {
+      console.log(
+        `[CHECK-AVAILABILITY] ${formattedTime} is not a configured slot for ${doctor_id}`,
+      );
+      return false;
+    }
+
+    const fallbackDuration = doctor?.consultation_duration || 30;
+    const duration = getDurationFromAvailabilityRow(
+      selectedAvailability,
+      fallbackDuration,
+    );
     const requestedStart = timeToMinutes(formattedTime);
     const requestedEnd = requestedStart + duration;
 
@@ -938,7 +1006,12 @@ export const checkAvailabilityService = async (
 
     const hasOverlap = existingAppointments.some((appt) => {
       const apptStart = timeToMinutes(appt.appointment_time);
-      const apptEnd = apptStart + duration;
+      const apptDuration = getDurationForAppointmentTime({
+        availabilityRows,
+        appointmentTime: appt.appointment_time,
+        fallbackDuration,
+      });
+      const apptEnd = apptStart + apptDuration;
       // Overlap occurs if (StartA < EndB) AND (EndA > StartB)
       return requestedStart < apptEnd && requestedEnd > apptStart;
     });
@@ -1188,21 +1261,30 @@ export const updateAppointmentService = async (
         throw new Error("Selected doctor is currently unavailable.");
       }
 
-      const doctorAvailability = await db.DoctorAvailability.findOne({
-        where: {
-          doctor_id: newDoctorId,
-          tenant_id,
-          day_of_week: getDayOfWeekFromDate(checkDate),
-        },
-        attributes: ["doctor_id"],
+      const availabilityRows = await getAvailabilityRowsForDate({
+        tenant_id,
+        doctor_id: newDoctorId,
+        date: checkDate,
         transaction,
       });
 
-      if (!doctorAvailability) {
+      if (!availabilityRows.length) {
         throw new Error("Selected doctor does not work on the chosen date.");
       }
 
-      const duration = doctor?.consultation_duration || 30;
+      const selectedAvailability = findAvailabilityRowForTime(
+        availabilityRows,
+        newTime,
+      );
+      if (!selectedAvailability) {
+        throw new Error("Selected time is not available for this doctor.");
+      }
+
+      const fallbackDuration = doctor?.consultation_duration || 30;
+      const duration = getDurationFromAvailabilityRow(
+        selectedAvailability,
+        fallbackDuration,
+      );
       const requestedStart = timeToMinutes(newTime);
       const requestedEnd = requestedStart + duration;
 
@@ -1221,7 +1303,12 @@ export const updateAppointmentService = async (
 
       const hasOverlap = existingAppointments.some((appt) => {
         const apptStart = timeToMinutes(appt.appointment_time);
-        const apptEnd = apptStart + duration;
+        const apptDuration = getDurationForAppointmentTime({
+          availabilityRows,
+          appointmentTime: appt.appointment_time,
+          fallbackDuration,
+        });
+        const apptEnd = apptStart + apptDuration;
         return requestedStart < apptEnd && requestedEnd > apptStart;
       });
 
@@ -1403,29 +1490,15 @@ export const getAvailableSlotsService = async (tenant_id, doctor_id, date) => {
       };
     }
 
-    const slotDuration = doctor.consultation_duration || 30;
+    const fallbackDuration = doctor.consultation_duration || 30;
 
-    // 4. Generate all possible time slots
-    const allSlots = [];
-    for (const avail of availabilitySlots) {
-      const [startH, startM] = avail.start_time.split(":").map(Number);
-      const [endH, endM] = avail.end_time.split(":").map(Number);
-      const startMinutes = startH * 60 + startM;
-      const endMinutes = endH * 60 + endM;
-
-      for (
-        let m = startMinutes;
-        m + slotDuration <= endMinutes;
-        m += slotDuration
-      ) {
-        const hours = Math.floor(m / 60);
-        const mins = m % 60;
-        const period = hours >= 12 ? "PM" : "AM";
-        const displayHour = hours === 0 ? 12 : hours > 12 ? hours - 12 : hours;
-        const timeStr = `${String(displayHour).padStart(2, "0")}:${String(mins).padStart(2, "0")} ${period}`;
-        allSlots.push(timeStr);
-      }
-    }
+    // 4. Stored doctor_availability rows are concrete appointment slots.
+    const allSlots = availabilitySlots.map((avail) => ({
+      time: formatTimeToAMPM(avail.start_time),
+      startMinutes: timeToMinutes(avail.start_time),
+      endMinutes: timeToMinutes(avail.end_time),
+      duration: getDurationFromAvailabilityRow(avail, fallbackDuration),
+    })).filter((slot) => slot.endMinutes > slot.startMinutes && slot.endMinutes <= 1439);
 
     // 5. Get booked slots for that doctor on that date
     const bookedAppointments = await db.Appointments.findAll({
@@ -1440,17 +1513,19 @@ export const getAvailableSlotsService = async (tenant_id, doctor_id, date) => {
     });
     // 6. Filter out booked slots using range-based overlap logic
     const freeSlots = allSlots.filter((slot) => {
-      const requestedStart = timeToMinutes(slot);
-      const requestedEnd = requestedStart + slotDuration;
-
       const hasOverlap = bookedAppointments.some((appt) => {
         const apptStart = timeToMinutes(appt.appointment_time);
-        const apptEnd = apptStart + slotDuration;
-        return requestedStart < apptEnd && requestedEnd > apptStart;
+        const apptDuration = getDurationForAppointmentTime({
+          availabilityRows: availabilitySlots,
+          appointmentTime: appt.appointment_time,
+          fallbackDuration,
+        });
+        const apptEnd = apptStart + apptDuration;
+        return slot.startMinutes < apptEnd && slot.endMinutes > apptStart;
       });
 
       return !hasOverlap;
-    });
+    }).map((slot) => slot.time);
 
     return {
       available: freeSlots.length > 0,

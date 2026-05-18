@@ -13,7 +13,6 @@ export const MentorsTable = (sequelize, Sequelize) => {
       mentor_id: {
         type: Sequelize.STRING,
         allowNull: false,
-        unique: true,
       },
       tenant_id: {
         type: Sequelize.STRING,

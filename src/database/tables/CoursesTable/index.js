@@ -13,7 +13,6 @@ export const CoursesTable = (sequelize, Sequelize) => {
       course_id: {
         type: Sequelize.STRING,
         allowNull: false,
-        unique: true,
       },
       tenant_id: {
         type: Sequelize.STRING,

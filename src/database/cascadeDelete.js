@@ -102,6 +102,11 @@ export const cascadeDeleteTenant = async (tenant_id, transaction) => {
         where: { doctor_id: { [Op.in]: doctorIds } },
         transaction: t,
       });
+
+      await db.DoctorAvailabilityDays.destroy({
+        where: { doctor_id: { [Op.in]: doctorIds } },
+        transaction: t,
+      });
     }
 
     // Delete specialization-related junction tables
@@ -355,6 +360,11 @@ export const cascadeDeleteDoctor = async (
     });
 
     await db.DoctorAvailability.destroy({
+      where: { doctor_id },
+      transaction: t,
+    });
+
+    await db.DoctorAvailabilityDays.destroy({
       where: { doctor_id },
       transaction: t,
     });

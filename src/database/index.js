@@ -30,6 +30,7 @@ import { SequencesTable } from "./tables/SequencesTable/index.js";
 import { OtpVerificationTable } from "./tables/OtpVerificationTable/index.js";
 import { DoctorsTable } from "./tables/DoctorsTable/index.js";
 import { DoctorAvailabilityTable } from "./tables/DoctorAvailabilityTable/index.js";
+import { DoctorAvailabilityDayTable } from "./tables/DoctorAvailabilityDayTable/index.js";
 import { SpecializationsTable } from "./tables/SpecializationsTable/index.js";
 import { DoctorSpecializationsTable } from "./tables/DoctorSpecializationsTable/index.js";
 import { PricingTable } from "./tables/PricingTableTable/index.js";
@@ -41,6 +42,8 @@ import { AiTokenUsageTable } from "./tables/AiTokenUsageTable/index.js";
 import { AiPricingTable } from "./tables/AiPricingTable/index.js";
 import { PaymentHistoryTable } from "./tables/PaymentHistoryTable/index.js";
 import { BookingSessionTable } from "./tables/BookingSessionTable/index.js";
+import { AppointmentSlotTable } from "./tables/AppointmentSlotTable/index.js";
+import { AppointmentStateLogTable } from "./tables/AppointmentStateLogTable/index.js";
 import { BillingCycleTable } from "./tables/BillingCycleTable/index.js";
 import { MonthlyInvoiceTable } from "./tables/MonthlyInvoiceTable/index.js";
 import { AdminAuditLogTable } from "./tables/AdminAuditLogTable/index.js";
@@ -151,6 +154,7 @@ db.Sequences = SequencesTable(sequelize, Sequelize);
 db.OtpVerification = OtpVerificationTable(sequelize, Sequelize);
 db.Doctors = DoctorsTable(sequelize, Sequelize);
 db.DoctorAvailability = DoctorAvailabilityTable(sequelize, Sequelize);
+db.DoctorAvailabilityDays = DoctorAvailabilityDayTable(sequelize, Sequelize);
 db.Specializations = SpecializationsTable(sequelize, Sequelize);
 db.DoctorSpecializations = DoctorSpecializationsTable(sequelize, Sequelize);
 db.PricingTable = PricingTable(sequelize, Sequelize);
@@ -173,8 +177,14 @@ db.FaqReviews = FaqReviewsTable(sequelize, Sequelize);
 db.FaqKnowledgeSource = FaqKnowledgeSourceTable(sequelize, Sequelize);
 db.MediaAsset = MediaAssetTable(sequelize, Sequelize);
 db.Appointments = AppointmentTable(sequelize, Sequelize);
+<<<<<<< Updated upstream
 db.AppointmentOutcomes = AppointmentOutcomeTable(sequelize, Sequelize);
 db.BookingSessions = BookingSessionTable(sequelize, Sequelize);
+=======
+db.BookingSessions = BookingSessionTable(sequelize, Sequelize); // NEW
+db.AppointmentSlots = AppointmentSlotTable(sequelize, Sequelize);
+db.AppointmentStateLogs = AppointmentStateLogTable(sequelize, Sequelize);
+>>>>>>> Stashed changes
 db.SavedPaymentMethod = SavedPaymentMethodTable(sequelize, Sequelize);
 db.TaxSettings = TaxSettingsTable(sequelize, Sequelize);
 db.TenantSecrets = TenantSecretsTable(sequelize, Sequelize);

@@ -140,7 +140,8 @@ Router.get(
   authenticate,
   authorize({
     user_type: "tenant",
-    roles: ["tenant_admin", "doctor", "staff", "agent"],
+    // [DOCTOR ROLE UNWIRED – 2026-05-13] "doctor" removed
+    roles: ["tenant_admin", /* "doctor", */ "staff"],
   }),
   getTenantWebhookStatusController,
 );
@@ -150,7 +151,8 @@ Router.get(
   authenticate,
   authorize({
     user_type: "tenant",
-    roles: ["tenant_admin", "staff", "doctor", "agent"],
+    // [DOCTOR ROLE UNWIRED – 2026-05-13] "doctor" removed
+    roles: ["tenant_admin", "staff", /* "doctor", */ ],
   }),
   getTenantSettingsController,
 );
@@ -171,7 +173,8 @@ Router.get(
   authenticate,
   authorize({
     user_type: "tenant",
-    roles: ["tenant_admin", "staff", "doctor", "agent"],
+    // [DOCTOR ROLE UNWIRED – 2026-05-13] "doctor" removed
+    roles: ["tenant_admin", "staff", /* "doctor", */ ],
   }),
   getAvailableTimezonesController,
 );
