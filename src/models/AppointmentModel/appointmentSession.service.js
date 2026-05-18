@@ -60,6 +60,7 @@ export const getActiveAppointmentSession = async ({ tenantId, contactId, userPho
     tenant_id: tenantId,
     flow_type: "book",
     status: { [Op.in]: [ADVANCED_SESSION_STATUS.IN_PROGRESS] },
+    current_step: { [Op.ne]: "BOOKING_COMPLETE" },
   };
 
   if (identityFilters.length === 1) {

@@ -14,8 +14,17 @@ import { MISSING_INFO_FALLBACK_REPLY } from "../../utils/ai/prompts/system.js";
 import { searchKnowledgeChunks } from "../Knowledge/knowledge.search.js";
 import { getActivePromptService } from "../AiPrompt/aiprompt.service.js";
 import { getIO } from "../../middlewares/socket/socket.js";
-import { classifyIntent, APPOINTMENT_INTENTS } from "../../utils/ai/intentClassifier.js"; // NEW — APPOINTMENT_INTENTS added
-import { handleAdvancedAppointmentBooking } from "../AppointmentModel/Advanced_Appointment_Booking.service.js";
+import { classifyIntent } from "../../utils/ai/intentClassifier.js";
+import {
+  buildAvailableDoctorListAppointmentResponse,
+  handleAdvancedAppointmentBooking,
+} from "../AppointmentModel/Advanced_Appointment_Booking.service.js";
+import {
+  hasAppointmentStartSignal,
+  isDoctorListRequest,
+  isPureSmallTalkMessage,
+  shouldStartAdvancedAppointmentFlow,
+} from "../AppointmentModel/appointmentRoutingGuard.service.js";
 
 const httpsAgent = new https.Agent({
   family: 4,
@@ -32,6 +41,15 @@ const FACTUAL_INTENT_PATTERN =
   /\b(what|when|where|which|who|how\s+much|how\s+many|how\s+long)\b/i;
 const SMALLTALK_PATTERN =
   /^(hi|hello|hey|thanks|thank you|ok|okay|bye|good morning|good afternoon|good evening|how are you)\b/i;
+const APPOINTMENT_DISCOVERY_PATTERN =
+  /\b(doctors?|drs?|availability|available|slots?|time slots?|appointment slots?)\b/i;
+const APPOINTMENT_SLOT_DISCOVERY_PATTERN =
+  /\b(availability|available|slots?|time slots?|appointment slots?)\b/i;
+const LEGACY_AVAILABILITY_REPLY_PATTERNS = [
+  /please\s+(share|tell)\s+.*\bbranch\b.*\bdoctor\b.*\bavailability\b/i,
+  /\bbranch\b.*\bdoctor\s+name\b.*\bcheck\s+availability\b/i,
+  /\bpreferred\s+doctor\b.*\bcheck\s+availability\b/i,
+];
 
 const normalizeMissingKnowledgeTopic = (message = "") =>
   String(message)
@@ -66,6 +84,48 @@ const shouldEnforceStrictGrounding = (message = "", intentResult = null) => {
   if (intentResult?.requires?.doctors) return false;
 
   return true;
+};
+
+const shouldUseDoctorListTemplate = (message = "", intentResult = null) => {
+  if (isDoctorListRequest(message)) return true;
+  if (!intentResult || isPureSmallTalkMessage(message)) return false;
+
+  const doctorDiscoveryIntent =
+    intentResult.intent === "APPOINTMENT_ACTION" &&
+    intentResult.requires?.doctors === true &&
+    APPOINTMENT_DISCOVERY_PATTERN.test(message);
+
+  if (!doctorDiscoveryIntent) return false;
+  return (
+    !hasAppointmentStartSignal(message) ||
+    APPOINTMENT_SLOT_DISCOVERY_PATTERN.test(message)
+  );
+};
+
+const isLegacyAvailabilityPrompt = (message = "") =>
+  LEGACY_AVAILABILITY_REPLY_PATTERNS.some((pattern) =>
+    pattern.test(String(message || "")),
+  );
+
+const buildDoctorListTemplateResult = async ({
+  tenant_id,
+  phone,
+  intent = "GENERAL_QUESTION",
+  lead_intelligence = null,
+} = {}) => {
+  const doctorListResult = await buildAvailableDoctorListAppointmentResponse({
+    tenantId: tenant_id,
+    userPhone: phone,
+  });
+  return {
+    message: doctorListResult.message,
+    tagDetected: null,
+    tagPayload: null,
+    intent,
+    requires: { knowledge: false, doctors: true, appointments: false },
+    lead_intelligence,
+    _appointmentResult: doctorListResult,
+  };
 };
 
 const buildForcedMissingKnowledgeResult = (message = "") => ({
@@ -709,6 +769,13 @@ export const getOpenAIReply = async (
     const cleanMessage = userMessage.trim();
     if (!cleanMessage) return null;
 
+    if (shouldUseDoctorListTemplate(cleanMessage)) {
+      return buildDoctorListTemplateResult({
+        tenant_id,
+        phone,
+      });
+    }
+
     // ── Phase 1: Parallel fetch — language + memory + active prompt (always needed) ──
     const [languageInfo, memory, activePrompt] = await Promise.all([
       detectLanguageAI(cleanMessage, tenant_id).catch((err) => {
@@ -733,11 +800,33 @@ export const getOpenAIReply = async (
     const chatHistory = buildChatHistory(memory);
 
     // ── Phase 1.5: Intent Classification — what data does this message need? ──
-    let intentResult = await classifyIntent(
-      cleanMessage,
-      chatHistory,
-      tenant_id,
-    );
+    let intentResult = isPureSmallTalkMessage(cleanMessage)
+      ? {
+          intent: "GENERAL_QUESTION",
+          requires: { knowledge: false, doctors: false, appointments: false },
+          lead_intelligence: null,
+        }
+      : await classifyIntent(
+          cleanMessage,
+          chatHistory,
+          tenant_id,
+        );
+    if (hasAppointmentStartSignal(cleanMessage)) {
+      intentResult = {
+        ...intentResult,
+        intent: "APPOINTMENT_ACTION",
+        requires: { knowledge: true, doctors: true, appointments: true },
+      };
+    }
+
+    if (shouldUseDoctorListTemplate(cleanMessage, intentResult)) {
+      return buildDoctorListTemplateResult({
+        tenant_id,
+        phone,
+        intent: intentResult.intent,
+        lead_intelligence: intentResult.lead_intelligence || null,
+      });
+    }
 
     console.log(
       "[AI FLOW]",
@@ -750,7 +839,10 @@ export const getOpenAIReply = async (
     // NEW: Route appointment intents directly — skip heavy AI call and knowledge search
     if (
       ENABLE_APPOINTMENT_FLOW &&
-      APPOINTMENT_INTENTS.includes(intentResult.intent)
+      shouldStartAdvancedAppointmentFlow({
+        intent: intentResult.intent,
+        message: cleanMessage,
+      })
     ) { // NEW
       const contactObj = { // NEW
         contact_id, // NEW
@@ -766,13 +858,15 @@ export const getOpenAIReply = async (
         interactiveReplyId: null,
         whatsappMessageId: messageId || null,
       });
-      return { // NEW
-        message: advancedApptResult.message, // NEW
-        tagDetected: null, // NEW
-        tagPayload: null, // NEW
-        intent: intentResult.intent, // NEW
-        _advancedApptResult: advancedApptResult,
-      }; // NEW
+      if (!advancedApptResult?.handoverToNormalRouter) {
+        return { // NEW
+          message: advancedApptResult.message, // NEW
+          tagDetected: null, // NEW
+          tagPayload: null, // NEW
+          intent: intentResult.intent, // NEW
+          _appointmentResult: advancedApptResult,
+        }; // NEW
+      }
     } // NEW
 
     const factualKnowledgeNeeded = isLikelyFactualQuestion(cleanMessage);
@@ -916,6 +1010,19 @@ export const getOpenAIReply = async (
     }
 
     faqTrace("[AI-FLOW] getOpenAIReply FINAL", { tagDetected: processed.tagDetected, tagPayload: processed.tagPayload, msgPreview: (processed.message || "").substring(0, 60) });
+
+    if (isLegacyAvailabilityPrompt(processed.message)) {
+      faqTrace("[AI-FLOW] blocked legacy availability prompt", {
+        msgPreview: String(processed.message || "").substring(0, 80),
+      });
+      return buildDoctorListTemplateResult({
+        tenant_id,
+        phone,
+        intent: intentResult.intent,
+        lead_intelligence: intentResult.lead_intelligence || null,
+      });
+    }
+
     const finalReply = processed.message;
 
     console.log("[WHATSAPP-AI-FINAL]", finalReply);

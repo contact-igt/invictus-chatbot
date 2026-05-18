@@ -23,7 +23,7 @@ export {
   resolveSlotSelection,
 } from "./appointmentSlotGrouping.service.js";
 
-const SESSION_TTL_MS = 15 * 60 * 1000; // 15 minutes
+const SESSION_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
 // ─── Named step constants ────────────────────────────────────────────────────
 export const STEPS = {
@@ -51,7 +51,19 @@ const EDIT_TARGET_TO_STEP = {
 
 // Words that cancel the active booking session immediately
 const QUIT_TRIGGERS = new Set([
-  "quit", "exit", "stop", "cancel", "nevermind", "never mind", "abort",
+  "quit",
+  "exit",
+  "stop",
+  "cancel",
+  "leave",
+  "no need",
+  "not now",
+  "cancel appointment",
+  "stop booking",
+  "end booking",
+  "nevermind",
+  "never mind",
+  "abort",
 ]);
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -754,14 +766,15 @@ export const handleMessage = async (message, contact, tenantId) => {
 
 // ─── handleConfirmation ───────────────────────────────────────────────────────
 // Called by the controller BEFORE button routing for every message.
-// Handles sessions in CONFIRM_BOOKING (new flow) and "confirming" (legacy cancel/reschedule).
+// Handles only legacy cancel/reschedule confirmations. New booking uses Advanced Appointment.
 export const handleConfirmation = async (messageOrButtonId, contact, tenantId) => {
   const session = await db.BookingSessions.findOne({
     where: {
       contact_id: contact.contact_id,
       tenant_id: tenantId,
       status: "active",
-      current_step: [STEPS.CONFIRM_BOOKING, "confirming"],
+      flow_type: ["edit", "cancel"],
+      current_step: "confirming",
     },
     order: [["updatedAt", "DESC"]],
   });
@@ -769,45 +782,6 @@ export const handleConfirmation = async (messageOrButtonId, contact, tenantId) =
   if (!session) return null; // No session awaiting confirmation
 
   const raw = String(messageOrButtonId || "").toLowerCase().trim();
-
-  // ── New flow: CONFIRM_BOOKING step ─────────────────────────────────────────
-  if (session.current_step === STEPS.CONFIRM_BOOKING) {
-    // Confirm tap / free-text yes
-    if (
-      raw === "confirm_booking" ||
-      /^(yes|y|confirm|ok|sure|book|proceed)/.test(raw)
-    ) {
-      await session.update({ current_step: "processing" });
-      return _executeBooking(session, contact, tenantId);
-    }
-
-    // Edit Details tap → go to EDIT_MENU
-    if (raw === "edit_details") {
-      return enterState(session, STEPS.EDIT_MENU, contact, tenantId, null);
-    }
-
-    // Direct edit button (e.g. "edit_name") from EDIT_MENU re-entering CONFIRM path
-    if (EDIT_TARGET_TO_STEP[raw]) {
-      await session.update({ edit_target: raw, previous_step: STEPS.CONFIRM_BOOKING });
-      return enterState(session, STEPS.EDIT_FIELD, contact, tenantId, null);
-    }
-
-    // Cancel / no
-    if (/^(no|n|cancel|nope|stop|don't)/.test(raw) || raw === "confirm_no") {
-      await session.update({
-        status: "cancelled",
-        draft_json: clearSlotSelectionDraft(session),
-      });
-      return {
-        success: true,
-        message: "No problem, I've cancelled that. Let me know if you need anything else.",
-        buttonType: null,
-      };
-    }
-
-    // Unknown input — re-show summary
-    return enterState(session, STEPS.CONFIRM_BOOKING, contact, tenantId, null);
-  }
 
   // ── Legacy flow: "confirming" step (cancel / reschedule) ───────────────────
   const isYes =

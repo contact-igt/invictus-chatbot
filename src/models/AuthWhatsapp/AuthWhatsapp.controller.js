@@ -17,12 +17,22 @@ import {
   queuePendingMessage,
   consumePendingMessage,
 } from "./AuthWhatsapp.service.js";
-import { APPOINTMENT_INTENTS, GREETING_KEYWORDS } from "../../utils/ai/intentClassifier.js"; // NEW
-import { appointmentOrchestrator } from "../AppointmentModel/appointmentConversation.service.js"; // NEW
 import {
+  handleAppointmentIntent as handleLegacyAppointmentIntent,
+  handleConfirmation as handleLegacyAppointmentConfirmation,
+} from "../AppointmentModel/appointmentConversation.service.js";
+import {
+  buildAvailableDoctorListAppointmentResponse,
   handleAdvancedAppointmentBooking,
-  hasActiveAdvancedAppointmentSession,
 } from "../AppointmentModel/Advanced_Appointment_Booking.service.js";
+import {
+  getActiveAppointmentSession,
+  isSessionExpired,
+} from "../AppointmentModel/appointmentSession.service.js";
+import {
+  isDoctorListRequest,
+  shouldRouteActiveAdvancedAppointmentMessage,
+} from "../AppointmentModel/appointmentRoutingGuard.service.js";
 import { sendAppointmentPayload } from "../AppointmentModel/whatsappAppointmentTemplates.service.js";
 import { parseButtonReply, sendQuickReply, sendListMessage, sendAppointmentCard } from "./whatsappButtons.service.js"; // NEW
 
@@ -74,6 +84,59 @@ const faqTrace = (label, data) => {
 };
 
 const ENABLE_APPOINTMENT_BUTTONS = false;
+
+const ADVANCED_BOOKING_REPLY_IDS = new Set([
+  "create_appointment",
+  "confirm_booking",
+  "edit_details",
+  "continue_appointment",
+  "edit_name",
+  "edit_email",
+  "edit_doctor",
+  "edit_date",
+  "edit_time",
+  "edit_reason",
+  "back_confirm",
+]);
+
+const ADVANCED_BOOKING_REPLY_PREFIXES = [
+  "doctor_",
+  "date_",
+  "SLOT_",
+  "slot_",
+  "reason_",
+];
+
+const isAdvancedBookingReplyId = (replyId = "") => {
+  const id = String(replyId || "").trim();
+  return (
+    ADVANCED_BOOKING_REPLY_IDS.has(id) ||
+    ADVANCED_BOOKING_REPLY_PREFIXES.some((prefix) => id.startsWith(prefix))
+  );
+};
+
+const isDoctorListTemplateRequest = ({ text = "", replyId = null } = {}) => {
+  const visibleText = String(text || "").trim();
+  if (!visibleText) return false;
+  if (replyId && isAdvancedBookingReplyId(replyId)) return false;
+  return isDoctorListRequest(visibleText);
+};
+
+const isLegacyAppointmentManagementReplyId = (replyId = "") => {
+  const id = String(replyId || "").trim();
+  if (!id) return false;
+  if (id === "view_my_appointments" || id === "cancel_appointment") return true;
+  if (id.startsWith("reschedule_")) return true;
+  return id.startsWith("cancel_") && id !== "cancel_booking";
+};
+
+const getLegacyAppointmentIntentForReply = (replyId = "") => {
+  const id = String(replyId || "").trim();
+  if (id === "view_my_appointments") return "view_my_appointments";
+  if (id === "cancel_appointment" || id.startsWith("cancel_")) return "cancel_appointment";
+  if (id.startsWith("reschedule_")) return "reschedule_appointment";
+  return null;
+};
 
 const MISSING_INFO_TAGS = new Set([
   "MISSING_KNOWLEDGE",
@@ -951,27 +1014,38 @@ export const receiveMessage = async (req, res) => {
         sendReadReceipt(tenant_id, phone_number_id, messageId);
         sendTypingIndicator(tenant_id, phone_number_id, phone, messageId);
 
-        // NEW: Build a contact object that the appointment orchestrator expects
+        // Build a contact object that appointment handlers expect.
         const contactObj = { ...contactsaved, phone_number: phone }; // NEW
-        const isAppointmentButtonTrigger = Boolean(
-          buttonReplyId &&
-            (buttonReplyId === "create_appointment" ||
-              buttonReplyId === "view_my_appointments" ||
-              buttonReplyId.startsWith("reschedule_") ||
-              buttonReplyId.startsWith("cancel_") ||
-              buttonReplyId.startsWith("slot_") ||
-              buttonReplyId.startsWith("SLOT_") ||
-              buttonReplyId.startsWith("doctor_")),
-        );
-        const ignoreAppointmentButton =
-          !ENABLE_APPOINTMENT_BUTTONS && isAppointmentButtonTrigger;
-        const effectiveText = ignoreAppointmentButton ? text : buttonReplyId || text; // NEW — use button ID when available
+        const effectiveText = buttonReplyId || text;
 
         console.log(
           "[AI FLOW]",
           "Appointment buttons enabled:",
           ENABLE_APPOINTMENT_BUTTONS,
         );
+
+        if (isDoctorListTemplateRequest({ text, replyId: buttonReplyId })) {
+          await expireAdvancedAppointmentSessionIfNeeded({
+            tenant_id,
+            phone,
+            contactObj,
+            message: text,
+            whatsappMessageId: messageId || null,
+          });
+          const doctorListResult = await buildAvailableDoctorListAppointmentResponse({
+            tenantId: tenant_id,
+            userPhone: phone,
+          });
+          await handleAdvancedAppointmentResponse(
+            doctorListResult,
+            tenant_id,
+            phone,
+            contactsaved,
+            phone_number_id,
+            name,
+          );
+          return;
+        }
 
         const handledByAdvancedAppointment =
           await tryHandleAdvancedAppointmentFlow({
@@ -1068,104 +1142,79 @@ export const receiveMessage = async (req, res) => {
           return;
         }
 
-        // NEW: Check if user is in a pending confirmation state (YES/NO for any booking flow)
-        if (!ignoreAppointmentButton) {
-          const confirmResult = await appointmentOrchestrator.handleConfirmation( // NEW
-            effectiveText, contactObj, tenant_id, // NEW
-          ); // NEW
-          if (confirmResult) { // NEW
-            await handleAppointmentResponse( // NEW
-              confirmResult, tenant_id, phone, contactsaved, phone_number_id, name, // NEW
-            ); // NEW
-            return; // NEW
-          } // NEW
+        if (buttonReplyId && isAdvancedBookingReplyId(buttonReplyId)) {
+          const advancedResult = await handleAdvancedAppointmentBooking({
+            tenantId: tenant_id,
+            userPhone: phone,
+            contact: contactObj,
+            message: effectiveText,
+            interactiveReplyId: buttonReplyId,
+            whatsappMessageId: messageId || null,
+          });
+          if (!advancedResult?.handoverToNormalRouter) {
+            await handleAdvancedAppointmentResponse(
+              advancedResult,
+              tenant_id,
+              phone,
+              contactsaved,
+              phone_number_id,
+              name,
+            );
+            return;
+          }
         }
 
-        // NEW: Route button replies that map directly to appointment intents
-        if (ENABLE_APPOINTMENT_BUTTONS && isAppointmentButtonTrigger) { // NEW
-          let apptIntent = null; // NEW
-          let resolvedMessage = effectiveText; // NEW — may be overridden for slot/doctor decoding
-
-          if (APPOINTMENT_INTENTS.includes(buttonReplyId)) { // NEW
-            apptIntent = buttonReplyId; // NEW — e.g. "create_appointment" tapped as button
-          } else if (buttonReplyId.startsWith("reschedule_")) { // NEW
-            // NEW: Pass the embedded appointment_id so the flow targets the right appointment
-            apptIntent = "reschedule_appointment"; // NEW
-            resolvedMessage = buttonReplyId; // NEW — orchestrator extracts apt_id from it
-          } else if (buttonReplyId.startsWith("cancel_")) { // NEW
-            apptIntent = "cancel_appointment"; // NEW
-            resolvedMessage = buttonReplyId; // NEW — orchestrator extracts apt_id from it
-          } else if (buttonReplyId.startsWith("slot_")) { // NEW
-            // NEW: Decode encoded slot time back to "HH:MM AM" before passing to flow
-            const encodedTime = buttonReplyId.slice("slot_".length); // NEW
-            resolvedMessage = decodeSlotTime(encodedTime); // NEW — e.g. "09:00 AM"
-            apptIntent = "APPOINTMENT_ACTION"; // NEW
-          } else if (buttonReplyId.startsWith("SLOT_")) { // NEW
-            // NEW: Uppercase slot/group list IDs are handled by the appointment flow.
-            resolvedMessage = buttonReplyId; // NEW
-            apptIntent = "APPOINTMENT_ACTION"; // NEW
-          } else if (buttonReplyId.startsWith("doctor_")) { // NEW
-            // NEW: Pass raw button ID — orchestrator detects "doctor_" prefix and looks up by ID
-            apptIntent = "APPOINTMENT_ACTION"; // NEW
-            resolvedMessage = buttonReplyId; // NEW
-          } // NEW
-
-          if (apptIntent) { // NEW
-            const apptResult = await appointmentOrchestrator.handleAppointmentIntent( // NEW
-              apptIntent, resolvedMessage, contactObj, tenant_id, // NEW
-            ); // NEW
-            await handleAppointmentResponse( // NEW
-              apptResult, tenant_id, phone, contactsaved, phone_number_id, name, // NEW
-            ); // NEW
-            return; // NEW
-          } // NEW
-        } // NEW
-
-        // If user is mid-booking (active session exists that is NOT in confirming/processing state),
-        // force intent to APPOINTMENT_ACTION so the flow continues instead of being reclassified.
-        const activeSession = await db.BookingSessions.findOne({
+        const legacyConfirmSession = await db.BookingSessions.findOne({
           where: {
             contact_id: contactsaved.contact_id,
             tenant_id,
             status: "active",
+            flow_type: ["edit", "cancel"],
+            current_step: "confirming",
           },
           order: [["updatedAt", "DESC"]],
         });
-
-        if (
-          activeSession &&
-          !["confirming", "processing", "completed", "cancelled"].includes(activeSession.current_step) &&
-          !ignoreAppointmentButton
-        ) {
-          const apptResult = await appointmentOrchestrator.handleAppointmentIntent(
-            "APPOINTMENT_ACTION",
+        if (legacyConfirmSession) {
+          const confirmResult = await handleLegacyAppointmentConfirmation(
             effectiveText,
             contactObj,
             tenant_id,
           );
-          await handleAppointmentResponse(
-            apptResult, tenant_id, phone, contactsaved, phone_number_id, name
-          );
-          return;
+          if (confirmResult) {
+            await handleAppointmentResponse(
+              confirmResult,
+              tenant_id,
+              phone,
+              contactsaved,
+              phone_number_id,
+              name,
+            );
+            return;
+          }
         }
 
-        // NEW: Greeting detection — keyword-based, no AI cost
-        // Only intercept greetings when appointment buttons are enabled;
-        // otherwise let the AI handle greetings naturally through the normal flow.
-        const lowerTrimmed = effectiveText.toLowerCase().trim(); // NEW
-        const wordCount = effectiveText.trim().split(/\s+/).length; // NEW
-        const isGreeting = // NEW
-          wordCount <= 3 && // NEW
-          GREETING_KEYWORDS.some( // NEW
-            (kw) => lowerTrimmed === kw || lowerTrimmed.startsWith(kw + " "), // NEW
-          ); // NEW
-        if (isGreeting && ENABLE_APPOINTMENT_BUTTONS) { // NEW — gated behind feature flag
-          await handleAppointmentResponse( // NEW
-            { message: "Welcome! How can I help you today?", buttonType: "greeting_menu" }, // NEW
-            tenant_id, phone, contactsaved, phone_number_id, name, // NEW
-          ); // NEW
-          return; // NEW
-        } // NEW
+        if (buttonReplyId && isLegacyAppointmentManagementReplyId(buttonReplyId)) {
+          const legacyIntent = getLegacyAppointmentIntentForReply(buttonReplyId);
+          if (legacyIntent) {
+            const legacyResult = await handleLegacyAppointmentIntent(
+              legacyIntent,
+              effectiveText,
+              contactObj,
+              tenant_id,
+            );
+            await handleAppointmentResponse(
+              legacyResult,
+              tenant_id,
+              phone,
+              contactsaved,
+              phone_number_id,
+              name,
+            );
+            return;
+          }
+        }
+
+        // Greetings and non-booking questions stay in normal AI/GENERAL_QUESTION routing.
 
         // Check wallet status before AI processing (pass small estimated cost for prepaid check)
         const walletCheck = await canUseAI(tenant_id, 0.5);
@@ -1216,14 +1265,13 @@ export const receiveMessage = async (req, res) => {
           messagePreview: aiResult?.message?.substring(0, 200) || "N/A",
         });
 
-        // NEW: If getOpenAIReply routed an appointment intent, handle interactive response
-        // handleAppointmentResponse saves to DB and emits socket internally
-        const _apptTrace = { _apptResult: !!aiResult?._apptResult, tagDetected: aiResult?.tagDetected, msgPreview: String(aiResult?.message || "").substring(0, 60) };
+        // If getOpenAIReply routed an appointment intent, send the Advanced Appointment response.
+        const _apptTrace = { _appointmentResult: !!aiResult?._appointmentResult, tagDetected: aiResult?.tagDetected, msgPreview: String(aiResult?.message || "").substring(0, 60) };
         try { import("fs").then(fs => fs.default.appendFileSync("/tmp/faq_trace.log", `[${new Date().toISOString()}] [CONTROLLER] aiResult check ${JSON.stringify(_apptTrace)}\n`)).catch(() => {}); } catch {}
         console.log("[FAQ-PIPELINE][CTRL] aiResult:", JSON.stringify(_apptTrace));
-        if (aiResult?._advancedApptResult) {
+        if (aiResult?._appointmentResult) {
           await handleAdvancedAppointmentResponse(
-            aiResult._advancedApptResult,
+            aiResult._appointmentResult,
             tenant_id,
             phone,
             contactsaved,
@@ -1232,12 +1280,6 @@ export const receiveMessage = async (req, res) => {
           );
           return;
         }
-        if (aiResult?._apptResult) { // NEW
-          await handleAppointmentResponse( // NEW
-            aiResult._apptResult, tenant_id, phone, contactsaved, phone_number_id, name, // NEW
-          ); // NEW
-          return; // NEW
-        } // NEW
         try {
           await updateLeadService(tenant_id, contactsaved?.contact_id, {
             sourceEvent: "user_message",
@@ -1413,6 +1455,34 @@ export const receiveMessage = async (req, res) => {
                 const queuedEffectiveText =
                   queuedInteractiveReplyId || pending.text || "";
 
+                if (
+                  isDoctorListTemplateRequest({
+                    text: pending.text || "",
+                    replyId: queuedInteractiveReplyId,
+                  })
+                ) {
+                  await expireAdvancedAppointmentSessionIfNeeded({
+                    tenant_id,
+                    phone,
+                    contactObj: queuedContactObj,
+                    message: pending.text || "",
+                    whatsappMessageId: pending.messageId || null,
+                  });
+                  const doctorListResult = await buildAvailableDoctorListAppointmentResponse({
+                    tenantId: tenant_id,
+                    userPhone: phone,
+                  });
+                  await handleAdvancedAppointmentResponse(
+                    doctorListResult,
+                    tenant_id,
+                    phone,
+                    pending.contactsaved || null,
+                    phone_number_id,
+                    pending.name || pending.contactsaved?.name || null,
+                  );
+                  return;
+                }
+
                 const queuedHandledByAdvancedAppointment =
                   await tryHandleAdvancedAppointmentFlow({
                     tenant_id,
@@ -1427,6 +1497,56 @@ export const receiveMessage = async (req, res) => {
                   });
 
                 if (queuedHandledByAdvancedAppointment) return;
+
+                if (
+                  queuedInteractiveReplyId &&
+                  isAdvancedBookingReplyId(queuedInteractiveReplyId)
+                ) {
+                  const advancedResult = await handleAdvancedAppointmentBooking({
+                    tenantId: tenant_id,
+                    userPhone: phone,
+                    contact: queuedContactObj,
+                    message: queuedEffectiveText,
+                    interactiveReplyId: queuedInteractiveReplyId,
+                    whatsappMessageId: pending.messageId || null,
+                  });
+                  if (!advancedResult?.handoverToNormalRouter) {
+                    await handleAdvancedAppointmentResponse(
+                      advancedResult,
+                      tenant_id,
+                      phone,
+                      pending.contactsaved || null,
+                      phone_number_id,
+                      pending.name || pending.contactsaved?.name || null,
+                    );
+                    return;
+                  }
+                }
+
+                if (
+                  queuedInteractiveReplyId &&
+                  isLegacyAppointmentManagementReplyId(queuedInteractiveReplyId)
+                ) {
+                  const legacyIntent =
+                    getLegacyAppointmentIntentForReply(queuedInteractiveReplyId);
+                  if (legacyIntent) {
+                    const legacyResult = await handleLegacyAppointmentIntent(
+                      legacyIntent,
+                      queuedEffectiveText,
+                      queuedContactObj,
+                      tenant_id,
+                    );
+                    await handleAppointmentResponse(
+                      legacyResult,
+                      tenant_id,
+                      phone,
+                      pending.contactsaved || null,
+                      phone_number_id,
+                      pending.name || pending.contactsaved?.name || null,
+                    );
+                    return;
+                  }
+                }
 
                 // Check wallet before processing queued message
                 const queuedWalletCheck = await canUseAI(tenant_id, 0.5);
@@ -1457,9 +1577,9 @@ export const receiveMessage = async (req, res) => {
                   pending.messageId || null,
                 );
 
-                if (aiResult?._advancedApptResult) {
+                if (aiResult?._appointmentResult) {
                   await handleAdvancedAppointmentResponse(
-                    aiResult._advancedApptResult,
+                    aiResult._appointmentResult,
                     tenant_id,
                     phone,
                     pending.contactsaved || null,
@@ -1624,6 +1744,34 @@ export const receiveMessage = async (req, res) => {
   }
 };
 
+async function expireAdvancedAppointmentSessionIfNeeded({
+  tenant_id,
+  phone,
+  contactObj,
+  message = "",
+  whatsappMessageId = null,
+}) {
+  const activeAdvancedSession = await getActiveAppointmentSession({
+    tenantId: tenant_id,
+    contactId: contactObj?.contact_id,
+    userPhone: phone,
+  });
+
+  if (!activeAdvancedSession || !isSessionExpired(activeAdvancedSession)) {
+    return false;
+  }
+
+  await handleAdvancedAppointmentBooking({
+    tenantId: tenant_id,
+    userPhone: phone,
+    contact: contactObj,
+    message,
+    interactiveReplyId: null,
+    whatsappMessageId,
+  });
+  return true;
+}
+
 async function tryHandleAdvancedAppointmentFlow({
   tenant_id,
   phone,
@@ -1635,14 +1783,24 @@ async function tryHandleAdvancedAppointmentFlow({
   interactiveReplyId = null,
   whatsappMessageId = null,
 }) {
-  const hasAdvancedAppointmentSession =
-    await hasActiveAdvancedAppointmentSession({
-      tenantId: tenant_id,
-      contactId: contactObj?.contact_id || contactsaved?.contact_id,
-      userPhone: phone,
-    });
+  const activeAdvancedSession = await getActiveAppointmentSession({
+    tenantId: tenant_id,
+    contactId: contactObj?.contact_id || contactsaved?.contact_id,
+    userPhone: phone,
+  });
 
-  if (!hasAdvancedAppointmentSession) return false;
+  if (!activeAdvancedSession) return false;
+
+  if (
+    !isSessionExpired(activeAdvancedSession) &&
+    !shouldRouteActiveAdvancedAppointmentMessage({
+      currentState: activeAdvancedSession.current_step,
+      message,
+      interactiveReplyId,
+    })
+  ) {
+    return false;
+  }
 
   const advancedResult = await handleAdvancedAppointmentBooking({
     tenantId: tenant_id,

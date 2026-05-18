@@ -53,6 +53,7 @@ import {
   hasProcessedAppointmentMessage,
   logAppointmentStateTransition,
 } from "./appointmentStateLog.service.js";
+import { isAppointmentQuitRequest } from "./appointmentRoutingGuard.service.js";
 
 export const APPOINTMENT_STATES = {
   COLLECT_NAME: "COLLECT_NAME",
@@ -71,10 +72,16 @@ export const APPOINTMENT_STATES = {
 const CANCEL_KEYWORDS = [
   "cancel",
   "stop",
+  "exit",
   "quit",
+  "leave",
   "leave it",
   "not interested",
   "no need",
+  "not now",
+  "cancel appointment",
+  "stop booking",
+  "end booking",
 ];
 
 const EDIT_KEYWORDS = [
@@ -122,7 +129,8 @@ const isPastDate = (dateStr) => {
   return target < today;
 };
 
-const isCancelKeyword = (message = "") => {
+const isCancelKeyword = (message = "", replyId = null) => {
+  if (isAppointmentQuitRequest(message, replyId)) return true;
   const normalized = String(message || "").trim().toLowerCase();
   return CANCEL_KEYWORDS.some((kw) => normalized === kw || normalized.includes(kw));
 };
@@ -301,6 +309,24 @@ const cancelSessionAndRespond = async (context, message = "Appointment booking c
 const getAvailableDoctors = async (tenantId) => {
   const doctors = await getDoctorListService(tenantId);
   return (doctors || []).filter((doctor) => doctor.status === "available");
+};
+
+export const buildAvailableDoctorListAppointmentResponse = async ({
+  tenantId,
+  userPhone,
+}) => {
+  const doctors = await getAvailableDoctors(tenantId);
+  if (!doctors.length) {
+    return makeResult({
+      payload: buildTextPayload(userPhone, "No doctors are available right now. Please try again later."),
+      session: null,
+    });
+  }
+
+  return makeResult({
+    payload: buildDoctorListPayload(userPhone, doctors),
+    session: null,
+  });
 };
 
 const uniqueDoctors = (doctors = []) => {
@@ -1082,9 +1108,16 @@ export const handleSelectDoctor = async (context) => {
     tenantId: context.tenantId,
     draft: currentDraft,
   });
-  const doctor = resolved.doctors.find(
+  let doctor = resolved.doctors.find(
     (item) => item.doctor_id === context.decodedReply.value,
   );
+  let doctorListMode = resolved.doctorListMode;
+
+  if (!doctor) {
+    doctor = await getDoctorById(context.tenantId, context.decodedReply.value);
+    doctorListMode = doctor ? DOCTOR_LIST_MODE.ALL_ACTIVE_DOCTORS : resolved.doctorListMode;
+  }
+
   if (!doctor) return enterIrrelevantInputGuard(context, "doctor_not_available");
 
   if (currentDraft.doctorId && currentDraft.doctorId !== doctor.doctor_id) {
@@ -1094,7 +1127,7 @@ export const handleSelectDoctor = async (context) => {
   const draft = await updateAppointmentDraft(context.session, {
     doctorId: doctor.doctor_id,
     doctorName: doctor.name,
-    doctorListMode: resolved.doctorListMode,
+    doctorListMode,
     date: null,
     time: null,
     slotSelection: undefined,
@@ -1316,13 +1349,6 @@ export const handleConfirmBooking = async (context) => {
     return enterIrrelevantInputGuard(context, "invalid_confirm_reply");
   }
 
-  await transitionAppointmentState({
-    session: context.session,
-    toState: APPOINTMENT_STATES.BOOKING_COMPLETE,
-    lastValidState: APPOINTMENT_STATES.BOOKING_COMPLETE,
-  });
-  await context.session.reload();
-  await logTransition(context, APPOINTMENT_STATES.CONFIRM_BOOKING, APPOINTMENT_STATES.BOOKING_COMPLETE);
   return handleBookingComplete(context);
 };
 
@@ -1381,6 +1407,8 @@ export const handleEditField = async (context) => {
 };
 
 export const handleBookingComplete = async (context) => {
+  const completionFromState =
+    context.session.current_step || APPOINTMENT_STATES.CONFIRM_BOOKING;
   const draft = getSessionDraft(context.session);
   const required = ["name", "email", "doctorId", "doctorName", "date", "time", "reason"];
   const missing = required.filter((field) => !draft[field]);
@@ -1459,7 +1487,7 @@ export const handleBookingComplete = async (context) => {
   });
 
   context.session = await completeAppointmentSession(context.session);
-  await logTransition(context, APPOINTMENT_STATES.BOOKING_COMPLETE, null);
+  await logTransition(context, completionFromState, null);
   emitAppointmentEvent(context.tenantId, "appointment_confirmed", context.session, {
     appointmentId: appointment.appointment_id,
     tokenNumber: appointment.token_number,
@@ -1528,6 +1556,9 @@ export const handleAdvancedAppointmentBooking = async ({
   whatsappMessageId,
 }) => {
   const contactId = contact?.contact_id;
+  const decodedReply = decodeAppointmentReply(interactiveReplyId || message);
+  const isDoctorSelectionStart =
+    decodedReply.type === APPOINTMENT_REPLY_TYPES.DOCTOR_SELECTED;
   let session = await getActiveAppointmentSession({ tenantId, contactId, userPhone });
 
   if (session && isSessionExpired(session)) {
@@ -1560,7 +1591,9 @@ export const handleAdvancedAppointmentBooking = async ({
     tenantId,
     contactId,
     userPhone,
-    initialState: APPOINTMENT_STATES.COLLECT_NAME,
+    initialState: isDoctorSelectionStart
+      ? APPOINTMENT_STATES.SELECT_DOCTOR
+      : APPOINTMENT_STATES.COLLECT_NAME,
     draft: {
       name: contact?.name && contact.name !== userPhone ? contact.name : null,
       email: contact?.email || null,
@@ -1575,7 +1608,7 @@ export const handleAdvancedAppointmentBooking = async ({
     message: String(message || "").trim(),
     interactiveReplyId,
     whatsappMessageId,
-    decodedReply: decodeAppointmentReply(interactiveReplyId || message),
+    decodedReply,
     session,
   };
 
@@ -1593,17 +1626,27 @@ export const handleAdvancedAppointmentBooking = async ({
     }
   }
 
+  if (isCancelKeyword(message, interactiveReplyId)) {
+    return cancelSessionAndRespond(context);
+  }
+
   if (created) {
     emitAppointmentEvent(tenantId, "appointment_started", session);
-    await logTransition(context, null, APPOINTMENT_STATES.COLLECT_NAME);
+    await logTransition(context, null, session.current_step);
+    if (isDoctorSelectionStart) {
+      return handleSelectDoctor(context);
+    }
     return sendStatePrompt(context, APPOINTMENT_STATES.COLLECT_NAME);
   }
 
   if (
-    session.current_step !== APPOINTMENT_STATES.AWAITING_RESUME_DECISION &&
-    isCancelKeyword(message)
+    context.decodedReply.type === APPOINTMENT_REPLY_TYPES.DOCTOR_SELECTED &&
+    ![
+      APPOINTMENT_STATES.AWAITING_RESUME_DECISION,
+      APPOINTMENT_STATES.BOOKING_COMPLETE,
+    ].includes(session.current_step)
   ) {
-    return askCancelConfirmation(context);
+    return handleSelectDoctor(context);
   }
 
   if (
@@ -1664,7 +1707,7 @@ export const handleAdvancedAppointmentBooking = async ({
   try {
     return await handler(context);
   } catch (err) {
-    console.error("[ADV-APPT] State handler failed:", err.message);
+    console.error("[ADV-APPT] State handler failed:", err.stack || err.message);
     emitAppointmentEvent(tenantId, "appointment_failed", session, {
       reason: err.message,
     });
