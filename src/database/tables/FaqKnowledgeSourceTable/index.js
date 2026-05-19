@@ -80,6 +80,21 @@ export const FaqKnowledgeSourceTable = (sequelize, Sequelize) => {
     {
       tableName: tableNames.FAQ_KNOWLEDGE_SOURCE,
       timestamps: false,
+      indexes: [
+        {
+          name: "uniq_fkn_faq_review_id",
+          unique: true,
+          fields: ["faq_review_id"],
+        },
+        {
+          name: "idx_fkn_source_active",
+          fields: ["source_id", "is_active"],
+        },
+        {
+          name: "idx_fkn_tenant_active",
+          fields: ["tenant_id", "is_active"],
+        },
+      ],
     },
   );
 };

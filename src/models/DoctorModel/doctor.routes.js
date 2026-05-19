@@ -15,10 +15,13 @@ import {
   authenticate,
   authorize,
 } from "../../middlewares/auth/authMiddlewares.js";
+import { checkFeatureAccess } from "../../middlewares/feature/checkFeatureAccess.js";
 
 const Router = express.Router();
 
-const tenantRoles = ["tenant_admin", "doctor", "staff", "agent"];
+// [DOCTOR ROLE UNWIRED – 2026-05-13] "doctor" removed from all tenant route access.
+// Re-enable by adding "doctor" back to the arrays below.
+const tenantRoles = ["tenant_admin", /* "doctor", */ "staff"];
 const managerRoles = ["tenant_admin", "staff"];
 
 // Create doctor
@@ -26,6 +29,7 @@ Router.post(
   "/doctor",
   authenticate,
   authorize({ user_type: "tenant", roles: managerRoles }),
+  checkFeatureAccess("doctors"),
   createDoctorController,
 );
 
@@ -34,6 +38,7 @@ Router.get(
   "/doctors",
   authenticate,
   authorize({ user_type: "tenant", roles: tenantRoles }),
+  checkFeatureAccess("doctors"),
   getDoctorListController,
 );
 
@@ -42,6 +47,7 @@ Router.get(
   "/doctors/deleted/list",
   authenticate,
   authorize({ user_type: "tenant", roles: managerRoles }),
+  checkFeatureAccess("doctors"),
   getDeletedDoctorsController,
 );
 
@@ -50,6 +56,7 @@ Router.get(
   "/doctor/:doctor_id",
   authenticate,
   authorize({ user_type: "tenant", roles: tenantRoles }),
+  checkFeatureAccess("doctors"),
   getDoctorByIdController,
 );
 
@@ -58,6 +65,7 @@ Router.put(
   "/doctor/:doctor_id",
   authenticate,
   authorize({ user_type: "tenant", roles: managerRoles }),
+  checkFeatureAccess("doctors"),
   updateDoctorController,
 );
 
@@ -66,6 +74,7 @@ Router.delete(
   "/doctor/:doctor_id/soft",
   authenticate,
   authorize({ user_type: "tenant", roles: managerRoles }),
+  checkFeatureAccess("doctors"),
   softDeleteDoctorController,
 );
 
@@ -74,6 +83,7 @@ Router.delete(
   "/doctor/:doctor_id/permanent",
   authenticate,
   authorize({ user_type: "tenant", roles: ["tenant_admin"] }),
+  checkFeatureAccess("doctors"),
   hardDeleteDoctorController,
 );
 
@@ -82,6 +92,7 @@ Router.post(
   "/doctor/:doctor_id/restore",
   authenticate,
   authorize({ user_type: "tenant", roles: managerRoles }),
+  checkFeatureAccess("doctors"),
   restoreDoctorController,
 );
 

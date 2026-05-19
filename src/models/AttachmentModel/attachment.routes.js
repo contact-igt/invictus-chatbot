@@ -7,7 +7,8 @@ import {
 
 const Router = express.Router();
 
-const tenantRoles = ["tenant_admin", "doctor", "staff", "agent"];
+// [DOCTOR ROLE UNWIRED – 2026-05-13] "doctor" removed from all tenant route access.
+const tenantRoles = ["tenant_admin", /* "doctor", */ "staff"];
 
 // <img>, <video>, <audio> tags are native browser elements — they cannot set custom
 // HTTP headers. When the frontend detects a meta_media_id URL it appends ?token=<jwt>

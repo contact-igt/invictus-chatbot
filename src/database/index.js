@@ -30,6 +30,7 @@ import { SequencesTable } from "./tables/SequencesTable/index.js";
 import { OtpVerificationTable } from "./tables/OtpVerificationTable/index.js";
 import { DoctorsTable } from "./tables/DoctorsTable/index.js";
 import { DoctorAvailabilityTable } from "./tables/DoctorAvailabilityTable/index.js";
+import { DoctorAvailabilityDayTable } from "./tables/DoctorAvailabilityDayTable/index.js";
 import { SpecializationsTable } from "./tables/SpecializationsTable/index.js";
 import { DoctorSpecializationsTable } from "./tables/DoctorSpecializationsTable/index.js";
 import { PricingTable } from "./tables/PricingTableTable/index.js";
@@ -41,6 +42,10 @@ import { AiTokenUsageTable } from "./tables/AiTokenUsageTable/index.js";
 import { AiPricingTable } from "./tables/AiPricingTable/index.js";
 import { PaymentHistoryTable } from "./tables/PaymentHistoryTable/index.js";
 import { BookingSessionTable } from "./tables/BookingSessionTable/index.js";
+import { AppointmentSlotTable } from "./tables/AppointmentSlotTable/index.js";
+import { AppointmentStateLogTable } from "./tables/AppointmentStateLogTable/index.js";
+import { AppointmentAuditLogTable } from "./tables/AppointmentAuditLogTable/index.js";
+import { ManageAppointmentSessionTable } from "./tables/ManageAppointmentSessionTable/index.js";
 import { BillingCycleTable } from "./tables/BillingCycleTable/index.js";
 import { MonthlyInvoiceTable } from "./tables/MonthlyInvoiceTable/index.js";
 import { AdminAuditLogTable } from "./tables/AdminAuditLogTable/index.js";
@@ -54,10 +59,22 @@ import { FaqKnowledgeSourceTable } from "./tables/FaqKnowledgeSourceTable/index.
 import { defineAssociations } from "./associations.js";
 import { MediaAssetTable } from "./tables/MediaAssetTable/index.js";
 import { AppointmentTable } from "./tables/AppointmentTable/index.js";
+import { AppointmentOutcomeTable } from "./tables/AppointmentOutcomeTable/index.js";
 import { SavedPaymentMethodTable } from "./tables/SavedPaymentMethod/SavedPaymentMethod.js";
 import { TaxSettingsTable } from "./tables/TaxSettingsTable/index.js";
 import { TenantSecretsTable } from "./tables/TenantSecretsTable/index.js";
 import { UserPreferencesTable } from "./tables/UserPreferencesTable/index.js";
+import { MentorsTable } from "./tables/MentorsTable/index.js";
+import { CoursesTable } from "./tables/CoursesTable/index.js";
+import { TenantFeatureAccessTable } from "./tables/TenantFeatureAccessTable/index.js";
+import { ScheduledMessageTable } from "./tables/ScheduledMessageTable/index.js";
+import { IndustriesTable } from "./tables/IndustriesTable/index.js";
+import { SaaSModulesTable } from "./tables/SaaSModulesTable/index.js";
+import { IndustrySaaSModulesTable } from "./tables/IndustrySaaSModulesTable/index.js";
+import { PlansTable } from "./tables/PlansTable/index.js";
+import { PlanSaaSModulesTable } from "./tables/PlanSaaSModulesTable/index.js";
+import { TenantSaaSModuleOverridesTable } from "./tables/TenantSaaSModuleOverridesTable/index.js";
+import { NavigationItemsTable } from "./tables/NavigationItemsTable/index.js";
 
 const dbconfig =
   ServerEnvironmentConfig?.server?.line === "production"
@@ -147,6 +164,7 @@ db.Sequences = SequencesTable(sequelize, Sequelize);
 db.OtpVerification = OtpVerificationTable(sequelize, Sequelize);
 db.Doctors = DoctorsTable(sequelize, Sequelize);
 db.DoctorAvailability = DoctorAvailabilityTable(sequelize, Sequelize);
+db.DoctorAvailabilityDays = DoctorAvailabilityDayTable(sequelize, Sequelize);
 db.Specializations = SpecializationsTable(sequelize, Sequelize);
 db.DoctorSpecializations = DoctorSpecializationsTable(sequelize, Sequelize);
 db.PricingTable = PricingTable(sequelize, Sequelize);
@@ -169,11 +187,30 @@ db.FaqReviews = FaqReviewsTable(sequelize, Sequelize);
 db.FaqKnowledgeSource = FaqKnowledgeSourceTable(sequelize, Sequelize);
 db.MediaAsset = MediaAssetTable(sequelize, Sequelize);
 db.Appointments = AppointmentTable(sequelize, Sequelize);
-db.BookingSessions = BookingSessionTable(sequelize, Sequelize); // NEW
+db.AppointmentOutcomes = AppointmentOutcomeTable(sequelize, Sequelize);
+db.BookingSessions = BookingSessionTable(sequelize, Sequelize);
+db.AppointmentSlots = AppointmentSlotTable(sequelize, Sequelize);
+db.AppointmentStateLogs = AppointmentStateLogTable(sequelize, Sequelize);
+db.AppointmentAuditLogs = AppointmentAuditLogTable(sequelize, Sequelize);
+db.ManageAppointmentSessions = ManageAppointmentSessionTable(sequelize, Sequelize);
 db.SavedPaymentMethod = SavedPaymentMethodTable(sequelize, Sequelize);
 db.TaxSettings = TaxSettingsTable(sequelize, Sequelize);
 db.TenantSecrets = TenantSecretsTable(sequelize, Sequelize);
 db.UserPreferences = UserPreferencesTable(sequelize, Sequelize);
+db.Mentors = MentorsTable(sequelize, Sequelize);
+db.Courses = CoursesTable(sequelize, Sequelize);
+db.TenantFeatureAccess = TenantFeatureAccessTable(sequelize, Sequelize);
+db.ScheduledMessages = ScheduledMessageTable(sequelize, Sequelize);
+db.Industries = IndustriesTable(sequelize, Sequelize);
+db.SaaSModules = SaaSModulesTable(sequelize, Sequelize);
+db.IndustrySaaSModules = IndustrySaaSModulesTable(sequelize, Sequelize);
+db.Plans = PlansTable(sequelize, Sequelize);
+db.PlanSaaSModules = PlanSaaSModulesTable(sequelize, Sequelize);
+db.TenantSaaSModuleOverrides = TenantSaaSModuleOverridesTable(
+  sequelize,
+  Sequelize,
+);
+db.NavigationItems = NavigationItemsTable(sequelize, Sequelize);
 
 defineAssociations(db);
 

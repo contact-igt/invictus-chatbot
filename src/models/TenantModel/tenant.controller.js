@@ -46,6 +46,79 @@ import { encrypt, decrypt, maskApiKey } from "../../utils/encryption.js";
 import { storeSecret, getSecret } from "../TenantSecretsModel/tenantSecrets.service.js";
 import OpenAI from "openai";
 
+const ALLOWED_INDUSTRY_TYPES = ["healthcare", "education", "general"];
+
+const mapIndustryToLegacyType = (industryType = "general") => {
+  if (industryType === "healthcare") return "hospital";
+  if (industryType === "education") return "education";
+  return "organization";
+};
+
+const normalizeOptionalLookupId = (value) => {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  if (typeof value !== "string") return value;
+  const trimmed = value.trim();
+  return trimmed === "" ? null : trimmed;
+};
+
+const validateIndustryIdExists = async (industry_id) => {
+  if (industry_id === undefined || industry_id === null) return;
+
+  const industry = await db.Industries.findOne({
+    where: { industry_id },
+    attributes: ["industry_id"],
+    raw: true,
+  });
+
+  if (!industry) {
+    const error = new Error(`Invalid industry_id: ${industry_id}`);
+    error.statusCode = 400;
+    throw error;
+  }
+};
+
+const validatePlanIdExists = async (plan_id) => {
+  if (plan_id === undefined || plan_id === null) return;
+
+  const plan = await db.Plans.findOne({
+    where: { plan_id },
+    attributes: ["plan_id"],
+    raw: true,
+  });
+
+  if (!plan) {
+    const error = new Error(`Invalid plan_id: ${plan_id}`);
+    error.statusCode = 400;
+    throw error;
+  }
+};
+
+const validateAiModelSelections = async (ai_settings) => {
+  if (!ai_settings) return null;
+
+  const { input_model, output_model } = ai_settings;
+  if (!input_model && !output_model) return null;
+
+  const activeModels = await db.AiPricing.findAll({
+    where: { is_active: true },
+    attributes: ["model"],
+    raw: true,
+  });
+
+  const validModels = new Set(activeModels.map((m) => m.model));
+
+  if (input_model && !validModels.has(input_model)) {
+    return `Invalid input model: ${input_model}. Please select an active model.`;
+  }
+
+  if (output_model && !validModels.has(output_model)) {
+    return `Invalid output model: ${output_model}. Please select an active model.`;
+  }
+
+  return null;
+};
+
 export const createTenantController = async (req, res) => {
   const loginUSer = req.user;
 
@@ -56,7 +129,7 @@ export const createTenantController = async (req, res) => {
       owner_email,
       owner_country_code,
       owner_mobile,
-      type,
+      industry_type,
       subscriptionStatus,
       subscription_start_date,
       subscription_end_date,
@@ -67,6 +140,8 @@ export const createTenantController = async (req, res) => {
       pincode,
       maxUsers,
       subscriptionPlan,
+      industry_id,
+      plan_id,
       profile,
       ai_settings,
     } = req.body;
@@ -77,7 +152,6 @@ export const createTenantController = async (req, res) => {
       owner_email,
       owner_country_code,
       owner_mobile,
-      type,
     };
 
     const missingFields = await missingFieldsChecker(requiredFields);
@@ -85,6 +159,37 @@ export const createTenantController = async (req, res) => {
       return res.status(400).json({
         message: `Missing required field(s): ${missingFields.join(", ")}`,
       });
+    }
+
+    if (
+      industry_type !== undefined &&
+      !ALLOWED_INDUSTRY_TYPES.includes(industry_type)
+    ) {
+      return res.status(400).json({
+        message:
+          "Invalid industry_type. Allowed values: healthcare, education, general",
+      });
+    }
+
+    const resolvedIndustryType = industry_type || "general";
+    const resolvedLegacyType = mapIndustryToLegacyType(resolvedIndustryType);
+    const normalizedIndustryId = normalizeOptionalLookupId(industry_id);
+    const normalizedPlanId = normalizeOptionalLookupId(plan_id);
+
+    if (
+      normalizedIndustryId !== undefined &&
+      normalizedIndustryId !== null &&
+      typeof normalizedIndustryId !== "string"
+    ) {
+      return res.status(400).json({ message: "industry_id must be a string or null" });
+    }
+
+    if (
+      normalizedPlanId !== undefined &&
+      normalizedPlanId !== null &&
+      typeof normalizedPlanId !== "string"
+    ) {
+      return res.status(400).json({ message: "plan_id must be a string or null" });
     }
 
     const tenant_id = await generateReadableIdFromLast(
@@ -96,6 +201,14 @@ export const createTenantController = async (req, res) => {
     const cleanedCC = cleanCountryCode(owner_country_code);
     const normalizedMobile = normalizeMobile(cleanedCC, owner_mobile);
     const trimmedEmail = owner_email?.trim()?.toLowerCase();
+
+    const aiModelValidationError = await validateAiModelSelections(ai_settings);
+    if (aiModelValidationError) {
+      return res.status(400).json({ message: aiModelValidationError });
+    }
+
+    await validateIndustryIdExists(normalizedIndustryId);
+    await validatePlanIdExists(normalizedPlanId);
 
     // Check for existing user in Tenants
     const existingTu = await findTenantUserByEmailOrMobileGloballyService(
@@ -120,7 +233,7 @@ export const createTenantController = async (req, res) => {
         trimmedEmail,
         cleanedCC,
         normalizedMobile,
-        type,
+        resolvedLegacyType,
         subscriptionStatus || "invited",
         subscription_start_date || null,
         subscription_end_date || null,
@@ -141,6 +254,9 @@ export const createTenantController = async (req, res) => {
           return settings;
         })(),
         t, // transaction
+        resolvedIndustryType,
+        normalizedIndustryId,
+        normalizedPlanId,
       );
 
       tenantUserId = await generateReadableIdFromLast(
@@ -197,6 +313,10 @@ export const createTenantController = async (req, res) => {
         "Tenant created successfully. Invitation email sent to owner.",
     });
   } catch (err) {
+    if (err?.statusCode) {
+      return res.status(err.statusCode).json({ message: err.message });
+    }
+
     if (err.original?.code === "ER_DUP_ENTRY") {
       return res.status(400).json({
         message: "Email or mobile already exists",
@@ -249,7 +369,7 @@ export const updateTenantController = async (req, res) => {
       owner_email,
       owner_country_code,
       owner_mobile,
-      type,
+      industry_type,
       subscriptionStatus,
       subscription_start_date,
       subscription_end_date,
@@ -260,6 +380,8 @@ export const updateTenantController = async (req, res) => {
       pincode,
       maxUsers,
       subscriptionPlan,
+      industry_id,
+      plan_id,
       profile,
       ai_settings,
     } = req.body;
@@ -268,6 +390,16 @@ export const updateTenantController = async (req, res) => {
 
     if (!tenant) {
       return res.status(404).json({ message: "Tenant details not found" });
+    }
+
+    if (
+      industry_type !== undefined &&
+      !ALLOWED_INDUSTRY_TYPES.includes(industry_type)
+    ) {
+      return res.status(400).json({
+        message:
+          "Invalid industry_type. Allowed values: healthcare, education, general",
+      });
     }
 
     const cleanedCC = owner_country_code
@@ -281,6 +413,11 @@ export const updateTenantController = async (req, res) => {
     console.log(
       `[UPDATE TENANT] ID: ${id}, New Email: ${trimmedEmail}, Old Email: ${tenant.owner_email}`,
     );
+
+    const aiModelValidationError = await validateAiModelSelections(ai_settings);
+    if (aiModelValidationError) {
+      return res.status(400).json({ message: aiModelValidationError });
+    }
 
     // Check for duplicate email if it's changing
     if (trimmedEmail && trimmedEmail !== tenant.owner_email) {
@@ -298,13 +435,39 @@ export const updateTenantController = async (req, res) => {
       }
     }
 
+    const resolvedLegacyTypeForUpdate =
+      industry_type !== undefined && industry_type !== null
+        ? mapIndustryToLegacyType(industry_type)
+        : undefined;
+    const normalizedIndustryId = normalizeOptionalLookupId(industry_id);
+    const normalizedPlanId = normalizeOptionalLookupId(plan_id);
+
+    if (
+      normalizedIndustryId !== undefined &&
+      normalizedIndustryId !== null &&
+      typeof normalizedIndustryId !== "string"
+    ) {
+      return res.status(400).json({ message: "industry_id must be a string or null" });
+    }
+
+    if (
+      normalizedPlanId !== undefined &&
+      normalizedPlanId !== null &&
+      typeof normalizedPlanId !== "string"
+    ) {
+      return res.status(400).json({ message: "plan_id must be a string or null" });
+    }
+
+    await validateIndustryIdExists(normalizedIndustryId);
+    await validatePlanIdExists(normalizedPlanId);
+
     await updateTenantService(
       company_name,
       owner_name,
       trimmedEmail || owner_email,
       cleanedCC,
       normalizedMobile,
-      type,
+      resolvedLegacyTypeForUpdate,
       subscriptionStatus,
       subscription_start_date,
       subscription_end_date,
@@ -324,6 +487,9 @@ export const updateTenantController = async (req, res) => {
         return settings;
       })(),
       id,
+      industry_type,
+      normalizedIndustryId,
+      normalizedPlanId,
     );
 
     // Store OpenAI key in tenant_secrets if provided via this path
@@ -371,6 +537,10 @@ export const updateTenantController = async (req, res) => {
       message: "Tenant updated successfully",
     });
   } catch (err) {
+    if (err?.statusCode) {
+      return res.status(err.statusCode).json({ message: err.message });
+    }
+
     if (err.original?.code === "ER_DUP_ENTRY") {
       return res
         .status(400)
@@ -634,30 +804,11 @@ export const updateTenantAiSettingsController = async (req, res) => {
     const { ai_settings } = req.body;
 
     // Validate model selections if provided
-    if (ai_settings?.input_model || ai_settings?.output_model) {
-      const activeModels = await db.AiPricing.findAll({
-        where: { is_active: true },
-        attributes: ["model"],
-        raw: true,
+    const aiModelValidationError = await validateAiModelSelections(ai_settings);
+    if (aiModelValidationError) {
+      return res.status(400).json({
+        message: aiModelValidationError,
       });
-      const validModels = new Set(activeModels.map((m) => m.model));
-
-      if (
-        ai_settings.input_model &&
-        !validModels.has(ai_settings.input_model)
-      ) {
-        return res.status(400).json({
-          message: `Invalid input model: ${ai_settings.input_model}. Please select an active model.`,
-        });
-      }
-      if (
-        ai_settings.output_model &&
-        !validModels.has(ai_settings.output_model)
-      ) {
-        return res.status(400).json({
-          message: `Invalid output model: ${ai_settings.output_model}. Please select an active model.`,
-        });
-      }
     }
 
     // Validate timezone if provided

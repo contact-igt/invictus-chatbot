@@ -20,7 +20,9 @@ import {
 
 const router = express.Router();
 
-const managerRoles = ["tenant_admin", "staff", "doctor"];
+// [DOCTOR ROLE UNWIRED – 2026-05-13] "doctor" removed from manager access.
+// Was: ["tenant_admin", "staff", "doctor"]
+const managerRoles = ["tenant_admin", "staff" /* , "doctor" */];
 
 // GET  /faq-reviews
 router.get(

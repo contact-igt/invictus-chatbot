@@ -288,7 +288,7 @@ export const setTenantPasswordController = async (req, res) => {
 
     // Fetch full user details (similar to login)
     const user = await findTenantUserByIdService(invitation.tenant_user_id);
-    const userDetails = { ...user };
+    const userDetails = { ...user, user_type: "tenant" };
     delete userDetails.password_hash;
 
     // Fetch tenant details for company name and webhook status

@@ -61,9 +61,7 @@ export const TenantUsersTable = (sequelize, Sequelize) => {
       role: {
         type: Sequelize.ENUM(
           "tenant_admin",
-          "doctor",
-          "staff",
-          "agent"
+          "staff"
         ),
         allowNull: false,
       },

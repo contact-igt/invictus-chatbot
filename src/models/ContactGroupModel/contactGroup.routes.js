@@ -21,7 +21,8 @@ import {
 
 const router = express.Router();
 
-const tenantRoles = ["tenant_admin", "doctor", "staff", "agent"];
+// [DOCTOR ROLE UNWIRED – 2026-05-13] "doctor" removed from all tenant route access.
+const tenantRoles = ["tenant_admin", /* "doctor", */ "staff"];
 
 // Create a new group
 router.post(

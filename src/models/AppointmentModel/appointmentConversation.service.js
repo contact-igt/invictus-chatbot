@@ -1,6 +1,5 @@
 import { randomUUID } from "crypto";
 import db from "../../database/index.js";
-import { callAI } from "../../utils/ai/coreAi.js";
 import {
   createAppointmentService,
   checkAvailabilityService,
@@ -9,15 +8,65 @@ import {
   deleteAppointmentService,
   getActiveAppointmentsByContactService,
 } from "./appointment.service.js";
+import { getDoctorListService } from "../DoctorModel/doctor.service.js";
+import { getIO } from "../../middlewares/socket/socket.js";
 import {
-  getDoctorListService,
-  findDoctorByNameService,
-} from "../DoctorModel/doctor.service.js";
-import { getIO } from "../../middlewares/socket/socket.js"; // NEW
+  buildSlotSelectionContext,
+  getSlotSelectionRows,
+  resolveSlotSelection,
+} from "./appointmentSlotGrouping.service.js";
 
-const SESSION_TTL_MS = 15 * 60 * 1000; // 15 minutes
+export {
+  buildSlotSelectionContext,
+  getSlotSelectionRows,
+  normalizeAppointmentSlots,
+  resolveSlotSelection,
+} from "./appointmentSlotGrouping.service.js";
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+const SESSION_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
+// ─── Named step constants ────────────────────────────────────────────────────
+export const STEPS = {
+  COLLECT_NAME:     "COLLECT_NAME",
+  COLLECT_EMAIL:    "COLLECT_EMAIL",
+  SELECT_DOCTOR:    "SELECT_DOCTOR",
+  SELECT_DATE:      "SELECT_DATE",
+  SELECT_TIME:      "SELECT_TIME",
+  COLLECT_REASON:   "COLLECT_REASON",
+  CONFIRM_BOOKING:  "CONFIRM_BOOKING",
+  EDIT_MENU:        "EDIT_MENU",
+  EDIT_FIELD:       "EDIT_FIELD",
+  BOOKING_COMPLETE: "BOOKING_COMPLETE",
+};
+
+// Maps edit button IDs → the state they re-enter
+const EDIT_TARGET_TO_STEP = {
+  edit_name:   STEPS.COLLECT_NAME,
+  edit_email:  STEPS.COLLECT_EMAIL,
+  edit_doctor: STEPS.SELECT_DOCTOR,
+  edit_date:   STEPS.SELECT_DATE,
+  edit_time:   STEPS.SELECT_TIME,
+  edit_reason: STEPS.COLLECT_REASON,
+};
+
+// Words that cancel the active booking session immediately
+const QUIT_TRIGGERS = new Set([
+  "quit",
+  "exit",
+  "stop",
+  "cancel",
+  "leave",
+  "no need",
+  "not now",
+  "cancel appointment",
+  "stop booking",
+  "end booking",
+  "nevermind",
+  "never mind",
+  "abort",
+]);
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
 
 const formatDateLong = (dateStr) => {
   if (!dateStr) return "—";
@@ -33,83 +82,42 @@ const formatDateLong = (dateStr) => {
   }
 };
 
-const resolveAbsoluteDate = (raw) => {
-  if (!raw) return null;
-  const today = new Date();
-  const lower = raw.toLowerCase().trim();
-
-  if (lower === "today") return today.toISOString().slice(0, 10);
-  if (lower === "tomorrow") {
-    const d = new Date(today);
-    d.setDate(d.getDate() + 1);
-    return d.toISOString().slice(0, 10);
-  }
-  // "in N days"
-  const inDays = lower.match(/^in\s+(\d+)\s+days?$/);
-  if (inDays) {
-    const d = new Date(today);
-    d.setDate(d.getDate() + parseInt(inDays[1], 10));
-    return d.toISOString().slice(0, 10);
-  }
-  // "next Monday/Tuesday/..."
-  const dayNames = [
-    "sunday",
-    "monday",
-    "tuesday",
-    "wednesday",
-    "thursday",
-    "friday",
-    "saturday",
-  ];
-  const nextDay = lower.match(/^next\s+(\w+)$/);
-  if (nextDay) {
-    const target = dayNames.indexOf(nextDay[1]);
-    if (target !== -1) {
-      const d = new Date(today);
-      const diff = (target - d.getDay() + 7) % 7 || 7;
-      d.setDate(d.getDate() + diff);
-      return d.toISOString().slice(0, 10);
-    }
-  }
-  // Already a YYYY-MM-DD or parseable date
-  const parsed = new Date(raw);
-  if (!isNaN(parsed.getTime())) return parsed.toISOString().slice(0, 10);
-  return null;
-};
-
-const normalizeContactNumberTo10Digits = (value) => {
-  // NEW
-  const digits = value ? String(value).replace(/\D/g, "") : ""; // NEW
-  return digits.length > 10 ? digits.slice(-10) : digits; // NEW
-}; // NEW
-
 const splitPhoneNumber = (value, fallbackCountryCode = "+91") => {
   const digits = value ? String(value).replace(/\D/g, "") : "";
   let contactNumber = digits;
   let countryCode = fallbackCountryCode || "+91";
-
   if (digits.length > 10) {
     const inferredCountryCode = digits.slice(0, -10);
     contactNumber = digits.slice(-10);
-    if (inferredCountryCode) {
-      countryCode = `+${inferredCountryCode}`;
-    }
+    if (inferredCountryCode) countryCode = `+${inferredCountryCode}`;
   }
-
   if (countryCode && !countryCode.startsWith("+")) {
     countryCode = `+${String(countryCode).replace(/\D/g, "")}`;
   }
-
   return { contactNumber, countryCode };
 };
 
-const getOwnedAppointmentForContact = async (
-  tenantId,
-  contactId,
-  appointmentId,
-) => {
-  if (!appointmentId) return null;
+const readSessionDraft = (session) => {
+  const draft = session?.draft_json;
+  if (!draft) return {};
+  if (typeof draft === "string") {
+    try {
+      return JSON.parse(draft) || {};
+    } catch {
+      return {};
+    }
+  }
+  return typeof draft === "object" ? { ...draft } : {};
+};
 
+const clearSlotSelectionDraft = (session) => {
+  const draft = readSessionDraft(session);
+  delete draft.slotSelection;
+  return draft;
+};
+
+const getOwnedAppointmentForContact = async (tenantId, contactId, appointmentId) => {
+  if (!appointmentId) return null;
   return db.Appointments.findOne({
     where: {
       tenant_id: tenantId,
@@ -117,44 +125,49 @@ const getOwnedAppointmentForContact = async (
       appointment_id: appointmentId,
       is_deleted: false,
     },
-    include: [
-      {
-        model: db.Doctors,
-        as: "doctor",
-        attributes: ["doctor_id", "name", "title", "status"],
-      },
-    ],
+    include: [{
+      model: db.Doctors,
+      as: "doctor",
+      attributes: ["doctor_id", "name", "title", "status"],
+    }],
   });
 };
 
-// ─── 4A. getOrCreateSession ───────────────────────────────────────────────────
-// Returns { session, wasExpired } so callers can inform the user their session expired.
-export const getOrCreateSession = async (
-  contactId,
-  tenantId,
-  flowType = "book",
-) => {
+// Generate 7 date buttons: today+1 … today+7, always fresh (never same-day)
+const generateDateButtons = () => {
+  const today = new Date();
+  const buttons = [];
+  for (let i = 1; i <= 7; i++) {
+    const d = new Date(today);
+    d.setDate(today.getDate() + i);
+    const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    const label = d.toLocaleDateString("en-IN", {
+      weekday: "long",
+      day: "numeric",
+      month: "long",
+    });
+    buttons.push({ id: `date_${iso}`, label });
+  }
+  return buttons;
+};
+
+// ─── getOrCreateSession ───────────────────────────────────────────────────────
+export const getOrCreateSession = async (contactId, tenantId, flowType = "book") => {
   const now = new Date();
 
-  // Bulk-expire ALL stale active sessions for this contact+tenant before looking for a live one
+  // Bulk-expire stale active sessions for this contact+tenant
   await db.sequelize.query(
     `UPDATE booking_sessions SET status = 'expired', updated_at = NOW()
      WHERE contact_id = ? AND tenant_id = ? AND status = 'active' AND expires_at < NOW()`,
     { replacements: [contactId, tenantId] },
   );
 
-  // Find a still-valid active session (guaranteed non-expired after bulk update above)
   const existing = await db.BookingSessions.findOne({
-    where: {
-      contact_id: contactId,
-      tenant_id: tenantId,
-      status: "active",
-    },
+    where: { contact_id: contactId, tenant_id: tenantId, status: "active" },
     order: [["updatedAt", "DESC"]],
   });
 
   if (existing) {
-    // Valid session — refresh TTL
     await existing.update({
       expires_at: new Date(now.getTime() + SESSION_TTL_MS),
       updatedAt: now,
@@ -162,22 +175,18 @@ export const getOrCreateSession = async (
     return { session: existing, wasExpired: false };
   }
 
-  // No live session found — create a fresh one
+  // Generate readable session ID (SS001, SS002, …)
   let readableSessionId = null;
   try {
     const [rows] = await db.sequelize.query(
-      `SELECT session_id
-       FROM booking_sessions
+      `SELECT session_id FROM booking_sessions
        WHERE tenant_id = ? AND session_id LIKE 'SS%'
-       ORDER BY session_id DESC
-       LIMIT 1`,
+       ORDER BY session_id DESC LIMIT 1`,
       { replacements: [tenantId] },
     );
-
     const lastId = rows?.[0]?.session_id ? String(rows[0].session_id) : null;
     const lastNum = lastId ? parseInt(lastId.replace(/^SS/i, ""), 10) : 0;
-    const nextNum =
-      Number.isFinite(lastNum) && !isNaN(lastNum) ? lastNum + 1 : 1;
+    const nextNum = Number.isFinite(lastNum) && !isNaN(lastNum) ? lastNum + 1 : 1;
     readableSessionId = `SS${String(nextNum).padStart(3, "0")}`;
   } catch {
     readableSessionId = null;
@@ -188,7 +197,7 @@ export const getOrCreateSession = async (
     tenant_id: tenantId,
     contact_id: contactId,
     flow_type: flowType,
-    current_step: "collecting_doctor",
+    current_step: STEPS.COLLECT_NAME,
     status: "active",
     expires_at: new Date(now.getTime() + SESSION_TTL_MS),
   });
@@ -196,277 +205,208 @@ export const getOrCreateSession = async (
   return { session: newSession, wasExpired: true };
 };
 
-// ─── 4B. extractAppointmentEntities ──────────────────────────────────────────
-export const extractAppointmentEntities = async (message, tenantId) => {
-  const today = new Date().toISOString().slice(0, 10);
+// ─── enterState ───────────────────────────────────────────────────────────────
+// Called when transitioning INTO a state. Renders the state's prompt / buttons.
+// This never processes user input — it only produces the outgoing message.
+const enterState = async (session, step, contact, tenantId, note = null) => {
+  const prefix = note ? `${note}\n\n` : "";
 
-  const result = await callAI({
-    messages: [
-      {
-        role: "system",
-        content: `You are an appointment information extractor.
-Today's date is ${today}.
-
-Extract appointment-related information from the user message.
-Return ONLY valid JSON with these fields (omit fields not mentioned):
-{
-  "doctor_name": "string or null",
-  "specialization": "string or null",
-  "appointment_date": "YYYY-MM-DD or null",
-  "appointment_time": "HH:MM AM/PM or null",
-  "patient_age": "number or null",
-  "reason": "string or null"
-}
-
-Date parsing rules:
-- "today" = ${today}
-- "tomorrow" = add 1 day to today
-- "next Monday/Tuesday/..." = find the next occurrence
-- "in N days" = add N days to today
-
-Return ONLY the JSON object, no explanation.`,
-      },
-      { role: "user", content: message },
-    ],
-    tenant_id: tenantId,
-    source: "utility",
-    temperature: 0,
-    responseFormat: { type: "json_object" },
+  await session.update({
+    current_step: step,
+    expires_at: new Date(Date.now() + SESSION_TTL_MS),
   });
 
-  let extracted = {};
-  try {
-    extracted = JSON.parse(result.content);
-  } catch {
-    return {};
-  }
-
-  // Clean nulls
-  Object.keys(extracted).forEach((k) => {
-    if (extracted[k] === null || extracted[k] === undefined)
-      delete extracted[k];
-  });
-
-  // Resolve relative dates to absolute YYYY-MM-DD
-  if (extracted.appointment_date) {
-    const resolved = resolveAbsoluteDate(extracted.appointment_date);
-    if (resolved) extracted.appointment_date = resolved;
-  }
-
-  // Fuzzy-match doctor by name or specialization
-  if (extracted.doctor_name || extracted.specialization) {
-    try {
-      const searchTerm = extracted.doctor_name || extracted.specialization;
-      const doctor = await findDoctorByNameService(tenantId, searchTerm);
-      if (doctor) {
-        extracted.doctor_id = doctor.doctor_id;
-        extracted.doctor_name = doctor.name;
-      } else if (extracted.specialization) {
-        // Try searching by specialization via getDoctorListService
-        const doctors = await getDoctorListService(tenantId);
-        const match = doctors.find((d) =>
-          (d.specializations || []).some((s) =>
-            s.name
-              ?.toLowerCase()
-              .includes(extracted.specialization.toLowerCase()),
-          ),
-        );
-        if (match) {
-          extracted.doctor_id = match.doctor_id;
-          extracted.doctor_name = match.name;
-        }
+  switch (step) {
+    // ── State 1: COLLECT_NAME ──────────────────────────────────────────────
+    case STEPS.COLLECT_NAME: {
+      const contactName = contact?.name || contact?.contact_name || null;
+      // Auto-skip if contact already has a name AND we are NOT re-editing it
+      if (contactName && session.edit_target !== "edit_name") {
+        await session.update({ patient_name: contactName });
+        return enterState(session, STEPS.COLLECT_EMAIL, contact, tenantId, null);
       }
-    } catch (err) {
-      console.error("[APPT-CONV] Doctor lookup failed:", err.message);
+      return {
+        success: true,
+        message: prefix + "What is the Patient name?",
+        buttonType: null,
+      };
     }
-  }
 
-  return extracted;
-};
+    // ── State 2: COLLECT_EMAIL ─────────────────────────────────────────────
+    case STEPS.COLLECT_EMAIL:
+      return {
+        success: true,
+        message: prefix + "Share your email for confirmation.",
+        buttonType: null,
+      };
 
-// ─── 4C. getMissingFields ─────────────────────────────────────────────────────
-export const getMissingFields = (session) => {
-  const required = ["doctor_id", "date", "time", "age", "reason"];
-  return required.filter((f) => !session[f]);
-};
-
-const getMissingFieldPrompt = (missingFields, session) => {
-  const firstMissingField = missingFields[0];
-
-  switch (firstMissingField) {
-    case "doctor_id":
-      return "Please choose a doctor to continue your appointment booking.";
-    case "date":
-      return session.doctor_name
-        ? `What date would you like to book with Dr. ${session.doctor_name}?`
-        : "What date would you like to book your appointment for?";
-    case "time":
-      return "What time would you prefer for the appointment?";
-    case "age":
-      return "Please share the patient's age.";
-    case "reason":
-      return "Please tell me the reason for the appointment.";
-    default:
-      return "Please share the next required appointment detail.";
-  }
-};
-
-// ─── 4E. handleCreateFlow ─────────────────────────────────────────────────────
-export const handleCreateFlow = async (
-  session,
-  message,
-  contact,
-  tenantId,
-  wasExpired = false,
-) => {
-  const expiredPrefix = wasExpired
-    ? "Your previous booking session expired. Let's start fresh! 🔄\n\n"
-    : "";
-
-  // ── Special case: doctor button tap ("doctor_DOC001") — look up by ID directly ──
-  if (String(message).startsWith("doctor_")) {
-    const doctorId = message.slice("doctor_".length);
-    try {
-      const doctors = await getDoctorListService(tenantId);
-      const matched = doctors.find((d) => d.doctor_id === doctorId);
-      if (matched) {
+    // ── State 3: SELECT_DOCTOR ─────────────────────────────────────────────
+    case STEPS.SELECT_DOCTOR: {
+      const allDoctors = await getDoctorListService(tenantId);
+      const available = (allDoctors || []).filter(
+        (d) => !d.status || d.status === "available",
+      );
+      if (!available.length) {
         await session.update({
-          doctor_id: matched.doctor_id,
-          doctor_name: matched.name,
-          current_step: "collecting_date",
-          expires_at: new Date(Date.now() + SESSION_TTL_MS),
+          status: "cancelled",
+          draft_json: clearSlotSelectionDraft(session),
         });
-
-        const today = new Date().toISOString().slice(0, 10);
-        const slotsResult = await getAvailableSlotsService(
-          tenantId,
-          matched.doctor_id,
-          today,
-        );
-        const freeSlots = slotsResult?.slots || [];
-
-        if (freeSlots.length > 0) {
-          await session.update({
-            current_step: "collecting_time",
-            date: today,
-          });
-          return {
-            success: true,
-            message:
-              expiredPrefix +
-              `Here are the available slots for Dr. ${matched.name} today:`,
-            buttonType: "slot_selection",
-            slots: freeSlots.slice(0, 3).map((t) => ({ time: t })),
-          };
-        }
-
-        await session.update({ current_step: "collecting_date" });
         return {
           success: true,
-          message:
-            expiredPrefix +
-            `Dr. ${matched.name} has no available slots today. Please tell me which date you'd prefer.`,
+          message: "It seems No Doctors available Today - Try again Later.",
           buttonType: null,
         };
       }
-    } catch (err) {
-      console.error("[CREATE-FLOW] Doctor button lookup failed:", err.message);
+      const formatted = available.slice(0, 10).map((d) => ({
+        id: `doctor_${d.doctor_id}`,
+        name: d.name,
+        specialization:
+          (d.specializations || []).map((s) => s.name).join(", ") || "General",
+      }));
+      return {
+        success: true,
+        message:
+          prefix +
+          `👨‍⚕️ *Choose Your Doctor*\n\nHere are our available specialists today.\nTap *"See Doctors"* below to browse and select:`,
+        buttonType: "doctor_list",
+        doctors: formatted,
+      };
     }
-    // Doctor ID not found — show the list so user can pick a valid one
-    return await handleListDoctors(tenantId);
-  }
 
-  // ── Special case: slot time already decoded ("09:00 AM") — skip AI extraction ──
-  const isDecodedSlot = /^\d{2}:\d{2}\s[AP]M$/.test(String(message).trim());
-  if (isDecodedSlot) {
-    await session.update({
-      time: message.trim(),
-      expires_at: new Date(Date.now() + SESSION_TTL_MS),
-    });
-    await session.reload();
-    const missingAfterSlot = getMissingFields(session);
-    if (missingAfterSlot.length > 0) {
-      await session.update({
-        current_step: `collecting_${missingAfterSlot[0]}`,
-      });
+    // ── State 4: SELECT_DATE ───────────────────────────────────────────────
+    case STEPS.SELECT_DATE: {
+      const dates = generateDateButtons();
+      const doctorNote = session.doctor_name
+        ? `📅 *Select Appointment Date*\n\nDr. ${session.doctor_name} is available on the following dates.\nTap *"Pick a Date"* below to choose:`
+        : `📅 *Select Appointment Date*\n\nChoose a convenient date for your appointment.\nTap *"Pick a Date"* below:`;
+      return {
+        success: true,
+        message: prefix + doctorNote,
+        buttonType: "date_selection",
+        doctorName: session.doctor_name || null,
+        dates,
+      };
     }
-    const missing = missingAfterSlot;
-    if (missing.length === 0) {
-      // All info collected after slot selection — show confirmation
-      const available = await checkAvailabilityService(
+
+    // ── State 5: SELECT_TIME ───────────────────────────────────────────────
+    case STEPS.SELECT_TIME: {
+      const slotsResult = await getAvailableSlotsService(
         tenantId,
         session.doctor_id,
         session.date,
-        session.time,
       );
-      if (!available) return handleSlotUnavailable(session, tenantId);
-      await session.update({
-        current_step: "confirming",
-        expires_at: new Date(Date.now() + SESSION_TTL_MS),
+      const freeSlots = slotsResult?.slots || [];
+
+      if (!freeSlots.length) {
+        // Bounce back to SELECT_DATE — doctor preserved, date + time cleared
+        await session.update({
+          date: null,
+          time: null,
+          draft_json: clearSlotSelectionDraft(session),
+        });
+        return enterState(
+          session,
+          STEPS.SELECT_DATE,
+          contact,
+          tenantId,
+          `No slots are available for ${formatDateLong(session.date)}. Please pick another date.`,
+        );
+      }
+
+      const slotSelection = buildSlotSelectionContext({
+        doctorId: session.doctor_id,
+        date: session.date,
+        slots: freeSlots,
       });
+      await session.update({
+        draft_json: {
+          ...readSessionDraft(session),
+          slotSelection,
+        },
+      });
+      const slotRows = getSlotSelectionRows(slotSelection);
+
       return {
         success: true,
-        message: formatConfirmationMessage(session, contact),
-        buttonType: "confirmation",
+        message: prefix + slotRows.message,
+        buttonType: "slot_selection",
+        doctorName: session.doctor_name || null,
+        dateLabel: formatDateLong(session.date),
+        slotSelectionMode: slotRows.mode,
+        slotSectionTitle: slotRows.sectionTitle,
+        slots: slotRows.rows,
       };
     }
-    return {
-      success: true,
-      message: getMissingFieldPrompt(missing, session),
-      buttonType: null,
-    };
-  }
 
-  // Step 1 — extract entities from message
-  const extracted = await extractAppointmentEntities(message, tenantId);
+    // ── State 6: COLLECT_REASON ────────────────────────────────────────────
+    case STEPS.COLLECT_REASON:
+      return {
+        success: true,
+        message: prefix + "What is the reason for your visit?",
+        buttonType: null,
+      };
 
-  // Step 2 — merge into session fields
-  const updates = {};
-  if (extracted.doctor_id) updates.doctor_id = extracted.doctor_id;
-  if (extracted.doctor_name) updates.doctor_name = extracted.doctor_name;
-  if (extracted.appointment_date) updates.date = extracted.appointment_date;
-  if (extracted.appointment_time) updates.time = extracted.appointment_time;
-  if (extracted.patient_age) updates.age = extracted.patient_age;
-  if (extracted.reason) updates.reason = extracted.reason;
-
-  // Patient name / contact number from the contact record
-  if (!session.patient_name && contact?.name)
-    updates.patient_name = contact.name;
-
-  // Refresh TTL on every update
-  updates.expires_at = new Date(Date.now() + SESSION_TTL_MS);
-  updates.flow_type = "book";
-
-  if (Object.keys(updates).length > 0) {
-    await session.update(updates);
-    await session.reload();
-  }
-
-  // Step 3 — check what is still missing
-  const missing = getMissingFields(session);
-
-  // Step 4a — still missing fields → ask for next one
-  if (missing.length > 0) {
-    // If doctor is missing and we got no match, show doctor list
-    if (missing.includes("doctor_id")) {
-      const listResult = await handleListDoctors(tenantId);
-      if (expiredPrefix)
-        listResult.message = expiredPrefix + listResult.message;
-      return listResult;
+    // ── State 7: CONFIRM_BOOKING ───────────────────────────────────────────
+    case STEPS.CONFIRM_BOOKING: {
+      await session.reload();
+      return {
+        success: true,
+        // The controller's buildConfirmPayload uses session directly for the
+        // rich interactive template.  Plain message is kept as fallback text.
+        message: prefix + "Please confirm or edit your appointment booking.",
+        buttonType: "confirm_or_edit",
+        session,  // pass full session for rich template builder
+      };
     }
 
-    await session.update({
-      current_step: `collecting_${missing[0]}`,
-      expires_at: new Date(Date.now() + SESSION_TTL_MS),
-    });
-    return {
-      success: true,
-      message: expiredPrefix + getMissingFieldPrompt(missing, session),
-      buttonType: null,
-    };
-  }
+    // ── State 8: EDIT_MENU ─────────────────────────────────────────────────
+    case STEPS.EDIT_MENU:
+      return {
+        success: true,
+        message: prefix + "Which detail would you like to change?",
+        buttonType: "edit_menu",
+        editOptions: [
+          { id: "edit_name",   label: "Name" },
+          { id: "edit_email",  label: "Email" },
+          { id: "edit_doctor", label: "Doctor" },
+          { id: "edit_date",   label: "Date" },
+          { id: "edit_time",   label: "Time" },
+          { id: "edit_reason", label: "Reason" },
+        ],
+      };
 
-  // Step 4b — all fields collected → check availability
+    // ── State 9: EDIT_FIELD ────────────────────────────────────────────────
+    case STEPS.EDIT_FIELD: {
+      const target = session.edit_target;
+      const targetStep = EDIT_TARGET_TO_STEP[target];
+      if (!targetStep) {
+        return enterState(session, STEPS.CONFIRM_BOOKING, contact, tenantId, null);
+      }
+      // Editing date must also clear time (old time may not exist on new date)
+      if (target === "edit_date") {
+        await session.update({
+          time: null,
+          draft_json: clearSlotSelectionDraft(session),
+        });
+      }
+      await session.update({ previous_step: STEPS.CONFIRM_BOOKING });
+      return enterState(session, targetStep, contact, tenantId, null);
+    }
+
+    default:
+      return {
+        success: true,
+        message: "How can I help you with your appointment today?",
+        buttonType: "book_prompt",
+      };
+  }
+};
+
+// ─── _executeBooking ──────────────────────────────────────────────────────────
+// Final availability re-check + createAppointmentService inside transaction.
+// Called from handleConfirmation (button tap) and handleMessage (free-text "yes").
+const _executeBooking = async (session, contact, tenantId) => {
+  // Race-condition guard: re-verify slot is still free
   const available = await checkAvailabilityService(
     tenantId,
     session.doctor_id,
@@ -475,427 +415,378 @@ export const handleCreateFlow = async (
   );
 
   if (!available) {
-    return await handleSlotUnavailable(session, tenantId);
+    await session.update({
+      time: null,
+      draft_json: clearSlotSelectionDraft(session),
+    });
+    return enterState(
+      session,
+      STEPS.SELECT_TIME,
+      contact,
+      tenantId,
+      "That slot was just taken by someone else. Please pick another time.",
+    );
   }
 
-  // Slot is free → show confirmation
-  await session.update({
-    current_step: "confirming",
-    expires_at: new Date(Date.now() + SESSION_TTL_MS),
-  });
-
-  return {
-    success: true,
-    message: formatConfirmationMessage(session, contact),
-    buttonType: "confirmation",
-  };
-};
-
-// ─── 4F. handleViewFlow ───────────────────────────────────────────────────────
-export const handleViewFlow = async (contact, tenantId) => {
-  const appointments = await getActiveAppointmentsByContactService(
-    tenantId,
-    contact.contact_id,
+  const phone = String(contact.phone || contact.phone_number || "");
+  const { contactNumber, countryCode } = splitPhoneNumber(
+    phone,
+    contact.country_code || "+91",
   );
 
-  if (!appointments || appointments.length === 0) {
+  try {
+    const created = await createAppointmentService({
+      tenant_id: tenantId,
+      doctor_id: session.doctor_id || null,
+      patient_name: session.patient_name || contact.name || null,
+      contact_number: contactNumber,
+      country_code: countryCode,
+      appointment_date: session.date,
+      appointment_time: session.time,
+      age: session.age || null,
+      notes: session.reason || null,
+      contact_id: contact.contact_id,
+      email: session.patient_email || session.email || contact.email || null,
+    });
+
+    try {
+      const io = getIO();
+      io.to(`tenant-${tenantId}`).emit("appointment:created", {
+        appointment_id: created.appointment_id,
+        patient_name: created.patient_name,
+        doctor_name: session.doctor_name || null,
+        appointment_date: created.appointment_date || session.date,
+        appointment_time: created.appointment_time || session.time,
+        token_number: created.token_number,
+      });
+    } catch { /* socket not critical */ }
+
+    await session.update({
+      status: "completed",
+      draft_json: clearSlotSelectionDraft(session),
+    });
+
     return {
       success: true,
       message:
-        "You have no upcoming appointments.\n\nWould you like to book one?",
-      buttonType: "book_prompt",
+        `✅ *Appointment Confirmed!*\n\n` +
+        `*Patient:* ${session.patient_name || contact.name || "—"}\n` +
+        `*Doctor:* Dr. ${session.doctor_name || "—"}\n` +
+        `*Date:* ${formatDateLong(session.date)}\n` +
+        `*Time:* ${session.time}\n` +
+        `*Token:* #${created.token_number}\n\n` +
+        `See you soon! 🏥`,
+      buttonType: "post_booking",
+      tokenNumber: created.token_number,
+    };
+  } catch (err) {
+    console.error("[APPT-CONV] _executeBooking error:", err.message);
+    await session.update({ current_step: STEPS.CONFIRM_BOOKING });
+    return {
+      success: false,
+      message: `Sorry, there was an issue: ${err.message}\n\nPlease try again.`,
+      buttonType: "confirm_or_edit",
     };
   }
-
-  const lines = appointments.map((a, i) => {
-    const doc = a.doctor?.name || "No doctor assigned";
-    const spec = a.doctor?.title || "";
-    const dateStr = formatDateLong(a.appointment_date);
-    return (
-      `*${i + 1}. Dr. ${doc}*${spec ? ` (${spec})` : ""}\n` +
-      `   Date: ${dateStr}\n` +
-      `   Time: ${a.appointment_time}\n` +
-      `   Token: #${a.token_number || "—"}\n` +
-      `   Status: ${a.status}`
-    );
-  });
-
-  return {
-    success: true,
-    appointments,
-    message: `*Your Upcoming Appointments*\n\n${lines.join("\n\n")}`,
-    buttonType: "appointment_actions",
-  };
 };
 
-// ─── 4G. handleCancelFlow ─────────────────────────────────────────────────────
-export const handleCancelFlow = async (
-  session,
-  message,
-  contact,
-  tenantId,
-  wasExpired = false,
-) => {
-  // If message is a button ID like "cancel_AP001", target that appointment directly
-  const directCancelId = String(message).startsWith("cancel_")
-    ? message.slice("cancel_".length)
-    : null;
-
-  const appointments = await getActiveAppointmentsByContactService(
-    tenantId,
-    contact.contact_id,
-  );
-
-  if (!appointments || appointments.length === 0) {
+// ─── handleMessage ────────────────────────────────────────────────────────────
+// Main entry for new booking flow. Called by handleAppointmentIntent for
+// create_appointment / APPOINTMENT_ACTION intents and active-session intercept.
+export const handleMessage = async (message, contact, tenantId) => {
+  if (!message || typeof message !== "string") {
     return {
-      success: true,
-      message: "You have no active appointments to cancel.",
+      success: false,
+      message: "Sorry, I can only handle text messages. Please type your request.",
       buttonType: null,
     };
   }
 
-  let targetAppointment = null;
+  const { session, wasExpired } = await getOrCreateSession(
+    contact.contact_id,
+    tenantId,
+    "book",
+  );
 
-  // Direct target from button ID takes priority
-  if (directCancelId) {
-    targetAppointment =
-      appointments.find((a) => a.appointment_id === directCancelId) || null;
+  const step = session.current_step;
+  const msg = message.trim();
+
+  // ── Fresh session: the trigger message is an INTENT, not data input ──────
+  // Never consume the booking-intent phrase as a field value.
+  // Just enter the first state and wait for the user's real answer.
+  if (wasExpired) {
+    return enterState(session, STEPS.COLLECT_NAME, contact, tenantId, null);
   }
 
-  if (!targetAppointment && appointments.length === 1) {
-    targetAppointment = appointments[0];
-  } else if (!targetAppointment) {
-    // Use AI to identify which appointment the user is referring to
-    const apptContext = appointments.map((a, i) => ({
-      index: i + 1,
-      appointment_id: a.appointment_id,
-      doctor: a.doctor?.name,
-      date: a.appointment_date,
-      time: a.appointment_time,
-    }));
-
-    const matchResult = await callAI({
-      messages: [
-        {
-          role: "system",
-          content: `The user wants to cancel an appointment.
-Available appointments: ${JSON.stringify(apptContext)}
-User message: "${message}"
-Return JSON: { "matched_index": number or null, "confidence": 0.0-1.0 }
-matched_index is the 1-based index from the list, or null if unclear.`,
-        },
-      ],
-      tenant_id: tenantId,
-      source: "utility",
-      temperature: 0,
-      responseFormat: { type: "json_object" },
+  // ── QUIT check — runs before any state routing ────────────────────────────
+  // If the user types a quit word, cancel the session and end the flow.
+  const msgLower = msg.toLowerCase();
+  if (QUIT_TRIGGERS.has(msgLower)) {
+    await session.update({
+      status: "cancelled",
+      draft_json: clearSlotSelectionDraft(session),
     });
+    return {
+      success: true,
+      message:
+        "No problem! Your appointment booking has been cancelled.\nFeel free to start again anytime. 💙",
+      buttonType: null,
+    };
+  }
 
-    try {
-      const match = JSON.parse(matchResult.content);
-      if (match.confidence >= 0.8 && match.matched_index) {
-        targetAppointment = appointments[match.matched_index - 1];
-      }
-    } catch {
-      /* no match */
+  // ── Global rule: "edit" or "change" free-text at any active state → EDIT_MENU
+  if (
+    (msgLower === "edit" || msgLower === "change") &&
+    step !== STEPS.BOOKING_COMPLETE &&
+    step !== STEPS.EDIT_MENU
+  ) {
+    await session.update({ current_step: STEPS.EDIT_MENU });
+    return enterState(session, STEPS.EDIT_MENU, contact, tenantId, null);
+  }
+
+  // ── Pre-route: edit button at any non-terminal state ────────────────────
+  const isEditButton = Object.prototype.hasOwnProperty.call(EDIT_TARGET_TO_STEP, msg);
+  const isTerminalStep = [
+    STEPS.EDIT_MENU, STEPS.EDIT_FIELD, STEPS.CONFIRM_BOOKING, STEPS.BOOKING_COMPLETE,
+  ].includes(step);
+  if (isEditButton && !isTerminalStep) {
+    await session.update({ edit_target: msg, previous_step: STEPS.CONFIRM_BOOKING });
+    return enterState(session, STEPS.EDIT_FIELD, contact, tenantId, null);
+  }
+
+  // ── State dispatch ────────────────────────────────────────────────────────
+
+  // COLLECT_NAME
+  if (step === STEPS.COLLECT_NAME) {
+    if (!msg) {
+      return { success: true, message: "Please enter your name.", buttonType: null };
     }
+    await session.update({ patient_name: msg });
+    if (session.previous_step === STEPS.CONFIRM_BOOKING) {
+      await session.update({ edit_target: null, previous_step: null });
+      return enterState(session, STEPS.CONFIRM_BOOKING, contact, tenantId, null);
+    }
+    return enterState(session, STEPS.COLLECT_EMAIL, contact, tenantId, null);
+  }
 
-    if (!targetAppointment) {
-      // Show numbered list and ask user to pick
-      const lines = appointments.map(
-        (a, i) =>
-          `${i + 1}. Dr. ${a.doctor?.name || "—"} — ${formatDateLong(a.appointment_date)} at ${a.appointment_time}`,
-      );
+  // COLLECT_EMAIL
+  if (step === STEPS.COLLECT_EMAIL) {
+    const email = msg.toLowerCase();
+    const valid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+    if (!valid) {
       return {
         success: true,
-        message: `Which appointment would you like to cancel?\n\n${lines.join("\n")}`,
+        message: "That doesn't look like a valid email. Please try again.",
         buttonType: null,
       };
     }
+    await session.update({ patient_email: email });
+    if (session.previous_step === STEPS.CONFIRM_BOOKING) {
+      await session.update({ edit_target: null, previous_step: null });
+      return enterState(session, STEPS.CONFIRM_BOOKING, contact, tenantId, null);
+    }
+    return enterState(session, STEPS.SELECT_DOCTOR, contact, tenantId, null);
   }
 
-  // Store target in session and show confirmation
-  await session.update({
-    appointment_id: targetAppointment.appointment_id,
-    flow_type: "cancel",
-    current_step: "confirming",
-    expires_at: new Date(Date.now() + SESSION_TTL_MS),
-  });
+  // SELECT_DOCTOR — accepts only button taps: "doctor_<id>"
+  if (step === STEPS.SELECT_DOCTOR) {
+    if (msg.startsWith("doctor_")) {
+      const doctorId = msg.slice("doctor_".length);
+      const doctors = await getDoctorListService(tenantId);
+      const matched = doctors.find((d) => d.doctor_id === doctorId);
+      if (matched) {
+        const specialization =
+          (matched.specializations || []).map((s) => s.name).join(", ") || "General";
+        await session.update({
+          doctor_id: matched.doctor_id,
+          doctor_name: matched.name,
+          doctor_specialization: specialization,
+          draft_json: clearSlotSelectionDraft(session),
+        });
+        if (session.previous_step === STEPS.CONFIRM_BOOKING) {
+          await session.update({ edit_target: null, previous_step: null });
+          return enterState(session, STEPS.CONFIRM_BOOKING, contact, tenantId, null);
+        }
+        return enterState(session, STEPS.SELECT_DATE, contact, tenantId, null);
+      }
+    }
+    // Invalid / free-text in a button-only state → fallback to query mode
+    return {
+      success: true,
+      fallback: true,
+      resumeStep: STEPS.SELECT_DOCTOR,
+      buttonType: null,
+      message: null,
+    };
+  }
 
-  const dateStr = formatDateLong(targetAppointment.appointment_date);
-  return {
-    success: true,
-    message:
-      `Are you sure you want to cancel your appointment?\n\n` +
-      `*Doctor:* Dr. ${targetAppointment.doctor?.name || "—"}\n` +
-      `*Date:* ${dateStr}\n` +
-      `*Time:* ${targetAppointment.appointment_time}`,
-    buttonType: "cancel_confirmation",
-  };
-};
+  // SELECT_DATE — accepts only button taps: "date_YYYY-MM-DD"
+  if (step === STEPS.SELECT_DATE) {
+    if (msg.startsWith("date_")) {
+      const dateStr = msg.slice("date_".length);
+      if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+        await session.update({
+          date: dateStr,
+          time: null,
+          draft_json: clearSlotSelectionDraft(session),
+        });
+        // Always move to SELECT_TIME after date selection
+        // (even during "edit date" — time needs to be re-chosen for the new date)
+        return enterState(session, STEPS.SELECT_TIME, contact, tenantId, null);
+      }
+    }
+    // Invalid / free-text in a button-only state → fallback to query mode
+    return {
+      success: true,
+      fallback: true,
+      resumeStep: STEPS.SELECT_DATE,
+      buttonType: null,
+      message: null,
+    };
+  }
 
-// ─── 4H. handleSlotUnavailable ────────────────────────────────────────────────
-export const handleSlotUnavailable = async (session, tenantId) => {
-  try {
-    const slotsResult = await getAvailableSlotsService(
-      tenantId,
-      session.doctor_id,
-      session.date,
-    );
+  // SELECT_TIME — accepts grouped slot ranges, final SLOT_* rows, legacy
+  // "slot_HH-MM-AM" buttons, or already-decoded "HH:MM AM" text.
+  if (step === STEPS.SELECT_TIME) {
+    const draft = readSessionDraft(session);
+    const slotSelection = draft.slotSelection || null;
+    const resolvedSlot = resolveSlotSelection(msg, slotSelection);
 
-    const freeSlots = slotsResult?.slots || [];
-
-    if (freeSlots.length === 0) {
+    if (resolvedSlot?.type === "group") {
+      const selectedGroupId = resolvedSlot.group.id;
+      const nextSlotSelection = {
+        ...slotSelection,
+        selectedGroupId,
+      };
       await session.update({
-        date: null,
-        time: null,
-        current_step: "collecting_date",
+        draft_json: {
+          ...draft,
+          slotSelection: nextSlotSelection,
+        },
         expires_at: new Date(Date.now() + SESSION_TTL_MS),
+      });
+      const slotRows = getSlotSelectionRows(nextSlotSelection, selectedGroupId);
+      return {
+        success: true,
+        message: slotRows.message,
+        buttonType: "slot_selection",
+        doctorName: session.doctor_name || null,
+        dateLabel: formatDateLong(session.date),
+        slotSelectionMode: slotRows.mode,
+        slotSectionTitle: slotRows.sectionTitle,
+        slots: slotRows.rows,
+      };
+    }
+
+    const timeStr = resolvedSlot?.type === "slot" ? resolvedSlot.slot.time : null;
+    if (timeStr) {
+      await session.update({
+        time: timeStr,
+        draft_json: clearSlotSelectionDraft(session),
+      });
+      if (session.previous_step === STEPS.CONFIRM_BOOKING) {
+        await session.update({ edit_target: null, previous_step: null });
+        return enterState(session, STEPS.CONFIRM_BOOKING, contact, tenantId, null);
+      }
+      return enterState(session, STEPS.COLLECT_REASON, contact, tenantId, null);
+    }
+    // Invalid / free-text in a button-only state → fallback to query mode
+    return {
+      success: true,
+      fallback: true,
+      resumeStep: STEPS.SELECT_TIME,
+      buttonType: null,
+      message: null,
+    };
+  }
+
+  // COLLECT_REASON — free text, min 3 chars
+  if (step === STEPS.COLLECT_REASON) {
+    if (msg.length < 3) {
+      return {
+        success: true,
+        message: "Please describe the reason for your visit (at least 3 characters).",
+        buttonType: null,
+      };
+    }
+    await session.update({ reason: msg });
+    if (session.previous_step === STEPS.CONFIRM_BOOKING) {
+      await session.update({ edit_target: null, previous_step: null });
+      return enterState(session, STEPS.CONFIRM_BOOKING, contact, tenantId, null);
+    }
+    return enterState(session, STEPS.CONFIRM_BOOKING, contact, tenantId, null);
+  }
+
+  // CONFIRM_BOOKING — free-text yes/no (buttons handled by handleConfirmation)
+  if (step === STEPS.CONFIRM_BOOKING) {
+    const raw = msg.toLowerCase();
+    if (/^(yes|y|confirm|ok|sure|book|proceed)/.test(raw) || raw === "confirm_booking") {
+      await session.update({ current_step: "processing" });
+      return _executeBooking(session, contact, tenantId);
+    }
+    if (/^(no|n|cancel|nope|stop)/.test(raw) || raw === "confirm_no") {
+      await session.update({
+        status: "cancelled",
+        draft_json: clearSlotSelectionDraft(session),
       });
       return {
         success: true,
-        message:
-          "No slots available on that date. What other date would you like to try?",
+        message: "No problem, I've cancelled that. Let me know if you need anything else.",
         buttonType: null,
       };
     }
+    return enterState(session, STEPS.CONFIRM_BOOKING, contact, tenantId, null);
+  }
 
-    await session.update({
-      time: null,
-      current_step: "collecting_time",
-      expires_at: new Date(Date.now() + SESSION_TTL_MS),
-    });
-
-    const nextThree = freeSlots.slice(0, 3).map((t) => ({ time: t }));
+  // EDIT_MENU — decode edit option button
+  if (step === STEPS.EDIT_MENU) {
+    if (EDIT_TARGET_TO_STEP[msg]) {
+      await session.update({ edit_target: msg, previous_step: STEPS.CONFIRM_BOOKING });
+      return enterState(session, STEPS.EDIT_FIELD, contact, tenantId, null);
+    }
+    // Free-text in EDIT_MENU → answer question, re-send menu
     return {
       success: true,
-      message: "That slot is taken. Here are the next available times:",
-      buttonType: "slot_selection",
-      slots: nextThree,
-    };
-  } catch (err) {
-    console.error("[APPT-CONV] handleSlotUnavailable error:", err.message);
-    return {
-      success: true,
-      message: "That slot is unavailable. Please try a different time.",
+      fallback: true,
+      resumeStep: STEPS.EDIT_MENU,
       buttonType: null,
+      message: null,
     };
   }
+
+  // ── Resume marker: controller re-sends current state prompt after answering
+  //    a side question (fallback-to-query mode).  Re-enter current state cleanly.
+  if (msg.startsWith("__resume_")) {
+    return enterState(session, step, contact, tenantId, null);
+  }
+
+  // Fallback — re-enter current state
+  return enterState(session, step, contact, tenantId, null);
 };
 
-// ─── 4I. handleRescheduleFlow ─────────────────────────────────────────────────
-export const handleRescheduleFlow = async (
-  session,
-  message,
-  contact,
-  tenantId,
-  wasExpired = false,
-) => {
-  // If message is a button ID like "reschedule_AP001", target that appointment directly
-  const directRescheduleId = String(message).startsWith("reschedule_")
-    ? message.slice("reschedule_".length)
-    : null;
-
-  const appointments = await getActiveAppointmentsByContactService(
-    tenantId,
-    contact.contact_id,
-  );
-
-  if (!appointments || appointments.length === 0) {
-    return {
-      success: true,
-      message: "You have no active appointments to reschedule.",
-      buttonType: null,
-    };
-  }
-
-  let targetAppointment = null;
-
-  // Direct target from button ID takes priority
-  if (directRescheduleId) {
-    targetAppointment =
-      appointments.find((a) => a.appointment_id === directRescheduleId) || null;
-  }
-
-  if (!targetAppointment && appointments.length === 1) {
-    targetAppointment = appointments[0];
-  } else if (!targetAppointment) {
-    const apptContext = appointments.map((a, i) => ({
-      index: i + 1,
-      appointment_id: a.appointment_id,
-      doctor: a.doctor?.name,
-      date: a.appointment_date,
-      time: a.appointment_time,
-    }));
-
-    const matchResult = await callAI({
-      messages: [
-        {
-          role: "system",
-          content: `The user wants to reschedule an appointment.
-Available appointments: ${JSON.stringify(apptContext)}
-User message: "${message}"
-Return JSON: { "matched_index": number or null, "confidence": 0.0-1.0 }`,
-        },
-      ],
-      tenant_id: tenantId,
-      source: "utility",
-      temperature: 0,
-      responseFormat: { type: "json_object" },
-    });
-
-    try {
-      const match = JSON.parse(matchResult.content);
-      if (match.confidence >= 0.8 && match.matched_index) {
-        targetAppointment = appointments[match.matched_index - 1];
-      }
-    } catch {
-      /* no match */
-    }
-
-    if (!targetAppointment) {
-      const lines = appointments.map(
-        (a, i) =>
-          `${i + 1}. Dr. ${a.doctor?.name || "—"} — ${formatDateLong(a.appointment_date)} at ${a.appointment_time}`,
-      );
-      return {
-        success: true,
-        message: `Which appointment would you like to reschedule?\n\n${lines.join("\n")}`,
-        buttonType: null,
-      };
-    }
-  }
-
-  // Extract new date/time from the message
-  const extracted = await extractAppointmentEntities(message, tenantId);
-  const newDate = extracted.appointment_date || null;
-  const newTime = extracted.appointment_time || null;
-  const requestedDoctorId = extracted.doctor_id || targetAppointment.doctor_id;
-  const requestedDoctorName =
-    extracted.doctor_name || targetAppointment.doctor?.name;
-
-  if (requestedDoctorId !== targetAppointment.doctor_id) {
-    const requestedDoctor = await db.Doctors.findOne({
-      where: {
-        tenant_id: tenantId,
-        doctor_id: requestedDoctorId,
-        is_deleted: false,
-      },
-      attributes: ["doctor_id", "name", "status"],
-    });
-
-    if (!requestedDoctor) {
-      const listResult = await handleListDoctors(tenantId);
-      if (listResult?.success) {
-        listResult.message =
-          "I could not find that doctor. Please choose a doctor from the list.";
-      }
-      return listResult;
-    }
-
-    if (requestedDoctor.status !== "available") {
-      return {
-        success: true,
-        message: `Dr. ${requestedDoctor.name} is currently unavailable. Please choose another doctor or time.`,
-        buttonType: null,
-      };
-    }
-  }
-
-  if (!newDate || !newTime) {
-    // Store the target and ask for new time
-    await session.update({
-      appointment_id: targetAppointment.appointment_id,
-      doctor_id: requestedDoctorId,
-      doctor_name: requestedDoctorName,
-      flow_type: "edit",
-      current_step: "collecting_date",
-      expires_at: new Date(Date.now() + SESSION_TTL_MS),
-    });
-    return {
-      success: true,
-      message: `Sure, I can reschedule your appointment with Dr. ${targetAppointment.doctor?.name || "your doctor"}.\n\nWhat new date and time would you prefer?`,
-      buttonType: null,
-    };
-  }
-
-  // Check availability for the new slot
-  const available = await checkAvailabilityService(
-    tenantId,
-    requestedDoctorId,
-    newDate,
-    newTime,
-    targetAppointment.appointment_id,
-  );
-
-  if (!available) {
-    await session.update({
-      appointment_id: targetAppointment.appointment_id,
-      doctor_id: requestedDoctorId,
-      doctor_name: requestedDoctorName,
-      date: newDate,
-      flow_type: "edit",
-      current_step: "collecting_time",
-      expires_at: new Date(Date.now() + SESSION_TTL_MS),
-    });
-    await session.reload();
-    return handleSlotUnavailable(session, tenantId);
-  }
-
-  // Store new time and show old vs new confirmation
-  await session.update({
-    appointment_id: targetAppointment.appointment_id,
-    doctor_id: requestedDoctorId,
-    doctor_name: requestedDoctorName,
-    date: newDate,
-    time: newTime,
-    flow_type: "edit",
-    current_step: "confirming",
-    expires_at: new Date(Date.now() + SESSION_TTL_MS),
-  });
-
-  const oldDate = formatDateLong(targetAppointment.appointment_date);
-  const newDateStr = formatDateLong(newDate);
-  return {
-    success: true,
-    message:
-      `*Reschedule Confirmation*\n\n` +
-      `*Doctor:* Dr. ${requestedDoctorName || "—"}\n` +
-      `*From:* ${oldDate} at ${targetAppointment.appointment_time}\n` +
-      `*To:* ${newDateStr} at ${newTime}\n\n` +
-      `Confirm the change?`,
-    buttonType: "confirmation",
-  };
-};
-
-// ─── 4J. handleConfirmation ───────────────────────────────────────────────────
-export const handleConfirmation = async (
-  messageOrButtonId,
-  contact,
-  tenantId,
-) => {
-  // Find any active session in confirming state for this contact+tenant
+// ─── handleConfirmation ───────────────────────────────────────────────────────
+// Called by the controller BEFORE button routing for every message.
+// Handles only legacy cancel/reschedule confirmations. New booking uses Advanced Appointment.
+export const handleConfirmation = async (messageOrButtonId, contact, tenantId) => {
   const session = await db.BookingSessions.findOne({
     where: {
       contact_id: contact.contact_id,
       tenant_id: tenantId,
       status: "active",
+      flow_type: ["edit", "cancel"],
       current_step: "confirming",
     },
     order: [["updatedAt", "DESC"]],
   });
 
-  if (!session) return null; // Not in a confirmation flow
+  if (!session) return null; // No session awaiting confirmation
 
-  // Detect YES / NO from button id or plain text
-  const raw = String(messageOrButtonId || "")
-    .toLowerCase()
-    .trim();
+  const raw = String(messageOrButtonId || "").toLowerCase().trim();
 
+  // ── Legacy flow: "confirming" step (cancel / reschedule) ───────────────────
   const isYes =
     raw === "confirm_yes" ||
     /^(yes|y|confirm|ok|sure|book|proceed|हाँ|हां|ha|haan)/.test(raw);
-
   const isNo =
     raw === "confirm_no" ||
     /^(no|n|cancel|nahi|नहीं|nope|stop|don't)/.test(raw);
@@ -909,40 +800,38 @@ export const handleConfirmation = async (
   }
 
   if (isNo) {
-    await session.update({ status: "cancelled" });
+    await session.update({
+      status: "cancelled",
+      draft_json: clearSlotSelectionDraft(session),
+    });
     return {
       success: true,
-      message:
-        "No problem, I've cancelled that. Let me know if you need anything else.",
+      message: "No problem, I've cancelled that. Let me know if you need anything else.",
       buttonType: null,
     };
   }
 
-  // ── YES — execute the action ───────────────────────────────────────────────
+  // YES — execute legacy cancel / reschedule action
   await session.update({ current_step: "processing" });
 
   try {
     if (session.flow_type === "cancel" && session.appointment_id) {
       const ownedAppointment = await getOwnedAppointmentForContact(
-        tenantId,
-        contact.contact_id,
-        session.appointment_id,
+        tenantId, contact.contact_id, session.appointment_id,
       );
-
-      if (!ownedAppointment) {
-        throw new Error("Appointment not found for this contact.");
-      }
+      if (!ownedAppointment) throw new Error("Appointment not found for this contact.");
 
       await deleteAppointmentService(tenantId, session.appointment_id);
       try {
-        // NEW
-        const io = getIO(); // NEW
+        const io = getIO();
         io.to(`tenant-${tenantId}`).emit("appointment:cancelled", {
-          // NEW
-          appointment_id: session.appointment_id, // NEW
-        }); // NEW
-      } catch {} // NEW
-      await session.update({ status: "completed" });
+          appointment_id: session.appointment_id,
+        });
+      } catch {}
+      await session.update({
+        status: "completed",
+        draft_json: clearSlotSelectionDraft(session),
+      });
       return {
         success: true,
         message: "✅ Your appointment has been *cancelled* successfully.",
@@ -952,14 +841,9 @@ export const handleConfirmation = async (
 
     if (session.flow_type === "edit" && session.appointment_id) {
       const ownedAppointment = await getOwnedAppointmentForContact(
-        tenantId,
-        contact.contact_id,
-        session.appointment_id,
+        tenantId, contact.contact_id, session.appointment_id,
       );
-
-      if (!ownedAppointment) {
-        throw new Error("Appointment not found for this contact.");
-      }
+      if (!ownedAppointment) throw new Error("Appointment not found for this contact.");
 
       await updateAppointmentService(tenantId, session.appointment_id, {
         appointment_date: session.date,
@@ -967,17 +851,18 @@ export const handleConfirmation = async (
         doctor_id: session.doctor_id || ownedAppointment.doctor_id,
       });
       try {
-        // NEW
-        const io = getIO(); // NEW
+        const io = getIO();
         io.to(`tenant-${tenantId}`).emit("appointment:updated", {
-          // NEW
-          appointment_id: session.appointment_id, // NEW
-          appointment_date: session.date, // NEW
-          appointment_time: session.time, // NEW
-          doctor_id: session.doctor_id || ownedAppointment.doctor_id, // NEW
-        }); // NEW
-      } catch {} // NEW
-      await session.update({ status: "completed" });
+          appointment_id: session.appointment_id,
+          appointment_date: session.date,
+          appointment_time: session.time,
+          doctor_id: session.doctor_id || ownedAppointment.doctor_id,
+        });
+      } catch {}
+      await session.update({
+        status: "completed",
+        draft_json: clearSlotSelectionDraft(session),
+      });
       return {
         success: true,
         message:
@@ -989,51 +874,44 @@ export const handleConfirmation = async (
       };
     }
 
-    // New booking
-    const contactRecord = contact;
-    const phone = String(
-      contactRecord.phone || contactRecord.phone_number || "",
-    );
+    // Fallback: treat as new booking (legacy confirming path)
+    const phone = String(contact.phone || contact.phone_number || "");
     const { contactNumber, countryCode } = splitPhoneNumber(
-      phone,
-      contactRecord.country_code || "+91",
+      phone, contact.country_code || "+91",
     );
-
     const created = await createAppointmentService({
       tenant_id: tenantId,
       doctor_id: session.doctor_id || null,
-      patient_name: session.patient_name || contactRecord.name,
+      patient_name: session.patient_name || contact.name,
       contact_number: contactNumber,
       country_code: countryCode,
       appointment_date: session.date,
       appointment_time: session.time,
       age: session.age || null,
       notes: session.reason || null,
-      contact_id: contactRecord.contact_id,
-      email: session.email || null,
+      contact_id: contact.contact_id,
+      email: session.patient_email || session.email || null,
     });
-
     try {
-      // NEW
-      const io = getIO(); // NEW
+      const io = getIO();
       io.to(`tenant-${tenantId}`).emit("appointment:created", {
-        // NEW
-        appointment_id: created.appointment_id, // NEW
-        patient_name: created.patient_name, // NEW
-        doctor_name: session.doctor_name || null, // NEW
-        appointment_date: created.appointment_date || session.date, // NEW
-        appointment_time: created.appointment_time || session.time, // NEW
-        token_number: created.token_number, // NEW
-      }); // NEW
-    } catch {} // NEW
-
-    await session.update({ status: "completed" });
-
+        appointment_id: created.appointment_id,
+        patient_name: created.patient_name,
+        doctor_name: session.doctor_name || null,
+        appointment_date: created.appointment_date || session.date,
+        appointment_time: created.appointment_time || session.time,
+        token_number: created.token_number,
+      });
+    } catch {}
+    await session.update({
+      status: "completed",
+      draft_json: clearSlotSelectionDraft(session),
+    });
     return {
       success: true,
       message:
         `✅ *Appointment Confirmed!*\n\n` +
-        `*Patient:* ${session.patient_name || contactRecord.name}\n` +
+        `*Patient:* ${session.patient_name || contact.name}\n` +
         `*Doctor:* Dr. ${session.doctor_name || "—"}\n` +
         `*Date:* ${formatDateLong(session.date)}\n` +
         `*Time:* ${session.time}\n` +
@@ -1043,11 +921,10 @@ export const handleConfirmation = async (
       tokenNumber: created.token_number,
     };
   } catch (err) {
-    console.error(
-      "[APPT-CONV] handleConfirmation execution error:",
-      err.message,
-    );
-    await session.update({ current_step: "confirming" });
+    console.error("[APPT-CONV] handleConfirmation error:", err.message);
+    await session.update({
+      current_step: session.flow_type === "book" ? STEPS.CONFIRM_BOOKING : "confirming",
+    });
     return {
       success: false,
       message: `Sorry, there was an issue: ${err.message}\n\nPlease try again.`,
@@ -1056,123 +933,61 @@ export const handleConfirmation = async (
   }
 };
 
-// ─── 4K. handleAppointmentIntent ─────────────────────────────────────────────
-export const handleAppointmentIntent = async (
-  intent,
-  message,
-  contact,
-  tenantId,
-) => {
-  // Voice / non-text guard
+// ─── handleAppointmentIntent ──────────────────────────────────────────────────
+// Public router called by the WhatsApp controller.
+// create_appointment / APPOINTMENT_ACTION → new 10-state handleMessage.
+// Other intents (cancel, reschedule, view) → existing flows below.
+export const handleAppointmentIntent = async (intent, message, contact, tenantId) => {
   if (!message || typeof message !== "string") {
     return {
       success: false,
-      message:
-        "Sorry, I can only handle text messages for appointments. Please type your request.",
+      message: "Sorry, I can only handle text messages for appointments. Please type your request.",
       buttonType: null,
     };
   }
 
   switch (intent) {
     case "create_appointment":
-    case "APPOINTMENT_ACTION": {
-      const { session, wasExpired } = await getOrCreateSession(
-        contact.contact_id,
-        tenantId,
-        "book",
-      );
-      return handleCreateFlow(session, message, contact, tenantId, wasExpired);
-    }
+    case "APPOINTMENT_ACTION":
+      return handleMessage(message, contact, tenantId);
 
     case "view_my_appointments":
       return handleViewFlow(contact, tenantId);
 
     case "reschedule_appointment": {
       const { session, wasExpired } = await getOrCreateSession(
-        contact.contact_id,
-        tenantId,
-        "edit",
+        contact.contact_id, tenantId, "edit",
       );
-      return handleRescheduleFlow(
-        session,
-        message,
-        contact,
-        tenantId,
-        wasExpired,
-      );
+      return handleRescheduleFlow(session, message, contact, tenantId, wasExpired);
     }
 
     case "cancel_appointment": {
       const { session, wasExpired } = await getOrCreateSession(
-        contact.contact_id,
-        tenantId,
-        "cancel",
+        contact.contact_id, tenantId, "cancel",
       );
       return handleCancelFlow(session, message, contact, tenantId, wasExpired);
     }
 
-    case "check_doctor_availability": {
-      const extracted = await extractAppointmentEntities(message, tenantId);
-      if (!extracted.doctor_id || !extracted.appointment_date) {
+    case "list_available_doctors": {
+      const doctors = await getDoctorListService(tenantId).catch(() => []);
+      if (!doctors?.length) {
         return {
           success: true,
-          message:
-            "Which doctor and date would you like to check availability for?",
+          message: "No doctors are currently available. Please contact us directly.",
           buttonType: null,
         };
       }
-      const slotsResult = await getAvailableSlotsService(
-        tenantId,
-        extracted.doctor_id,
-        extracted.appointment_date,
-      );
-      if (!slotsResult?.slots?.length) {
-        return {
-          success: true,
-          message: `Dr. ${extracted.doctor_name} has no available slots on ${formatDateLong(extracted.appointment_date)}.`,
-          buttonType: null,
-        };
-      }
-      const slotList = slotsResult.slots.slice(0, 10).join(", ");
+      const formatted = doctors.slice(0, 10).map((d) => ({
+        id: `doctor_${d.doctor_id}`,
+        name: d.name,
+        specialization:
+          (d.specializations || []).map((s) => s.name).join(", ") || "General",
+      }));
       return {
         success: true,
-        message:
-          `*Available slots for Dr. ${extracted.doctor_name}*\n` +
-          `*Date:* ${formatDateLong(extracted.appointment_date)}\n\n` +
-          slotList,
-        buttonType: null,
-      };
-    }
-
-    case "list_available_doctors":
-      return handleListDoctors(tenantId);
-
-    case "get_doctor_info": {
-      const extracted = await extractAppointmentEntities(message, tenantId);
-      if (!extracted.doctor_id) {
-        return handleListDoctors(tenantId);
-      }
-      const doctors = await getDoctorListService(tenantId);
-      const doctor = doctors.find((d) => d.doctor_id === extracted.doctor_id);
-      if (!doctor) {
-        return handleListDoctors(tenantId);
-      }
-      const specs =
-        (doctor.specializations || []).map((s) => s.name).join(", ") ||
-        "General";
-      const avail =
-        (doctor.availability || [])
-          .map((a) => `${a.day_of_week}: ${a.start_time}–${a.end_time}`)
-          .join(", ") || "Contact clinic";
-      return {
-        success: true,
-        message:
-          `*Dr. ${doctor.name}*\n` +
-          `Specialization: ${specs}\n` +
-          `Experience: ${doctor.experience_years || 0} years\n` +
-          `Qualification: ${doctor.qualification || "—"}\n` +
-          `Availability: ${avail}`,
-        buttonType: null,
+        message: "Here are our available doctors:",
+        buttonType: "doctor_list",
+        doctors: formatted,
       };
     }
 
@@ -1185,82 +1000,155 @@ export const handleAppointmentIntent = async (
   }
 };
 
-// ─── Helper: list doctors as a list button ────────────────────────────────────
-const handleListDoctors = async (tenantId) => {
-  try {
-    const doctors = await getDoctorListService(tenantId);
-    if (!doctors || doctors.length === 0) {
-      return {
-        success: true,
-        message:
-          "No doctors are currently available. Please contact us directly.",
-        buttonType: null,
-      };
-    }
-    const formatted = doctors.map((d) => ({
-      id: d.doctor_id,
-      name: d.name,
-      specialization:
-        (d.specializations || []).map((s) => s.name).join(", ") || "General",
-    }));
+// ─── handleViewFlow ───────────────────────────────────────────────────────────
+export const handleViewFlow = async (contact, tenantId) => {
+  const appointments = await getActiveAppointmentsByContactService(
+    tenantId, contact.contact_id,
+  );
+  if (!appointments || appointments.length === 0) {
     return {
       success: true,
-      message: "I couldn't find that doctor. Here are our available doctors:",
-      buttonType: "doctor_list",
-      doctors: formatted,
+      message: "You have no upcoming appointments.\n\nWould you like to book one?",
+      buttonType: "book_prompt",
     };
-  } catch (err) {
-    console.error("[APPT-CONV] handleListDoctors error:", err.message);
+  }
+  const lines = appointments.map((a, i) => {
+    const doc = a.doctor?.name || "No doctor assigned";
+    const spec = a.doctor?.title || "";
+    const dateStr = formatDateLong(a.appointment_date);
+    return (
+      `*${i + 1}. Dr. ${doc}*${spec ? ` (${spec})` : ""}\n` +
+      `   Date: ${dateStr}\n` +
+      `   Time: ${a.appointment_time}\n` +
+      `   Token: #${a.token_number || "—"}\n` +
+      `   Status: ${a.status}`
+    );
+  });
+  return {
+    success: true,
+    appointments,
+    message: `*Your Upcoming Appointments*\n\n${lines.join("\n\n")}`,
+    buttonType: "appointment_actions",
+  };
+};
+
+// ─── handleCancelFlow ─────────────────────────────────────────────────────────
+export const handleCancelFlow = async (session, message, contact, tenantId, wasExpired = false) => {
+  const directCancelId = String(message).startsWith("cancel_")
+    ? message.slice("cancel_".length)
+    : null;
+
+  const appointments = await getActiveAppointmentsByContactService(
+    tenantId, contact.contact_id,
+  );
+  if (!appointments || appointments.length === 0) {
+    return { success: true, message: "You have no active appointments to cancel.", buttonType: null };
+  }
+
+  let target = null;
+  if (directCancelId) {
+    target = appointments.find((a) => a.appointment_id === directCancelId) || null;
+  }
+  if (!target && appointments.length === 1) {
+    target = appointments[0];
+  }
+  if (!target) {
+    const lines = appointments.map(
+      (a, i) =>
+        `${i + 1}. Dr. ${a.doctor?.name || "—"} — ${formatDateLong(a.appointment_date)} at ${a.appointment_time}`,
+    );
     return {
       success: true,
-      message: "Please contact us to get the list of available doctors.",
+      message: `Which appointment would you like to cancel?\n\n${lines.join("\n")}`,
       buttonType: null,
     };
   }
+
+  await session.update({
+    appointment_id: target.appointment_id,
+    flow_type: "cancel",
+    current_step: "confirming",
+    expires_at: new Date(Date.now() + SESSION_TTL_MS),
+  });
+  return {
+    success: true,
+    message:
+      `Are you sure you want to cancel your appointment?\n\n` +
+      `*Doctor:* Dr. ${target.doctor?.name || "—"}\n` +
+      `*Date:* ${formatDateLong(target.appointment_date)}\n` +
+      `*Time:* ${target.appointment_time}`,
+    buttonType: "cancel_confirmation",
+  };
 };
 
-// ─── 4L. formatConfirmationMessage ────────────────────────────────────────────
-export const formatConfirmationMessage = (session, contact) => {
-  const patientName = session.patient_name || contact?.name || "—";
-  const contactNumber = contact?.phone || contact?.phone_number || "—";
-  const dateStr = formatDateLong(session.date);
+// ─── handleRescheduleFlow ─────────────────────────────────────────────────────
+export const handleRescheduleFlow = async (session, message, contact, tenantId, wasExpired = false) => {
+  const directRescheduleId = String(message).startsWith("reschedule_")
+    ? message.slice("reschedule_".length)
+    : null;
 
-  return (
-    `*Appointment Summary*\n\n` +
-    `*Patient:* ${patientName}\n` +
-    `*Contact:* ${contactNumber}\n` +
-    `*Doctor:* Dr. ${session.doctor_name || "—"}\n` +
-    `*Date:* ${dateStr}\n` +
-    `*Time:* ${session.time || "—"}\n` +
-    `*Age:* ${session.age || "—"}\n` +
-    `*Reason:* ${session.reason || "Not specified"}\n\n` +
-    `Please confirm your booking.`
+  const appointments = await getActiveAppointmentsByContactService(
+    tenantId, contact.contact_id,
   );
+  if (!appointments || appointments.length === 0) {
+    return { success: true, message: "You have no active appointments to reschedule.", buttonType: null };
+  }
+
+  let target = null;
+  if (directRescheduleId) {
+    target = appointments.find((a) => a.appointment_id === directRescheduleId) || null;
+  }
+  if (!target && appointments.length === 1) {
+    target = appointments[0];
+  }
+  if (!target) {
+    const lines = appointments.map(
+      (a, i) =>
+        `${i + 1}. Dr. ${a.doctor?.name || "—"} — ${formatDateLong(a.appointment_date)} at ${a.appointment_time}`,
+    );
+    return {
+      success: true,
+      message: `Which appointment would you like to reschedule?\n\n${lines.join("\n")}`,
+      buttonType: null,
+    };
+  }
+
+  await session.update({
+    appointment_id: target.appointment_id,
+    doctor_id: target.doctor_id,
+    doctor_name: target.doctor?.name || null,
+    flow_type: "edit",
+    current_step: "confirming",
+    expires_at: new Date(Date.now() + SESSION_TTL_MS),
+  });
+  return {
+    success: true,
+    message: `Sure! What new date and time would you like for your appointment with Dr. ${target.doctor?.name || "your doctor"}?`,
+    buttonType: null,
+  };
 };
 
-// ─── 4M. cleanupExpiredSessions ───────────────────────────────────────────────
+// ─── cleanupExpiredSessions ───────────────────────────────────────────────────
 export const cleanupExpiredSessions = async () => {
   try {
     const [, meta] = await db.sequelize.query(
       `UPDATE booking_sessions
        SET status = 'expired', updated_at = NOW()
-       WHERE status = 'active'
-         AND expires_at < NOW()`,
+       WHERE status = 'active' AND expires_at < NOW()`,
     );
     const count = meta?.affectedRows ?? 0;
     if (count > 0) {
-      console.log(
-        `[SESSION-CLEANUP] Expired ${count} stale booking session(s)`,
-      );
+      console.log(`[SESSION-CLEANUP] Expired ${count} stale booking session(s)`);
     }
   } catch (err) {
     console.error("[SESSION-CLEANUP] Error:", err.message);
   }
 };
 
-// Default export — orchestrator object for clean imports in the message handler
+// ─── appointmentOrchestrator ──────────────────────────────────────────────────
 export const appointmentOrchestrator = {
   getOrCreateSession,
+  handleMessage,
   handleAppointmentIntent,
   handleConfirmation,
   cleanupExpiredSessions,

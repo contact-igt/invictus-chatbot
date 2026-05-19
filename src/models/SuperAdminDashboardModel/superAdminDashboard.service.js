@@ -312,7 +312,7 @@ export const getSuperAdminDashboardStatsService = async (period = "30days") => {
   );
 
   const totalAgents = await db.TenantUsers.count({
-    where: { is_deleted: false, role: { [Op.in]: ["agent", "staff"] } },
+    where: { is_deleted: false, role: { [Op.in]: ["staff"] } },
   });
 
   const escalationsToday = await db.LiveChat.count({

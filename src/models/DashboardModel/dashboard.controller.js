@@ -15,14 +15,11 @@ const waitingTime = (date) => {
  */
 export const getDashboardController = async (req, res) => {
     try {
-        const { tenantId, startDate, endDate } = req.query;
+        const tenantId = req.user.tenant_id;
+        const { startDate, endDate } = req.query;
 
         // Debug: log every incoming request so date-filter issues are immediately visible in server logs
         console.log("[Dashboard] Incoming request:", { tenantId, startDate, endDate });
-
-        if (!tenantId) {
-            return res.status(400).send({ message: "tenantId is required" });
-        }
 
         // Validate YYYY-MM-DD format when provided
         const datePattern = /^\d{4}-\d{2}-\d{2}$/;

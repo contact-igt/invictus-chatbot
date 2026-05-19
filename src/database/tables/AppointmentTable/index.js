@@ -33,6 +33,12 @@ export const AppointmentTable = (sequelize, Sequelize) => {
         comment: "Link to contacts table",
       },
 
+      lead_id: {
+        type: Sequelize.STRING,
+        allowNull: true,
+        comment: "Optional link to leads table",
+      },
+
       patient_name: {
         type: Sequelize.STRING,
         allowNull: false,
@@ -72,12 +78,39 @@ export const AppointmentTable = (sequelize, Sequelize) => {
         type: Sequelize.ENUM(
           "Pending",
           "Confirmed",
+          "Rescheduled",
           "Completed",
           "Cancelled",
+          "Expired",
           "Noshow",
         ),
         allowNull: false,
         defaultValue: "Pending",
+      },
+
+      branch_name: {
+        type: Sequelize.STRING,
+        allowNull: true,
+      },
+
+      service_name: {
+        type: Sequelize.STRING,
+        allowNull: true,
+      },
+
+      slot_id: {
+        type: Sequelize.STRING(50),
+        allowNull: true,
+      },
+
+      cancelled_at: {
+        type: Sequelize.DATE,
+        allowNull: true,
+      },
+
+      cancelled_by: {
+        type: Sequelize.STRING(30),
+        allowNull: true,
       },
 
       token_number: {
@@ -148,6 +181,18 @@ export const AppointmentTable = (sequelize, Sequelize) => {
           fields: ["contact_id"],
         },
         {
+          name: "idx_appointment_lead",
+          fields: ["lead_id"],
+        },
+        {
+          name: "idx_appointment_lead_latest",
+          fields: ["lead_id", "appointment_date", "appointment_time"],
+        },
+        {
+          name: "idx_appointment_lead_status_latest",
+          fields: ["lead_id", "status", "appointment_date", "appointment_time"],
+        },
+        {
           name: "idx_appointment_doctor",
           fields: ["doctor_id"],
         },
@@ -156,8 +201,16 @@ export const AppointmentTable = (sequelize, Sequelize) => {
           fields: ["appointment_date"],
         },
         {
+          name: "idx_appointment_slot_id",
+          fields: ["slot_id"],
+        },
+        {
           name: "idx_appointment_deleted",
           fields: ["is_deleted"],
+        },
+        {
+          name: "idx_appointment_tenant_date_status",
+          fields: ["tenant_id", "appointment_date", "status"],
         },
       ],
     },

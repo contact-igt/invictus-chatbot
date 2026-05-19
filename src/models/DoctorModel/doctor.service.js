@@ -1,69 +1,176 @@
 import db from "../../database/index.js";
 import { tableNames } from "../../database/tableName.js";
 import { generateReadableIdFromLast } from "../../utils/helpers/generateReadableIdFromLast.js";
-import { generatePassword } from "../../utils/helpers/generatePassword.js";
-
-import bcrypt from "bcrypt";
-import { getTemplate } from "../../utils/email/templateLoader.js";
-import { sendEmail } from "../../utils/email/emailService.js";
 import {
-  createTenantUserService,
-  findTenantUserByEmailGloballyService,
-  findTenantUserByEmailOrMobileGloballyService,
-  softDeleteTenantUserService,
-  restoreTenantUserService,
+  normalizeAvailabilityForPersistence,
+} from "./doctorAvailability.service.js";
+
+// ── [DOCTOR TENANT-USER UNWIRED – 2026-05-13] ────────────────────────────────
+// Doctors no longer receive a system-login account or plaintext-password email.
+// All imports below are preserved for a fast rollback — just uncomment the block
+// and restore the createDoctorService body sections marked [UNWIRED].
+//
+// import { generatePassword } from "../../utils/helpers/generatePassword.js";
+// import bcrypt from "bcrypt";
+// import { getTemplate } from "../../utils/email/templateLoader.js";
+// import { sendEmail } from "../../utils/email/emailService.js";
+// ── [END DOCTOR TENANT-USER UNWIRED] ─────────────────────────────────────────
+
+import {
+  // createTenantUserService,               // [DOCTOR TENANT-USER UNWIRED]
+  // findTenantUserByEmailGloballyService,  // [DOCTOR TENANT-USER UNWIRED]
+  // findTenantUserByEmailOrMobileGloballyService, // [DOCTOR TENANT-USER UNWIRED] – replaced by doctor-table check below
+  softDeleteTenantUserService,   // still needed by softDeleteDoctorService
+  restoreTenantUserService,      // still needed by restoreDoctorService
 } from "../TenantUserModel/tenantuser.service.js";
+
+const fetchDoctorAvailability = async (tenant_id, doctor_id) => {
+  const [availability] = await db.sequelize.query(
+    `SELECT da.id, da.day_of_week, da.start_time, da.end_time,
+            COALESCE(dad.enabled, 1) AS enabled,
+            COALESCE(dad.slot_duration, 15) AS slot_duration
+       FROM ${tableNames.DOCTOR_AVAILABILITY} da
+       LEFT JOIN ${tableNames.DOCTOR_AVAILABILITY_DAYS} dad
+         ON dad.tenant_id = da.tenant_id
+        AND dad.doctor_id = da.doctor_id
+        AND dad.day_of_week = da.day_of_week
+       WHERE da.doctor_id = ? AND da.tenant_id = ?
+       ORDER BY FIELD(da.day_of_week, 'monday','tuesday','wednesday','thursday','friday','saturday','sunday'), da.start_time`,
+    { replacements: [doctor_id, tenant_id] },
+  );
+
+  return (availability || []).map((slot) => ({
+    ...slot,
+    slotDuration: slot.slot_duration,
+  }));
+};
+
+const fetchDoctorAvailabilityDays = async (tenant_id, doctor_id) => {
+  const [days] = await db.sequelize.query(
+    `SELECT day_of_week, enabled, slot_duration
+       FROM ${tableNames.DOCTOR_AVAILABILITY_DAYS}
+       WHERE doctor_id = ? AND tenant_id = ?
+       ORDER BY FIELD(day_of_week, 'monday','tuesday','wednesday','thursday','friday','saturday','sunday')`,
+    { replacements: [doctor_id, tenant_id] },
+  );
+
+  return (days || []).map((day) => ({
+    day_of_week: day.day_of_week,
+    enabled: Boolean(day.enabled),
+    slot_duration: day.slot_duration,
+    slotDuration: day.slot_duration,
+  }));
+};
+
+const replaceDoctorAvailability = async ({
+  tenant_id,
+  doctor_id,
+  availability,
+  transaction,
+}) => {
+  const normalizedDays = normalizeAvailabilityForPersistence(availability || []);
+
+  await db.DoctorAvailability.destroy({
+    where: { doctor_id, tenant_id },
+    transaction,
+  });
+
+  await db.DoctorAvailabilityDays.destroy({
+    where: { doctor_id, tenant_id },
+    transaction,
+  });
+
+  for (const day of normalizedDays) {
+    await db.DoctorAvailabilityDays.create(
+      {
+        doctor_id,
+        tenant_id,
+        day_of_week: day.day,
+        enabled: day.enabled,
+        slot_duration: day.slotDuration,
+      },
+      { transaction },
+    );
+
+    if (!day.enabled) continue;
+
+    for (const timeSlot of day.slots) {
+      await db.DoctorAvailability.create(
+        {
+          doctor_id,
+          tenant_id,
+          day_of_week: day.day,
+          start_time: timeSlot.start_time,
+          end_time: timeSlot.end_time,
+        },
+        { transaction },
+      );
+    }
+  }
+};
 
 // ─── Create Doctor ───
 export const createDoctorService = async (tenant_id, data) => {
   const transaction = await db.sequelize.transaction();
 
   try {
-    // Check if email or mobile already exists
-    const existingUser = await findTenantUserByEmailOrMobileGloballyService(
-      data.email,
-      data.mobile,
-    );
+    // ── [DOCTOR TENANT-USER UNWIRED – 2026-05-13] ──────────────────────────
+    // Previously checked email/mobile uniqueness against TENANT_USERS (global).
+    // Replaced with a direct DOCTORS-table duplicate check so no login account
+    // is required. Restore the block below to bring back the TenantUser flow.
+    //
+    // const existingUser = await findTenantUserByEmailOrMobileGloballyService(
+    //   data.email,
+    //   data.mobile,
+    // );
+    // if (existingUser) {
+    //   if (existingUser.email === data.email) {
+    //     throw new Error("User with this email already exists in the system.");
+    //   }
+    //   if (existingUser.mobile === data.mobile) {
+    //     throw new Error("User with this mobile number already exists in the system.");
+    //   }
+    // }
+    // ── [END DOCTOR TENANT-USER UNWIRED] ───────────────────────────────────
 
-    if (existingUser) {
-      if (existingUser.email === data.email) {
-        throw new Error("User with this email already exists in the system.");
-      }
-      if (existingUser.mobile === data.mobile) {
-        throw new Error(
-          "User with this mobile number already exists in the system.",
-        );
-      }
+    // Lightweight doctor-level duplicate guard (email OR mobile, global scope)
+    const [[existingDoctor]] = await db.sequelize.query(
+      `SELECT doctor_id FROM ${tableNames.DOCTORS}
+       WHERE (email = ? OR mobile = ?) AND is_deleted = false LIMIT 1`,
+      { replacements: [data.email, data.mobile] },
+    );
+    if (existingDoctor) {
+      throw new Error(
+        "A doctor with this email or mobile already exists in the system.",
+      );
     }
 
-    // Generate new TenantUser ID
-    const tenant_user_id = await generateReadableIdFromLast(
-      tableNames.TENANT_USERS,
-      "tenant_user_id",
-      "TTU",
-    );
-
-    // Auto-generate password
-    const { password, hashedPassword } = await generatePassword();
-    // const password_hash = hashedPassword;
-
-    // Create new TenantUser
-    await createTenantUserService(
-      tenant_user_id,
-      tenant_id,
-      data.title || null,
-      data.name,
-      data.email,
-      data.country_code || null,
-      data.mobile,
-      data.profile_pic || null,
-      "doctor", // role
-      hashedPassword,
-      "active",
-      transaction,
-    );
-
-    // Email sending moved after commit
+    // ── [DOCTOR TENANT-USER UNWIRED – 2026-05-13] ──────────────────────────
+    // Doctors no longer receive a TenantUser login account.
+    // tenant_user_id is set to null in the doctors row.
+    // To re-enable, uncomment everything below up to [END] and the imports.
+    //
+    // const tenant_user_id = await generateReadableIdFromLast(
+    //   tableNames.TENANT_USERS,
+    //   "tenant_user_id",
+    //   "TTU",
+    // );
+    // const { password, hashedPassword } = await generatePassword();
+    // await createTenantUserService(
+    //   tenant_user_id,
+    //   tenant_id,
+    //   data.title || null,
+    //   data.name,
+    //   data.email,
+    //   data.country_code || null,
+    //   data.mobile,
+    //   data.profile_pic || null,
+    //   "doctor",        // role
+    //   hashedPassword,
+    //   "active",
+    //   transaction,
+    // );
+    // ── [END DOCTOR TENANT-USER UNWIRED] ───────────────────────────────────
 
     const doctor_id = await generateReadableIdFromLast(
       tableNames.DOCTORS,
@@ -77,7 +184,7 @@ export const createDoctorService = async (tenant_id, data) => {
       {
         doctor_id,
         tenant_id,
-        tenant_user_id,
+        tenant_user_id: null, // [DOCTOR TENANT-USER UNWIRED] was: tenant_user_id (login account removed)
         title: data.title || null,
         name: data.name,
         country_code: data.country_code,
@@ -124,60 +231,52 @@ export const createDoctorService = async (tenant_id, data) => {
       }
     }
 
-    // 4. Handle availability slots
+    // 4. Handle availability day settings + concrete slot rows
     if (data.availability && data.availability.length > 0) {
-      for (const slot of data.availability) {
-        const slots = slot.slots || [
-          { start_time: slot.start_time, end_time: slot.end_time },
-        ];
-        const day_of_week = (slot.day_of_week || slot.day || "").toLowerCase();
-
-        for (const timeSlot of slots) {
-          await db.DoctorAvailability.create(
-            {
-              doctor_id,
-              tenant_id,
-              day_of_week,
-              start_time: timeSlot.start_time,
-              end_time: timeSlot.end_time,
-            },
-            { transaction },
-          );
-        }
-      }
+      await replaceDoctorAvailability({
+        tenant_id,
+        doctor_id,
+        availability: data.availability,
+        transaction,
+      });
     }
 
     await transaction.commit();
 
-    // Send welcome email with login credentials (AFTER commit)
-    try {
-      const template = getTemplate("tenantUserWelcome");
+    // ── [DOCTOR TENANT-USER UNWIRED – 2026-05-13] ──────────────────────────
+    // Welcome email containing a plaintext password has been removed.
+    // Doctors no longer receive login credentials by email.
+    // To restore, uncomment the try/catch below and the imports at the top.
+    //
+    // try {
+    //   const template = getTemplate("tenantUserWelcome");
+    //   const tenantData = await db.Tenants.findOne({
+    //     where: { tenant_id },
+    //     attributes: ["company_name"],
+    //   });
+    //   const emailHtml = template({
+    //     name: data.name,
+    //     role: "Doctor",
+    //     company_name: tenantData?.company_name || "Your Organization",
+    //     email: data.email,
+    //     password: password,
+    //     login_url: `${process.env.FRONTEND_URL}/login`,
+    //   });
+    //   await sendEmail({
+    //     to: data.email,
+    //     subject: `Welcome to ${tenantData?.company_name || "WhatsNexus"} - Your Doctor Account`,
+    //     html: emailHtml,
+    //   });
+    // } catch (emailError) {
+    //   console.error("Failed to send welcome email:", emailError);
+    //   // Non-critical error, do not rollback transaction
+    // }
+    // ── [END DOCTOR TENANT-USER UNWIRED] ───────────────────────────────────
 
-      const tenantData = await db.Tenants.findOne({
-        where: { tenant_id },
-        attributes: ["company_name"],
-      });
-
-      const emailHtml = template({
-        name: data.name,
-        role: "Doctor",
-        company_name: tenantData?.company_name || "Your Organization",
-        email: data.email,
-        password: password,
-        login_url: `${process.env.FRONTEND_URL}/login`,
-      });
-
-      await sendEmail({
-        to: data.email,
-        subject: `Welcome to ${tenantData?.company_name || "WhatsNexus"} - Your Doctor Account`,
-        html: emailHtml,
-      });
-    } catch (emailError) {
-      console.error("Failed to send welcome email:", emailError);
-      // Non-critical error, do not rollback transaction
-    }
-
-    return { doctor_id, tenant_user_id };
+    return {
+      doctor_id,
+      tenant_user_id: null, // [DOCTOR TENANT-USER UNWIRED] no login account created
+    };
   } catch (error) {
     await transaction.rollback();
     throw error;
@@ -230,16 +329,18 @@ export const getDoctorListService = async (tenant_id, search) => {
         { replacements: [doctor.doctor_id] },
       );
 
-      const [availability] = await db.sequelize.query(
-        `SELECT day_of_week, start_time, end_time
-       FROM ${tableNames.DOCTOR_AVAILABILITY}
-       WHERE doctor_id = ?
-       ORDER BY FIELD(day_of_week, 'monday','tuesday','wednesday','thursday','friday','saturday','sunday'), start_time`,
-        { replacements: [doctor.doctor_id] },
+      const availability = await fetchDoctorAvailability(
+        tenant_id,
+        doctor.doctor_id,
+      );
+      const availabilityDays = await fetchDoctorAvailabilityDays(
+        tenant_id,
+        doctor.doctor_id,
       );
 
       doctor.specializations = specs;
       doctor.availability = availability;
+      doctor.availabilityDays = availabilityDays;
     }
 
     return doctors;
@@ -267,16 +368,12 @@ export const getDoctorByIdService = async (doctor_id, tenant_id) => {
       { replacements: [doctor_id] },
     );
 
-    const [availability] = await db.sequelize.query(
-      `SELECT id, day_of_week, start_time, end_time
-     FROM ${tableNames.DOCTOR_AVAILABILITY}
-     WHERE doctor_id = ?
-     ORDER BY FIELD(day_of_week, 'monday','tuesday','wednesday','thursday','friday','saturday','sunday'), start_time`,
-      { replacements: [doctor_id] },
-    );
+    const availability = await fetchDoctorAvailability(tenant_id, doctor_id);
+    const availabilityDays = await fetchDoctorAvailabilityDays(tenant_id, doctor_id);
 
     doctor.specializations = specs;
     doctor.availability = availability;
+    doctor.availabilityDays = availabilityDays;
 
     return doctor;
   } catch (error) {
@@ -366,32 +463,12 @@ export const updateDoctorService = async (doctor_id, tenant_id, data) => {
 
     // 4. Replace availability if provided
     if (data.availability !== undefined) {
-      // Remove all existing
-      await db.DoctorAvailability.destroy({
-        where: { doctor_id },
+      await replaceDoctorAvailability({
+        tenant_id,
+        doctor_id,
+        availability: data.availability,
         transaction,
       });
-
-      // Add new slots
-      for (const slot of data.availability) {
-        const slots = slot.slots || [
-          { start_time: slot.start_time, end_time: slot.end_time },
-        ];
-        const day_of_week = (slot.day_of_week || slot.day || "").toLowerCase();
-
-        for (const timeSlot of slots) {
-          await db.DoctorAvailability.create(
-            {
-              doctor_id,
-              tenant_id,
-              day_of_week,
-              start_time: timeSlot.start_time,
-              end_time: timeSlot.end_time,
-            },
-            { transaction },
-          );
-        }
-      }
     }
 
     await transaction.commit();
@@ -585,15 +662,7 @@ export const getDoctorsForAIService = async (tenant_id) => {
 // ─── Get Doctor's Weekly Availability Schedule ───
 export const getDoctorAvailabilityService = async (tenant_id, doctor_id) => {
   try {
-    const [availability] = await db.sequelize.query(
-      `SELECT day_of_week, start_time, end_time
-       FROM ${tableNames.DOCTOR_AVAILABILITY}
-       WHERE doctor_id = ? AND tenant_id = ?
-       ORDER BY FIELD(day_of_week,'monday','tuesday','wednesday','thursday','friday','saturday','sunday'), start_time`,
-      { replacements: [doctor_id, tenant_id] },
-    );
-
-    return availability || [];
+    return await fetchDoctorAvailability(tenant_id, doctor_id);
   } catch (error) {
     throw error;
   }

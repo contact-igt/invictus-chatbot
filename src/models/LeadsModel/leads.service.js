@@ -1,4 +1,4 @@
-import db from "../../database/index.js";
+﻿import db from "../../database/index.js";
 import { tableNames } from "../../database/tableName.js";
 import { buildChatHistory } from "../../utils/chat/buildChatHistory.js";
 import { calculateHeatState } from "../../utils/helpers/calculateHeatState.js";
@@ -916,16 +916,195 @@ export const getLeadListService = async (tenant_id) => {
     agent.username AS assigned_agent_name,
     led.source,
     led.priority,
-    led.internal_notes
+    led.internal_notes,
+    prioritized_appt.appointment_id AS latest_appointment_id,
+    prioritized_appt.status AS latest_appointment_status,
+    prioritized_appt.appointment_date AS latest_appointment_date,
+    prioritized_appt.appointment_time AS latest_appointment_time,
+    visit_stats.visit_count AS visit_count,
+    visit_stats.last_visit_date AS last_visit_date,
+    CASE
+      WHEN visit_stats.visit_count > 1 THEN true
+      ELSE false
+    END AS is_returning_patient
   FROM ${tableNames?.LEADS} as led
   LEFT JOIN ${tableNames?.CONTACTS} as cta on (cta.contact_id = led.contact_id AND cta.tenant_id = led.tenant_id)
   LEFT JOIN ${tableNames?.TENANT_USERS} as agent on (agent.tenant_user_id = led.assigned_to)
+  LEFT JOIN (
+    SELECT
+      a1.tenant_id,
+      a1.lead_id,
+      a1.contact_id,
+      a1.appointment_id,
+      CASE
+        WHEN LOWER(TRIM(a1.status)) = 'pending' THEN 'Pending'
+        WHEN LOWER(TRIM(a1.status)) = 'confirmed' THEN 'Confirmed'
+        WHEN LOWER(TRIM(a1.status)) = 'noshow' THEN 'Noshow'
+        WHEN LOWER(TRIM(a1.status)) = 'completed' THEN 'Completed'
+        WHEN LOWER(TRIM(a1.status)) = 'cancelled' THEN 'Cancelled'
+        ELSE a1.status
+      END AS status,
+      a1.appointment_date,
+      a1.appointment_time
+    FROM ${tableNames?.APPOINTMENTS} a1
+    LEFT JOIN ${tableNames?.APPOINTMENTS} a2
+      ON a2.tenant_id = a1.tenant_id
+      AND (
+        (
+          a1.lead_id IS NOT NULL
+          AND TRIM(a1.lead_id) <> ''
+          AND a2.lead_id IS NOT NULL
+          AND TRIM(a2.lead_id) <> ''
+          AND LOWER(TRIM(a2.lead_id)) = LOWER(TRIM(a1.lead_id))
+        )
+        OR (
+          (a1.lead_id IS NULL OR TRIM(a1.lead_id) = '')
+          AND (a2.lead_id IS NULL OR TRIM(a2.lead_id) = '')
+          AND a2.contact_id = a1.contact_id
+        )
+      )
+      AND a2.is_deleted = false
+      AND (
+        CASE
+          WHEN LOWER(TRIM(a2.status)) = 'pending' THEN 1
+          WHEN LOWER(TRIM(a2.status)) = 'confirmed' THEN 2
+          WHEN LOWER(TRIM(a2.status)) = 'noshow' THEN 3
+          WHEN LOWER(TRIM(a2.status)) = 'completed' THEN 4
+          WHEN LOWER(TRIM(a2.status)) = 'cancelled' THEN 5
+          ELSE 99
+        END
+        <
+        CASE
+          WHEN LOWER(TRIM(a1.status)) = 'pending' THEN 1
+          WHEN LOWER(TRIM(a1.status)) = 'confirmed' THEN 2
+          WHEN LOWER(TRIM(a1.status)) = 'noshow' THEN 3
+          WHEN LOWER(TRIM(a1.status)) = 'completed' THEN 4
+          WHEN LOWER(TRIM(a1.status)) = 'cancelled' THEN 5
+          ELSE 99
+        END
+        OR (
+          CASE
+            WHEN LOWER(TRIM(a2.status)) = 'pending' THEN 1
+            WHEN LOWER(TRIM(a2.status)) = 'confirmed' THEN 2
+            WHEN LOWER(TRIM(a2.status)) = 'noshow' THEN 3
+            WHEN LOWER(TRIM(a2.status)) = 'completed' THEN 4
+            WHEN LOWER(TRIM(a2.status)) = 'cancelled' THEN 5
+            ELSE 99
+          END
+          =
+          CASE
+            WHEN LOWER(TRIM(a1.status)) = 'pending' THEN 1
+            WHEN LOWER(TRIM(a1.status)) = 'confirmed' THEN 2
+            WHEN LOWER(TRIM(a1.status)) = 'noshow' THEN 3
+            WHEN LOWER(TRIM(a1.status)) = 'completed' THEN 4
+            WHEN LOWER(TRIM(a1.status)) = 'cancelled' THEN 5
+            ELSE 99
+          END
+          AND a2.appointment_date > a1.appointment_date
+        )
+        OR (
+          CASE
+            WHEN LOWER(TRIM(a2.status)) = 'pending' THEN 1
+            WHEN LOWER(TRIM(a2.status)) = 'confirmed' THEN 2
+            WHEN LOWER(TRIM(a2.status)) = 'noshow' THEN 3
+            WHEN LOWER(TRIM(a2.status)) = 'completed' THEN 4
+            WHEN LOWER(TRIM(a2.status)) = 'cancelled' THEN 5
+            ELSE 99
+          END
+          =
+          CASE
+            WHEN LOWER(TRIM(a1.status)) = 'pending' THEN 1
+            WHEN LOWER(TRIM(a1.status)) = 'confirmed' THEN 2
+            WHEN LOWER(TRIM(a1.status)) = 'noshow' THEN 3
+            WHEN LOWER(TRIM(a1.status)) = 'completed' THEN 4
+            WHEN LOWER(TRIM(a1.status)) = 'cancelled' THEN 5
+            ELSE 99
+          END
+          AND a2.appointment_date = a1.appointment_date
+          AND a2.appointment_time > a1.appointment_time
+        )
+        OR (
+          CASE
+            WHEN LOWER(TRIM(a2.status)) = 'pending' THEN 1
+            WHEN LOWER(TRIM(a2.status)) = 'confirmed' THEN 2
+            WHEN LOWER(TRIM(a2.status)) = 'noshow' THEN 3
+            WHEN LOWER(TRIM(a2.status)) = 'completed' THEN 4
+            WHEN LOWER(TRIM(a2.status)) = 'cancelled' THEN 5
+            ELSE 99
+          END
+          =
+          CASE
+            WHEN LOWER(TRIM(a1.status)) = 'pending' THEN 1
+            WHEN LOWER(TRIM(a1.status)) = 'confirmed' THEN 2
+            WHEN LOWER(TRIM(a1.status)) = 'noshow' THEN 3
+            WHEN LOWER(TRIM(a1.status)) = 'completed' THEN 4
+            WHEN LOWER(TRIM(a1.status)) = 'cancelled' THEN 5
+            ELSE 99
+          END
+          AND a2.appointment_date = a1.appointment_date
+          AND a2.appointment_time = a1.appointment_time
+          AND a2.id > a1.id
+        )
+      )
+    WHERE a1.tenant_id = ?
+      AND a1.is_deleted = false
+      AND (
+        (a1.lead_id IS NOT NULL AND TRIM(a1.lead_id) <> '')
+        OR a1.contact_id IS NOT NULL
+      )
+      AND a2.id IS NULL
+  ) AS prioritized_appt
+    ON prioritized_appt.tenant_id = led.tenant_id
+    AND (
+      (
+        prioritized_appt.lead_id IS NOT NULL
+        AND TRIM(prioritized_appt.lead_id) <> ''
+        AND LOWER(TRIM(prioritized_appt.lead_id)) = LOWER(TRIM(led.lead_id))
+      )
+      OR (
+        (prioritized_appt.lead_id IS NULL OR TRIM(prioritized_appt.lead_id) = '')
+        AND prioritized_appt.contact_id = led.contact_id
+      )
+    )
+  LEFT JOIN (
+    SELECT
+      tenant_id,
+      lead_id,
+      contact_id,
+      COUNT(*) AS visit_count,
+      MAX(
+        CASE
+          WHEN LOWER(TRIM(status)) = 'completed' THEN appointment_date
+          ELSE NULL
+        END
+      ) AS last_visit_date
+    FROM ${tableNames?.APPOINTMENTS}
+    WHERE tenant_id = ?
+      AND is_deleted = false
+      AND (
+        (lead_id IS NOT NULL AND TRIM(lead_id) <> '')
+        OR contact_id IS NOT NULL
+      )
+    GROUP BY tenant_id, lead_id, contact_id
+  ) AS visit_stats
+    ON visit_stats.tenant_id = led.tenant_id
+    AND (
+      (
+        visit_stats.lead_id IS NOT NULL
+        AND TRIM(visit_stats.lead_id) <> ''
+        AND LOWER(TRIM(visit_stats.lead_id)) = LOWER(TRIM(led.lead_id))
+      )
+      OR (
+        (visit_stats.lead_id IS NULL OR TRIM(visit_stats.lead_id) = '')
+        AND visit_stats.contact_id = led.contact_id
+      )
+    )
   WHERE led.tenant_id = ? AND led.is_deleted = false
   ORDER BY led.last_user_message_at DESC`;
 
   try {
     const [leads] = await db.sequelize.query(dataQuery, {
-      replacements: [tenant_id],
+      replacements: [tenant_id, tenant_id, tenant_id],
     });
 
     const normalizedLeads = leads.map(normalizeLeadScoreFields);
@@ -1658,3 +1837,4 @@ export const bulkUpdateLeadsService = async (tenant_id, lead_ids, updates) => {
     throw err;
   }
 };
+

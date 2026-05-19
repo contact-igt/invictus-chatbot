@@ -42,7 +42,7 @@ export const loginManagementService = async (email) => {
   try {
     const Query = `
     SELECT * FROM ${tableNames.MANAGEMENT}
-    WHERE email = ? AND is_deleted = false
+    WHERE LOWER(email) = LOWER(?) AND is_deleted = false
   `;
 
     const result = await db.sequelize.query(Query, {
