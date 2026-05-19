@@ -156,6 +156,12 @@ export const loginManagementController = async (req, res) => {
       });
     }
 
+    if (user.status !== "active") {
+      return res.status(403).send({
+        message: "Your account is inactive. Please contact administrator.",
+      });
+    }
+
     const isMatch = await bcrypt.compare(trimmedPassword, user.password);
 
     if (!isMatch) {

@@ -87,12 +87,9 @@ export const authenticate = async (req, res, next) => {
     const decoded = jwt.verify(token, ServerEnvironmentConfig.jwt_key);
     req.user = decoded;
 
-    console.log("authdecode", decoded);
-
     // 🔵 MANAGEMENT USER CHECK
     if (decoded.user_type === "management") {
       const user = await getManagementByIdService(decoded.unique_id);
-      console.log("ddd", user);
       if (!user) {
         return res.status(401).json({
           message: "Account no longer exists. Please login again.",
@@ -135,7 +132,6 @@ export const authenticate = async (req, res, next) => {
 
       // 🔴 GLOBAL TENANT STATUS CHECK
       const tenant = await findTenantByIdService(decoded.tenant_id);
-      console.log("tenant", tenant);
       if (!tenant || tenant.status !== "active") {
         return res.status(403).json({
           message: "Tenant account is inactive. Access denied.",
@@ -195,11 +191,9 @@ export const authenticateAdmin = async (req, res, next) => {
         .json({ message: "Account no longer exists. Please login again." });
     }
     if (user.status && user.status !== "active") {
-      return res
-        .status(403)
-        .json({
-          message: "Your account has been deactivated. Contact administrator.",
-        });
+      return res.status(403).json({
+        message: "Your account has been deactivated. Contact administrator.",
+      });
     }
 
     req.user = decoded;

@@ -67,6 +67,14 @@ import { UserPreferencesTable } from "./tables/UserPreferencesTable/index.js";
 import { MentorsTable } from "./tables/MentorsTable/index.js";
 import { CoursesTable } from "./tables/CoursesTable/index.js";
 import { TenantFeatureAccessTable } from "./tables/TenantFeatureAccessTable/index.js";
+import { ScheduledMessageTable } from "./tables/ScheduledMessageTable/index.js";
+import { IndustriesTable } from "./tables/IndustriesTable/index.js";
+import { SaaSModulesTable } from "./tables/SaaSModulesTable/index.js";
+import { IndustrySaaSModulesTable } from "./tables/IndustrySaaSModulesTable/index.js";
+import { PlansTable } from "./tables/PlansTable/index.js";
+import { PlanSaaSModulesTable } from "./tables/PlanSaaSModulesTable/index.js";
+import { TenantSaaSModuleOverridesTable } from "./tables/TenantSaaSModuleOverridesTable/index.js";
+import { NavigationItemsTable } from "./tables/NavigationItemsTable/index.js";
 
 const dbconfig =
   ServerEnvironmentConfig?.server?.line === "production"
@@ -192,6 +200,17 @@ db.UserPreferences = UserPreferencesTable(sequelize, Sequelize);
 db.Mentors = MentorsTable(sequelize, Sequelize);
 db.Courses = CoursesTable(sequelize, Sequelize);
 db.TenantFeatureAccess = TenantFeatureAccessTable(sequelize, Sequelize);
+db.ScheduledMessages = ScheduledMessageTable(sequelize, Sequelize);
+db.Industries = IndustriesTable(sequelize, Sequelize);
+db.SaaSModules = SaaSModulesTable(sequelize, Sequelize);
+db.IndustrySaaSModules = IndustrySaaSModulesTable(sequelize, Sequelize);
+db.Plans = PlansTable(sequelize, Sequelize);
+db.PlanSaaSModules = PlanSaaSModulesTable(sequelize, Sequelize);
+db.TenantSaaSModuleOverrides = TenantSaaSModuleOverridesTable(
+  sequelize,
+  Sequelize,
+);
+db.NavigationItems = NavigationItemsTable(sequelize, Sequelize);
 
 defineAssociations(db);
 

@@ -203,7 +203,10 @@ export const completeWithOutcome = async (req, res) => {
       notes,
       follow_up_required,
       follow_up_date,
+      follow_up_time,
       follow_up_type,
+      follow_up_reason,
+      template_id,
     } = req.body;
 
     if (!appointment_id) {
@@ -227,7 +230,10 @@ export const completeWithOutcome = async (req, res) => {
         notes,
         follow_up_required,
         follow_up_date,
+        follow_up_time,
         follow_up_type,
+        follow_up_reason,
+        template_id,
       },
     );
 
@@ -243,7 +249,7 @@ export const completeWithOutcome = async (req, res) => {
 
 export const noShowWithAction = async (req, res) => {
   try {
-    const { appointment_id, action, follow_up_date, follow_up_type } = req.body;
+    const { appointment_id, mode, follow_up_date, follow_up_time, follow_up_type, template_id } = req.body;
 
     if (!appointment_id) {
       return res.status(400).json({
@@ -252,19 +258,14 @@ export const noShowWithAction = async (req, res) => {
       });
     }
 
-    if (!action) {
-      return res.status(400).json({
-        success: false,
-        message: "action is required.",
-      });
-    }
-
     const result = await AppointmentService.markNoShowWithActionService({
       tenant_id: req.user.tenant_id,
       appointment_id,
-      action,
+      mode,
       follow_up_date,
+      follow_up_time,
       follow_up_type,
+      template_id,
     });
 
     return res.status(200).json({
@@ -317,5 +318,108 @@ export const createAppointmentOutcome = async (req, res) => {
     });
   } catch (err) {
     return res.status(400).json({ success: false, message: err.message });
+  }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FOLLOW-UP HUB CONTROLLERS
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const getFollowUpHub = async (req, res) => {
+  try {
+    const { search, type, status, send_type, date_from, date_to } = req.query;
+    const result = await AppointmentService.getFollowUpHubService(
+      req.user.tenant_id,
+      { search, type, status, send_type, date_from, date_to },
+    );
+    return res.status(200).json({ success: true, data: result });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+export const getPendingFollowUpCount = async (req, res) => {
+  try {
+    const result = await AppointmentService.getPendingFollowUpCountService(
+      req.user.tenant_id,
+    );
+    return res.status(200).json({ success: true, data: { count: result.count } });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+export const retryFollowUp = async (req, res) => {
+  try {
+    const scheduled_message_id = req.params.id;
+    if (!scheduled_message_id) {
+      return res.status(400).json({ success: false, message: "Scheduled message ID is required" });
+    }
+    const result = await AppointmentService.retryFollowUpService(
+      req.user.tenant_id,
+      scheduled_message_id,
+    );
+    return res.status(200).json({ success: true, message: "Follow-up queued for retry", data: result });
+  } catch (err) {
+    if (err.message === "Scheduled message not found") {
+      return res.status(404).json({ success: false, message: err.message });
+    }
+    if (err.message === "Only failed messages can be retried") {
+      return res.status(400).json({ success: false, message: err.message });
+    }
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+export const rescheduleFollowUp = async (req, res) => {
+  try {
+    const scheduled_message_id = req.params.id;
+    const { scheduled_at: new_scheduled_at } = req.body;
+    if (!new_scheduled_at) {
+      return res.status(400).json({ success: false, message: "New scheduled time is required" });
+    }
+    const result = await AppointmentService.rescheduleFollowUpService(
+      req.user.tenant_id,
+      scheduled_message_id,
+      new_scheduled_at,
+    );
+    return res.status(200).json({ success: true, message: "Follow-up rescheduled", data: result });
+  } catch (err) {
+    if (err.message === "Scheduled message not found") {
+      return res.status(404).json({ success: false, message: err.message });
+    }
+    if (
+      err.message === "Cannot reschedule a sent message" ||
+      err.message === "Scheduled time must be in the future" ||
+      err.message === "Invalid scheduled time"
+    ) {
+      return res.status(400).json({ success: false, message: err.message });
+    }
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+export const sendNowFollowUp = async (req, res) => {
+  try {
+    const scheduled_message_id = req.params.id;
+    if (!scheduled_message_id) {
+      return res.status(400).json({ success: false, message: "Scheduled message ID is required" });
+    }
+    const result = await AppointmentService.sendNowFollowUpService(
+      req.user.tenant_id,
+      scheduled_message_id,
+    );
+    if (!result.success) {
+      return res.status(400).json({ success: false, message: result.error });
+    }
+    return res.status(200).json({ success: true, message: "Message sent successfully", data: result });
+  } catch (err) {
+    if (err.message === "Scheduled message not found") {
+      return res.status(404).json({ success: false, message: err.message });
+    }
+    if (err.message === "Message already sent") {
+      return res.status(400).json({ success: false, message: err.message });
+    }
+    return res.status(500).json({ success: false, message: err.message });
   }
 };

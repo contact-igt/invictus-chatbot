@@ -44,12 +44,20 @@ import CoursesRouter from "./models/CoursesModel/courses.routes.js";
 import MentorsRouter from "./models/MentorsModel/mentors.routes.js";
 import TenantFeatureAccessTenantRouter from "./models/TenantFeatureAccessModel/tenantFeatureAccess.tenant.routes.js";
 import TenantFeatureAccessManagementRouter from "./models/TenantFeatureAccessModel/tenantFeatureAccess.management.routes.js";
+import ModuleAccessTenantRouter from "./models/ModuleAccessModel/moduleAccess.tenant.routes.js";
+import ModuleAccessManagementRouter from "./models/ModuleAccessModel/moduleAccess.management.routes.js";
 import { checkHealthAlerts } from "./utils/billing/billingHealthMonitor.js";
 import { runDailyReconciliation } from "./utils/billing/paymentReconciler.js";
 import { initBillingQueue } from "./utils/billing/billingQueue.js";
 import { initCampaignQueues } from "./queues/campaignQueue.js";
-import { startCampaignDispatchWorker, getDispatchWorkerStatus } from "./workers/campaignDispatchWorker.js";
-import { startCampaignSendWorker, getSendWorkerStatus } from "./workers/campaignSendWorker.js";
+import {
+  startCampaignDispatchWorker,
+  getDispatchWorkerStatus,
+} from "./workers/campaignDispatchWorker.js";
+import {
+  startCampaignSendWorker,
+  getSendWorkerStatus,
+} from "./workers/campaignSendWorker.js";
 import { validateRazorpayConfig } from "./models/PaymentModel/payment.service.js";
 import { logger } from "./utils/logger.js";
 import { authenticate, authorize } from "./middlewares/auth/authMiddlewares.js";
@@ -58,6 +66,7 @@ import cron from "node-cron";
 import { tableNames } from "./database/tableName.js";
 import { runHardDeleteCron } from "./utils/lifecycle/hardDeleteCron.js";
 import { runMissingMessageBillingReconciliationCron } from "./cron/reconciliationCron.js";
+import { runScheduledMessageCron } from "./cron/scheduledMessageCron.js";
 import { cleanupExpiredSessions } from "./models/AppointmentModel/appointmentConversation.service.js";
 import { expireAdvancedAppointmentSessions } from "./models/AppointmentModel/Advanced_Appointment_Booking.service.js";
 import { expireManageAppointmentSessions } from "./models/AppointmentModel/Manage_Booked_Appointments.service.js";
@@ -66,19 +75,24 @@ dns.setDefaultResultOrder("ipv4first");
 
 const app = express();
 
-app.use(
-  cors({
-    origin: "*",
-    methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-    allowedHeaders: [
-      "Content-Type",
-      "Authorization",
-      "x-meta-token",
-      "ngrok-skip-browser-warning",
-    ],
-    credentials: false,
-  }),
-);
+const corsOptions = {
+  origin: "*",
+  methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+  allowedHeaders: [
+    "Content-Type",
+    "Authorization",
+    "x-meta-token",
+    "ngrok-skip-browser-warning",
+  ],
+  credentials: false,
+};
+
+// Explicit preflight handler — must come before app.use(cors()) so OPTIONS
+// requests are short-circuited at the highest priority, before any router
+// or auth middleware can intercept them.
+app.options("*", cors(corsOptions));
+
+app.use(cors(corsOptions));
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -95,10 +109,12 @@ app.use((req, res, next) => {
   next();
 });
 
+app.use("/api/management", ModuleAccessManagementRouter);
 app.use("/api/management", SuperAdminDashboardRouter, ManagementRouter);
 app.use("/api/management", TenantFeatureAccessManagementRouter);
 
 app.use("/api/tenant", TenantFeatureAccessTenantRouter);
+app.use("/api/tenant", ModuleAccessTenantRouter);
 app.use("/api/tenant", TenantRouter, TenantUserRouter, TenantInvitationRouter);
 
 app.use(
@@ -144,12 +160,40 @@ app.get(
   getCampaignDiagnosticsController,
 );
 
+// Global error handler — must be registered AFTER all routes.
+// Ensures CORS headers are present on every error response so the browser
+// doesn't misreport a 4xx/5xx as a CORS failure.
+// eslint-disable-next-line no-unused-vars
+app.use((err, req, res, next) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader(
+    "Access-Control-Allow-Methods",
+    "GET,POST,PUT,DELETE,PATCH,OPTIONS",
+  );
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    "Content-Type,Authorization,x-meta-token,ngrok-skip-browser-warning",
+  );
+
+  const status = err?.status || err?.statusCode || 500;
+  logger.error(
+    `[ERROR-HANDLER] ${req.method} ${req.url} → ${status}:`,
+    err?.message,
+  );
+  res.status(status).json({
+    success: false,
+    message: err?.message || "Internal server error",
+  });
+});
+
 {
   const MAX_RETRIES = 5;
   const RETRY_DELAY_MS = 3000;
   let lastErr;
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
+      await db.sequelize.sync({ alter: true });
+
       const [, cleanupMeta] = await db.sequelize.query(
         `UPDATE ${tableNames.TENANT_USERS}
          SET role = 'staff'
@@ -158,11 +202,10 @@ app.get(
       const cleanupCount = cleanupMeta?.affectedRows ?? 0;
       if (cleanupCount > 0) {
         logger.warn(
-          `[DB] Normalized ${cleanupCount} invalid tenant-user role row(s) before sync`,
+          `[DB] Normalized ${cleanupCount} invalid tenant-user role row(s) after sync`,
         );
       }
 
-      await db.sequelize.sync({ alter: true });
       lastErr = null;
       break;
     } catch (err) {
@@ -296,6 +339,16 @@ cron.schedule("*/10 * * * *", () => {
     );
   });
 }); // Every 10 minutes — detect outbound messages missing billing artifacts
+
+cron.schedule(
+  "* * * * *",
+  () => {
+    void runScheduledMessageCron().catch((err) => {
+      logger.error(`[CRON] Scheduled message send failed: ${err.message}`);
+    });
+  },
+  { timezone: "Asia/Kolkata" },
+); // Every 1 min — send pending WhatsApp follow-up / no-show messages
 
 // Master lifecycle hard-delete cron — runs at 04:00 UTC daily
 // Processes ALL Tier 1 tables (campaigns, templates, knowledge, contacts, doctors, etc.)

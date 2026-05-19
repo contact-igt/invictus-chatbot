@@ -208,6 +208,10 @@ export const AppointmentTable = (sequelize, Sequelize) => {
           name: "idx_appointment_deleted",
           fields: ["is_deleted"],
         },
+        {
+          name: "idx_appointment_tenant_date_status",
+          fields: ["tenant_id", "appointment_date", "status"],
+        },
       ],
     },
   );

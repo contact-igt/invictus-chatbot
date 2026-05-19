@@ -127,4 +127,36 @@ router.get(
   getDeletedAppointmentsController,
 );
 
+// ── Follow-up Hub ──────────────────────────────────────────────────────────
+router.get(
+  "/followup-hub",
+  ...tenantAuth,
+  checkFeatureAccess("appointments"),
+  AppointmentController.getFollowUpHub,
+);
+router.get(
+  "/followup-hub/pending-count",
+  ...tenantAuth,
+  checkFeatureAccess("appointments"),
+  AppointmentController.getPendingFollowUpCount,
+);
+router.patch(
+  "/followup-hub/:id/retry",
+  ...tenantAuth,
+  checkFeatureAccess("appointments"),
+  AppointmentController.retryFollowUp,
+);
+router.patch(
+  "/followup-hub/:id/reschedule",
+  ...tenantAuth,
+  checkFeatureAccess("appointments"),
+  AppointmentController.rescheduleFollowUp,
+);
+router.post(
+  "/followup-hub/:id/send-now",
+  ...tenantAuth,
+  checkFeatureAccess("appointments"),
+  AppointmentController.sendNowFollowUp,
+);
+
 export default router;

@@ -17,6 +17,7 @@ import {
   buildAppointmentEmailSubject,
   formatAppointmentDate,
 } from "../../utils/email/appointmentEmailTemplate.js";
+import { sendWhatsAppTemplate } from "../AuthWhatsapp/AuthWhatsapp.service.js";
 
 // Normalize time to consistent "HH:MM AM/PM" format for reliable comparisons
 const normalizeTimeFormat = (time) => {
@@ -663,7 +664,10 @@ export const completeAppointmentWithOutcomeService = async ({
   notes,
   follow_up_required = false,
   follow_up_date = null,
+  follow_up_time = null,
   follow_up_type = null,
+  follow_up_reason = null,
+  template_id = null,
 }) => {
   return db.sequelize.transaction(async (transaction) => {
     const appointment = await db.Appointments.findOne({
@@ -683,7 +687,14 @@ export const completeAppointmentWithOutcomeService = async ({
 
     const requiresFollowUp = parseBooleanFlag(follow_up_required);
     const safeFollowUpDate = requiresFollowUp ? follow_up_date || null : null;
+    const safeFollowUpTime = requiresFollowUp
+      ? follow_up_time || "09:00"
+      : null;
     const safeFollowUpType = requiresFollowUp ? follow_up_type || null : null;
+    const safeFollowUpReason = requiresFollowUp
+      ? follow_up_reason || null
+      : null;
+    const safeTemplateId = requiresFollowUp ? template_id || null : null;
 
     if (requiresFollowUp && !safeFollowUpDate) {
       throw new Error("Follow-up date is required when follow-up is enabled.");
@@ -694,6 +705,20 @@ export const completeAppointmentWithOutcomeService = async ({
     if (safeFollowUpType && !ALLOWED_FOLLOW_UP_TYPES.has(safeFollowUpType)) {
       throw new Error("Invalid follow-up type.");
     }
+    if (requiresFollowUp && !safeFollowUpReason) {
+      throw new Error(
+        "Follow-up reason is required when follow-up is enabled.",
+      );
+    }
+    if (
+      requiresFollowUp &&
+      safeFollowUpType === "WhatsApp" &&
+      !safeTemplateId
+    ) {
+      throw new Error(
+        "WhatsApp template is required when follow-up type is WhatsApp.",
+      );
+    }
 
     const existingOutcome = await db.AppointmentOutcomes.findOne({
       where: { appointment_id, tenant_id },
@@ -701,39 +726,68 @@ export const completeAppointmentWithOutcomeService = async ({
       lock: transaction.LOCK.UPDATE,
     });
 
+    const outcomeFields = {
+      notes: normalizedNotes,
+      follow_up_required: requiresFollowUp,
+      follow_up_date: safeFollowUpDate,
+      follow_up_time: safeFollowUpTime,
+      follow_up_type: safeFollowUpType,
+      follow_up_reason: safeFollowUpReason,
+      template_id: safeTemplateId,
+    };
+
     if (existingOutcome) {
-      await existingOutcome.update(
-        {
-          notes: normalizedNotes,
-          follow_up_required: requiresFollowUp,
-          follow_up_date: safeFollowUpDate,
-          follow_up_type: safeFollowUpType,
-        },
-        { transaction },
-      );
+      await existingOutcome.update(outcomeFields, { transaction });
     } else {
       await db.AppointmentOutcomes.create(
-        {
-          appointment_id,
-          tenant_id,
-          notes: normalizedNotes,
-          follow_up_required: requiresFollowUp,
-          follow_up_date: safeFollowUpDate,
-          follow_up_type: safeFollowUpType,
-        },
+        { appointment_id, tenant_id, ...outcomeFields },
         { transaction },
       );
     }
 
     await appointment.update({ status: "Completed" }, { transaction });
 
-    if (requiresFollowUp) {
-      await createFollowUpPlaceholder({
-        appointment_id,
-        tenant_id,
-        follow_up_date: safeFollowUpDate,
-        follow_up_type: safeFollowUpType,
+    if (
+      requiresFollowUp &&
+      safeFollowUpType === "WhatsApp" &&
+      safeTemplateId &&
+      safeFollowUpDate
+    ) {
+      const timeStr = safeFollowUpTime || "09:00";
+      const scheduledAt = new Date(`${safeFollowUpDate}T${timeStr}:00+05:30`);
+      const rawCode = (appointment.country_code || "91")
+        .toString()
+        .replace(/^\+/, "");
+      const toPhone = `${rawCode}${appointment.contact_number}`;
+      const existingMsg = await db.ScheduledMessages.findOne({
+        where: { appointment_id, send_type: "follow_up" },
+        transaction,
       });
+      if (existingMsg) {
+        await existingMsg.update(
+          {
+            template_id: safeTemplateId,
+            scheduled_at: scheduledAt,
+            status: "pending",
+            error_log: null,
+          },
+          { transaction },
+        );
+      } else {
+        await db.ScheduledMessages.create(
+          {
+            tenant_id,
+            contact_id: appointment.contact_id,
+            appointment_id,
+            template_id: safeTemplateId,
+            to_phone: toPhone,
+            send_type: "follow_up",
+            scheduled_at: scheduledAt,
+            status: "pending",
+          },
+          { transaction },
+        );
+      }
     }
 
     return { appointment_id, status: "Completed" };
@@ -743,9 +797,11 @@ export const completeAppointmentWithOutcomeService = async ({
 export const markNoShowWithActionService = async ({
   tenant_id,
   appointment_id,
-  action,
+  mode = "default",
   follow_up_date = null,
+  follow_up_time = null,
   follow_up_type = null,
+  template_id,
 }) => {
   return db.sequelize.transaction(async (transaction) => {
     const appointment = await db.Appointments.findOne({
@@ -758,60 +814,391 @@ export const markNoShowWithActionService = async ({
       throw new Error("Appointment not found");
     }
 
-    const normalizedAction = String(action || "").trim().toLowerCase();
-    if (!["follow_up", "close"].includes(normalizedAction)) {
-      throw new Error("Invalid no-show action.");
+    const normalizedMode = String(mode || "default")
+      .trim()
+      .toLowerCase();
+    if (!["manual", "default"].includes(normalizedMode)) {
+      throw new Error("Invalid no-show mode. Use 'manual' or 'default'.");
     }
 
-    if (normalizedAction === "follow_up") {
+    // template required only when send type will be WhatsApp (default mode always sends WhatsApp)
+    const willSendWhatsApp =
+      normalizedMode === "default" || follow_up_type === "WhatsApp";
+    if (willSendWhatsApp && !template_id) {
+      throw new Error(
+        "WhatsApp template is required for no-show notification.",
+      );
+    }
+
+    let scheduledDate;
+    let scheduledTime;
+    let scheduledType = follow_up_type || "WhatsApp";
+
+    if (normalizedMode === "manual") {
       if (!follow_up_date) {
-        throw new Error("Follow-up date is required.");
+        throw new Error("Follow-up date is required in manual mode.");
       }
+      scheduledDate = follow_up_date;
+      scheduledTime = follow_up_time || "09:00";
       if (!follow_up_type) {
-        throw new Error("Follow-up type is required.");
+        throw new Error("Follow-up type is required in manual mode.");
       }
-      if (!["Call", "WhatsApp"].includes(follow_up_type)) {
-        throw new Error("Invalid follow-up type.");
-      }
+      scheduledType = follow_up_type;
+    } else {
+      // default: use tenant-configured days offset + time (falls back to 1 day, 09:00)
+      const tenantSettings = await getTenantSettingsService(tenant_id);
+      const noshowDays =
+        Number(tenantSettings?.ai_settings?.noshow_followup_days) || 1;
+      const noshowTime =
+        tenantSettings?.ai_settings?.noshow_followup_time || "09:00";
+      const apptDate = new Date(appointment.appointment_date);
+      apptDate.setDate(apptDate.getDate() + noshowDays);
+      scheduledDate = apptDate.toISOString().slice(0, 10);
+      scheduledTime = noshowTime;
+    }
 
-      const existingOutcome = await db.AppointmentOutcomes.findOne({
-        where: { appointment_id, tenant_id },
+    const existingOutcome = await db.AppointmentOutcomes.findOne({
+      where: { appointment_id, tenant_id },
+      transaction,
+      lock: transaction.LOCK.UPDATE,
+    });
+
+    const outcomePayload = {
+      notes: "No show - follow-up scheduled",
+      follow_up_required: true,
+      follow_up_date: scheduledDate,
+      follow_up_time: scheduledTime,
+      follow_up_type: scheduledType,
+      template_id,
+    };
+
+    if (existingOutcome) {
+      await existingOutcome.update(outcomePayload, { transaction });
+    } else {
+      await db.AppointmentOutcomes.create(
+        { appointment_id, tenant_id, ...outcomePayload },
+        { transaction },
+      );
+    }
+
+    if (willSendWhatsApp && template_id) {
+      const scheduledAt = new Date(
+        `${scheduledDate}T${scheduledTime}:00+05:30`,
+      );
+      const rawCode = (appointment.country_code || "91")
+        .toString()
+        .replace(/^\+/, "");
+      const toPhone = `${rawCode}${appointment.contact_number}`;
+      const existingMsg = await db.ScheduledMessages.findOne({
+        where: { appointment_id, send_type: "noshow" },
         transaction,
-        lock: transaction.LOCK.UPDATE,
       });
-
-      const payload = {
-        notes: "No show - follow-up scheduled",
-        follow_up_required: true,
-        follow_up_date,
-        follow_up_type,
-      };
-
-      if (existingOutcome) {
-        await existingOutcome.update(payload, { transaction });
-      } else {
-        await db.AppointmentOutcomes.create(
+      if (existingMsg) {
+        await existingMsg.update(
           {
-            appointment_id,
+            template_id,
+            scheduled_at: scheduledAt,
+            status: "pending",
+            error_log: null,
+          },
+          { transaction },
+        );
+      } else {
+        await db.ScheduledMessages.create(
+          {
             tenant_id,
-            ...payload,
+            contact_id: appointment.contact_id,
+            appointment_id,
+            template_id,
+            to_phone: toPhone,
+            send_type: "noshow",
+            scheduled_at: scheduledAt,
+            status: "pending",
           },
           { transaction },
         );
       }
-
-      await createFollowUpPlaceholder({
-        appointment_id,
-        tenant_id,
-        follow_up_date,
-        follow_up_type,
-      });
     }
 
     await appointment.update({ status: "Noshow" }, { transaction });
     return { appointment_id, status: "Noshow" };
   });
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FOLLOW-UP HUB SERVICES
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const getFollowUpHubService = async (tenant_id, filters = {}) => {
+  const { search, type, status, send_type, date_from, date_to } = filters;
+
+  // ── Step 1: If ScheduledMessage-level filters exist, resolve appointment_ids ──
+  let scheduledMsgAppointmentIds = null;
+  if (status || send_type) {
+    const msgWhere = { tenant_id };
+    if (status) msgWhere.status = status;
+    if (send_type) msgWhere.send_type = send_type;
+    const msgs = await db.ScheduledMessages.findAll({
+      where: msgWhere,
+      attributes: ["appointment_id"],
+      raw: true,
+    });
+    scheduledMsgAppointmentIds = msgs.map((m) => m.appointment_id);
+    // If filter yields no results, short-circuit — nothing to return
+    if (scheduledMsgAppointmentIds.length === 0) return [];
+  }
+
+  // ── Step 2: Build AppointmentOutcomes WHERE ───────────────────────────────
+  const outcomeWhere = { tenant_id, follow_up_required: true };
+  if (type) outcomeWhere.follow_up_type = type;
+  if (date_from)
+    outcomeWhere.follow_up_date = {
+      ...(outcomeWhere.follow_up_date || {}),
+      [Op.gte]: date_from,
+    };
+  if (date_to)
+    outcomeWhere.follow_up_date = {
+      ...(outcomeWhere.follow_up_date || {}),
+      [Op.lte]: date_to,
+    };
+  if (scheduledMsgAppointmentIds)
+    outcomeWhere.appointment_id = { [Op.in]: scheduledMsgAppointmentIds };
+
+  // ── Step 3: Build Appointments include (with optional search + Doctor) ────
+  const appointmentWhere = {};
+  if (search) {
+    appointmentWhere[Op.or] = [
+      { patient_name: { [Op.like]: `%${search}%` } },
+      { contact_number: { [Op.like]: `%${search}%` } },
+    ];
+  }
+
+  const outcomes = await db.AppointmentOutcomes.findAll({
+    where: outcomeWhere,
+    include: [
+      {
+        model: db.Appointments,
+        as: "appointment",
+        where: Object.keys(appointmentWhere).length
+          ? appointmentWhere
+          : undefined,
+        required: true,
+        attributes: [
+          "appointment_id",
+          "patient_name",
+          "contact_number",
+          "country_code",
+          "appointment_date",
+          "status",
+          "doctor_id",
+        ],
+        include: [
+          {
+            model: db.Doctors,
+            as: "doctor",
+            required: false,
+            attributes: ["name", "title"],
+          },
+        ],
+      },
+    ],
+    order: [
+      ["follow_up_date", "ASC"],
+      ["follow_up_time", "ASC"],
+    ],
+  });
+
+  if (!outcomes.length) return [];
+
+  // ── Step 4: Batch-fetch ScheduledMessages for all outcome appointment_ids ──
+  const apptIds = outcomes.map((o) => o.appointment_id);
+  const scheduledMsgs = await db.ScheduledMessages.findAll({
+    where: { appointment_id: { [Op.in]: apptIds }, tenant_id },
+    raw: true,
+  });
+
+  // ── Step 5: Batch-fetch WhatsappTemplates for any template_ids found ──────
+  const templateIds = [
+    ...new Set(scheduledMsgs.map((m) => m.template_id).filter(Boolean)),
+  ];
+  let templateMap = {};
+  if (templateIds.length) {
+    const templates = await db.WhatsappTemplates.findAll({
+      where: { template_id: { [Op.in]: templateIds }, tenant_id },
+      attributes: ["template_id", "template_name", "language"],
+      raw: true,
+    });
+    templates.forEach((t) => {
+      templateMap[t.template_id] = t;
+    });
+  }
+
+  // ── Step 6: Build a map appointment_id → most-relevant ScheduledMessage ──
+  // Priority: noshow > follow_up (noshow takes precedence if both exist)
+  const msgMap = {};
+  for (const msg of scheduledMsgs) {
+    const existing = msgMap[msg.appointment_id];
+    if (!existing || msg.send_type === "noshow") {
+      msgMap[msg.appointment_id] = msg;
+    }
+  }
+
+  // ── Step 7: Shape response ────────────────────────────────────────────────
+  return outcomes.map((outcome) => {
+    const appt = outcome.appointment;
+    const doctor = appt?.doctor;
+    const msg = msgMap[outcome.appointment_id] || null;
+    const tmpl = msg ? templateMap[msg.template_id] || null : null;
+
+    const doctorName = doctor
+      ? [doctor.title, doctor.name].filter(Boolean).join(" ").trim()
+      : null;
+
+    return {
+      outcome_id: outcome.id,
+      appointment_id: outcome.appointment_id,
+      patient_name: appt?.patient_name || null,
+      phone: appt?.contact_number || null,
+      appointment_date: appt?.appointment_date || null,
+      appointment_status: appt?.status || null,
+      doctor_name: doctorName,
+      follow_up_date: outcome.follow_up_date,
+      follow_up_time: outcome.follow_up_time,
+      follow_up_type: outcome.follow_up_type,
+      follow_up_reason: outcome.follow_up_reason || null,
+      notes: outcome.notes,
+      send_type: msg?.send_type || null,
+      scheduled_message: msg
+        ? {
+            id: msg.id,
+            status: msg.status,
+            scheduled_at: msg.scheduled_at,
+            sent_at: msg.sent_at || null,
+            error_log: msg.error_log || null,
+            template_name: tmpl?.template_name || null,
+          }
+        : null,
+    };
+  });
+};
+
+export const retryFollowUpService = async (tenant_id, scheduled_message_id) => {
+  const msg = await db.ScheduledMessages.findOne({
+    where: { id: scheduled_message_id, tenant_id },
+  });
+  if (!msg) throw new Error("Scheduled message not found");
+  if (msg.status !== "failed")
+    throw new Error("Only failed messages can be retried");
+
+  await msg.update({ status: "pending", error_log: null });
+  return msg;
+};
+
+export const rescheduleFollowUpService = async (
+  tenant_id,
+  scheduled_message_id,
+  new_scheduled_at,
+) => {
+  const msg = await db.ScheduledMessages.findOne({
+    where: { id: scheduled_message_id, tenant_id },
+  });
+  if (!msg) throw new Error("Scheduled message not found");
+  if (msg.status === "sent")
+    throw new Error("Cannot reschedule a sent message");
+
+  const newDate = new Date(new_scheduled_at);
+  if (isNaN(newDate.getTime())) throw new Error("Invalid scheduled time");
+  if (newDate <= new Date())
+    throw new Error("Scheduled time must be in the future");
+
+  await msg.update({ scheduled_at: newDate, status: "pending" });
+  return msg;
+};
+
+export const sendNowFollowUpService = async (
+  tenant_id,
+  scheduled_message_id,
+) => {
+  const msg = await db.ScheduledMessages.findOne({
+    where: { id: scheduled_message_id, tenant_id },
+  });
+  if (!msg) throw new Error("Scheduled message not found");
+  if (msg.status === "sent") throw new Error("Message already sent");
+
+  const template = await db.WhatsappTemplates.findOne({
+    where: { template_id: msg.template_id, tenant_id },
+    attributes: ["template_name", "language"],
+  });
+  if (!template) {
+    await msg.update({
+      status: "failed",
+      error_log: `Template not found: ${msg.template_id}`,
+    });
+    return { success: false, error: `Template not found: ${msg.template_id}` };
+  }
+
+  // to_phone is already stored as E.164 without + (e.g. 919876543210)
+  const toPhone = msg.to_phone.replace(/^\+/, "");
+
+  // Build body components from appointment data if the template has variables.
+  // Convention: {{1}} = patient name, {{2}} = appointment date, {{3}} = doctor name.
+  let components = [];
+  const varCount = await db.WhatsappTemplateVariables.count({
+    where: { template_id: msg.template_id },
+  });
+  if (varCount > 0) {
+    const appointment = await db.Appointments.findOne({
+      where: { appointment_id: msg.appointment_id },
+      attributes: ["patient_name", "appointment_date", "doctor_id"],
+    });
+    if (appointment) {
+      let doctorName = "";
+      if (appointment.doctor_id) {
+        const doctor = await db.Doctors.findOne({
+          where: { doctor_id: appointment.doctor_id },
+          attributes: ["name"],
+        });
+        doctorName = doctor?.name || "";
+      }
+      const allValues = [
+        appointment.patient_name || "",
+        appointment.appointment_date || "",
+        doctorName,
+      ];
+      const parameters = allValues
+        .slice(0, varCount)
+        .map((v) => ({ type: "text", text: String(v) }));
+      components = [{ type: "body", parameters }];
+    }
+  }
+
+  try {
+    await sendWhatsAppTemplate(
+      tenant_id,
+      toPhone,
+      template.template_name,
+      template.language,
+      components,
+    );
+    await msg.update({ status: "sent", sent_at: new Date() });
+    return { success: true };
+  } catch (err) {
+    await msg.update({ status: "failed", error_log: err.message });
+    return { success: false, error: err.message };
+  }
+};
+
+export const getPendingFollowUpCountService = async (tenant_id) => {
+  const count = await db.ScheduledMessages.count({
+    where: {
+      tenant_id,
+      status: { [Op.in]: ["pending", "failed"] },
+    },
+  });
+  return { count };
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 export const getAppointmentsByContactIdService = async (
   tenant_id,
@@ -859,9 +1246,7 @@ export const getAllAppointmentsService = async (
         status,
         date,
         normalizedDate,
-        startOfDay: normalizedDate
-          ? toUtcMidnightIso(normalizedDate)
-          : null,
+        startOfDay: normalizedDate ? toUtcMidnightIso(normalizedDate) : null,
         startOfNextDay: normalizedDate
           ? toUtcMidnightIso(nextDateOnly(normalizedDate))
           : null,
@@ -1040,7 +1425,7 @@ const sendAppointmentNotificationEmail = async (
     const appointment = await db.Appointments.findOne({
       where: { appointment_id, tenant_id },
       include: [
-        { model: db.Doctors, as: "doctor", attributes: ["name"] },
+        { model: db.Doctors, as: "doctor", attributes: ["name", "title"] },
         { model: db.Contacts, as: "contact", attributes: ["email", "name"] },
       ],
     });
@@ -1052,13 +1437,23 @@ const sendAppointmentNotificationEmail = async (
 
     // Fetch tenant company name for email branding
     let companyName = "WhatsNexus";
+    let companyPhone = "";
+    let companyWebsite = "";
     try {
       const tenant = await db.Tenants.findOne({
         where: { tenant_id, is_deleted: false },
-        attributes: ["company_name"],
+        attributes: ["company_name", "owner_mobile", "ai_settings"],
         raw: true,
       });
       if (tenant?.company_name) companyName = tenant.company_name;
+      if (tenant?.owner_mobile) companyPhone = tenant.owner_mobile;
+      if (tenant?.ai_settings && typeof tenant.ai_settings === "object") {
+        companyWebsite =
+          tenant.ai_settings?.website ||
+          tenant.ai_settings?.company_website ||
+          tenant.ai_settings?.website_url ||
+          "";
+      }
     } catch (_) {}
 
     const formattedDate = formatAppointmentDate(appointment.appointment_date);
@@ -1072,10 +1467,14 @@ const sendAppointmentNotificationEmail = async (
       tokenNumber: appointment.token_number,
       date: formattedDate,
       time: appointment.appointment_time,
-      doctorName: appointment.doctor?.name || null,
+      doctorName: appointment.doctor
+        ? `${appointment.doctor.title || ""} ${appointment.doctor.name || ""}`.trim()
+        : null,
       reason: appointment.notes || null,
       changes,
       companyName,
+      companyPhone,
+      companyWebsite,
     });
 
     const subject = buildAppointmentEmailSubject({
@@ -1138,11 +1537,6 @@ export const updateAppointmentService = async (
   appointment_id,
   data,
 ) => {
-  console.log(
-    `[UPDATE-APPOINTMENT-SERVICE] Starting update for ${appointment_id}`,
-    { tenant_id, data },
-  );
-
   const transaction = await db.sequelize.transaction();
 
   try {
@@ -1194,10 +1588,14 @@ export const updateAppointmentService = async (
       );
     }
 
-    console.log(
-      `[UPDATE-APPOINTMENT-SERVICE] Built updateFields:`,
-      updateFields,
-    );
+    // Check if there's anything to update
+    if (Object.keys(updateFields).length === 0) {
+      console.error(
+        `[UPDATE-APPOINTMENT-SERVICE] No fields to update - rolling back`,
+      );
+      await transaction.rollback();
+      return appointment; // Return existing appointment without changes
+    }
 
     if (data.country_code !== undefined) {
       let cc = data.country_code.toString().replace(/\D/g, "");
@@ -1330,11 +1728,6 @@ export const updateAppointmentService = async (
         );
       }
     }
-
-    console.log(
-      `[UPDATE-APPOINTMENT-SERVICE] Executing DB update with fields:`,
-      updateFields,
-    );
 
     const [affectedRows] = await db.Appointments.update(updateFields, {
       where: { appointment_id, tenant_id },
@@ -1505,12 +1898,17 @@ export const getAvailableSlotsService = async (tenant_id, doctor_id, date) => {
     const fallbackDuration = doctor.consultation_duration || 30;
 
     // 4. Stored doctor_availability rows are concrete appointment slots.
-    const allSlots = availabilitySlots.map((avail) => ({
-      time: formatTimeToAMPM(avail.start_time),
-      startMinutes: timeToMinutes(avail.start_time),
-      endMinutes: timeToMinutes(avail.end_time),
-      duration: getDurationFromAvailabilityRow(avail, fallbackDuration),
-    })).filter((slot) => slot.endMinutes > slot.startMinutes && slot.endMinutes <= 1439);
+    const allSlots = availabilitySlots
+      .map((avail) => ({
+        time: formatTimeToAMPM(avail.start_time),
+        startMinutes: timeToMinutes(avail.start_time),
+        endMinutes: timeToMinutes(avail.end_time),
+        duration: getDurationFromAvailabilityRow(avail, fallbackDuration),
+      }))
+      .filter(
+        (slot) =>
+          slot.endMinutes > slot.startMinutes && slot.endMinutes <= 1439,
+      );
 
     // 5. Get booked slots for that doctor on that date
     const bookedAppointments = await db.Appointments.findAll({
@@ -1524,20 +1922,22 @@ export const getAvailableSlotsService = async (tenant_id, doctor_id, date) => {
       attributes: ["appointment_time"],
     });
     // 6. Filter out booked slots using range-based overlap logic
-    const freeSlots = allSlots.filter((slot) => {
-      const hasOverlap = bookedAppointments.some((appt) => {
-        const apptStart = timeToMinutes(appt.appointment_time);
-        const apptDuration = getDurationForAppointmentTime({
-          availabilityRows: availabilitySlots,
-          appointmentTime: appt.appointment_time,
-          fallbackDuration,
+    const freeSlots = allSlots
+      .filter((slot) => {
+        const hasOverlap = bookedAppointments.some((appt) => {
+          const apptStart = timeToMinutes(appt.appointment_time);
+          const apptDuration = getDurationForAppointmentTime({
+            availabilityRows: availabilitySlots,
+            appointmentTime: appt.appointment_time,
+            fallbackDuration,
+          });
+          const apptEnd = apptStart + apptDuration;
+          return slot.startMinutes < apptEnd && slot.endMinutes > apptStart;
         });
-        const apptEnd = apptStart + apptDuration;
-        return slot.startMinutes < apptEnd && slot.endMinutes > apptStart;
-      });
 
-      return !hasOverlap;
-    }).map((slot) => slot.time);
+        return !hasOverlap;
+      })
+      .map((slot) => slot.time);
 
     return {
       available: freeSlots.length > 0,

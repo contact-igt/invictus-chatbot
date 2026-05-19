@@ -54,6 +54,46 @@ const mapIndustryToLegacyType = (industryType = "general") => {
   return "organization";
 };
 
+const normalizeOptionalLookupId = (value) => {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  if (typeof value !== "string") return value;
+  const trimmed = value.trim();
+  return trimmed === "" ? null : trimmed;
+};
+
+const validateIndustryIdExists = async (industry_id) => {
+  if (industry_id === undefined || industry_id === null) return;
+
+  const industry = await db.Industries.findOne({
+    where: { industry_id },
+    attributes: ["industry_id"],
+    raw: true,
+  });
+
+  if (!industry) {
+    const error = new Error(`Invalid industry_id: ${industry_id}`);
+    error.statusCode = 400;
+    throw error;
+  }
+};
+
+const validatePlanIdExists = async (plan_id) => {
+  if (plan_id === undefined || plan_id === null) return;
+
+  const plan = await db.Plans.findOne({
+    where: { plan_id },
+    attributes: ["plan_id"],
+    raw: true,
+  });
+
+  if (!plan) {
+    const error = new Error(`Invalid plan_id: ${plan_id}`);
+    error.statusCode = 400;
+    throw error;
+  }
+};
+
 const validateAiModelSelections = async (ai_settings) => {
   if (!ai_settings) return null;
 
@@ -100,6 +140,8 @@ export const createTenantController = async (req, res) => {
       pincode,
       maxUsers,
       subscriptionPlan,
+      industry_id,
+      plan_id,
       profile,
       ai_settings,
     } = req.body;
@@ -131,6 +173,24 @@ export const createTenantController = async (req, res) => {
 
     const resolvedIndustryType = industry_type || "general";
     const resolvedLegacyType = mapIndustryToLegacyType(resolvedIndustryType);
+    const normalizedIndustryId = normalizeOptionalLookupId(industry_id);
+    const normalizedPlanId = normalizeOptionalLookupId(plan_id);
+
+    if (
+      normalizedIndustryId !== undefined &&
+      normalizedIndustryId !== null &&
+      typeof normalizedIndustryId !== "string"
+    ) {
+      return res.status(400).json({ message: "industry_id must be a string or null" });
+    }
+
+    if (
+      normalizedPlanId !== undefined &&
+      normalizedPlanId !== null &&
+      typeof normalizedPlanId !== "string"
+    ) {
+      return res.status(400).json({ message: "plan_id must be a string or null" });
+    }
 
     const tenant_id = await generateReadableIdFromLast(
       tableNames.TENANTS,
@@ -146,6 +206,9 @@ export const createTenantController = async (req, res) => {
     if (aiModelValidationError) {
       return res.status(400).json({ message: aiModelValidationError });
     }
+
+    await validateIndustryIdExists(normalizedIndustryId);
+    await validatePlanIdExists(normalizedPlanId);
 
     // Check for existing user in Tenants
     const existingTu = await findTenantUserByEmailOrMobileGloballyService(
@@ -192,6 +255,8 @@ export const createTenantController = async (req, res) => {
         })(),
         t, // transaction
         resolvedIndustryType,
+        normalizedIndustryId,
+        normalizedPlanId,
       );
 
       tenantUserId = await generateReadableIdFromLast(
@@ -248,6 +313,10 @@ export const createTenantController = async (req, res) => {
         "Tenant created successfully. Invitation email sent to owner.",
     });
   } catch (err) {
+    if (err?.statusCode) {
+      return res.status(err.statusCode).json({ message: err.message });
+    }
+
     if (err.original?.code === "ER_DUP_ENTRY") {
       return res.status(400).json({
         message: "Email or mobile already exists",
@@ -311,6 +380,8 @@ export const updateTenantController = async (req, res) => {
       pincode,
       maxUsers,
       subscriptionPlan,
+      industry_id,
+      plan_id,
       profile,
       ai_settings,
     } = req.body;
@@ -368,6 +439,27 @@ export const updateTenantController = async (req, res) => {
       industry_type !== undefined && industry_type !== null
         ? mapIndustryToLegacyType(industry_type)
         : undefined;
+    const normalizedIndustryId = normalizeOptionalLookupId(industry_id);
+    const normalizedPlanId = normalizeOptionalLookupId(plan_id);
+
+    if (
+      normalizedIndustryId !== undefined &&
+      normalizedIndustryId !== null &&
+      typeof normalizedIndustryId !== "string"
+    ) {
+      return res.status(400).json({ message: "industry_id must be a string or null" });
+    }
+
+    if (
+      normalizedPlanId !== undefined &&
+      normalizedPlanId !== null &&
+      typeof normalizedPlanId !== "string"
+    ) {
+      return res.status(400).json({ message: "plan_id must be a string or null" });
+    }
+
+    await validateIndustryIdExists(normalizedIndustryId);
+    await validatePlanIdExists(normalizedPlanId);
 
     await updateTenantService(
       company_name,
@@ -396,6 +488,8 @@ export const updateTenantController = async (req, res) => {
       })(),
       id,
       industry_type,
+      normalizedIndustryId,
+      normalizedPlanId,
     );
 
     // Store OpenAI key in tenant_secrets if provided via this path
@@ -443,6 +537,10 @@ export const updateTenantController = async (req, res) => {
       message: "Tenant updated successfully",
     });
   } catch (err) {
+    if (err?.statusCode) {
+      return res.status(err.statusCode).json({ message: err.message });
+    }
+
     if (err.original?.code === "ER_DUP_ENTRY") {
       return res
         .status(400)

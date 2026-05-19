@@ -15,7 +15,6 @@ export const tableNames = {
   KNOWLEDGESOURCE: "knowledge_sources",
   KNOWLEDGECHUNKS: "knowledge_chunks",
   AIPROMPT: "ai_prompts",
-  APPOINTMENTS: "appointments", // NEW
   APPOINTMENT_OUTCOMES: "appointment_outcomes",
   CONTACTS: "contacts",
   CONTACT_GROUPS: "contact_groups",
@@ -65,4 +64,12 @@ export const tableNames = {
   MENTORS: "mentors",
   COURSES: "courses",
   TENANT_FEATURE_ACCESS: "tenant_feature_access",
+  SCHEDULED_MESSAGES: "scheduled_messages",
+  INDUSTRIES: "industries",
+  SAAS_MODULES: "saas_modules",
+  INDUSTRY_SAAS_MODULES: "industry_saas_modules",
+  PLANS: "plans",
+  PLAN_SAAS_MODULES: "plan_saas_modules",
+  TENANT_SAAS_MODULE_OVERRIDES: "tenant_saas_module_overrides",
+  NAVIGATION_ITEMS: "navigation_items",
 };

@@ -238,15 +238,155 @@ export const defineAssociations = (db) => {
     constraints: false,
   });
 
+  // Industries -> Tenants (One-to-Many via business key)
+  db.Industries.hasMany(db.Tenants, {
+    foreignKey: "industry_id",
+    sourceKey: "industry_id",
+    as: "tenants",
+    constraints: false,
+  });
+  db.Tenants.belongsTo(db.Industries, {
+    foreignKey: "industry_id",
+    targetKey: "industry_id",
+    as: "industry",
+    constraints: false,
+  });
+
+  // Plans -> Tenants (One-to-Many via business key)
+  db.Plans.hasMany(db.Tenants, {
+    foreignKey: "plan_id",
+    sourceKey: "plan_id",
+    as: "tenants",
+    constraints: false,
+  });
+  db.Tenants.belongsTo(db.Plans, {
+    foreignKey: "plan_id",
+    targetKey: "plan_id",
+    as: "plan",
+    constraints: false,
+  });
+
+  // Industries -> IndustrySaaSModules (One-to-Many)
+  db.Industries.hasMany(db.IndustrySaaSModules, {
+    foreignKey: "industry_id",
+    sourceKey: "industry_id",
+    as: "saasModuleMappings",
+    constraints: false,
+  });
+  db.IndustrySaaSModules.belongsTo(db.Industries, {
+    foreignKey: "industry_id",
+    targetKey: "industry_id",
+    as: "industry",
+    constraints: false,
+  });
+
+  // SaaSModules -> IndustrySaaSModules (One-to-Many)
+  db.SaaSModules.hasMany(db.IndustrySaaSModules, {
+    foreignKey: "module_id",
+    sourceKey: "module_id",
+    as: "industryMappings",
+    constraints: false,
+  });
+  db.IndustrySaaSModules.belongsTo(db.SaaSModules, {
+    foreignKey: "module_id",
+    targetKey: "module_id",
+    as: "saasModule",
+    constraints: false,
+  });
+
+  // Plans -> PlanSaaSModules (One-to-Many)
+  db.Plans.hasMany(db.PlanSaaSModules, {
+    foreignKey: "plan_id",
+    sourceKey: "plan_id",
+    as: "saasModuleMappings",
+    constraints: false,
+  });
+  db.PlanSaaSModules.belongsTo(db.Plans, {
+    foreignKey: "plan_id",
+    targetKey: "plan_id",
+    as: "plan",
+    constraints: false,
+  });
+
+  // SaaSModules -> PlanSaaSModules (One-to-Many)
+  db.SaaSModules.hasMany(db.PlanSaaSModules, {
+    foreignKey: "module_id",
+    sourceKey: "module_id",
+    as: "planMappings",
+    constraints: false,
+  });
+  db.PlanSaaSModules.belongsTo(db.SaaSModules, {
+    foreignKey: "module_id",
+    targetKey: "module_id",
+    as: "saasModule",
+    constraints: false,
+  });
+
+  // Tenants -> TenantSaaSModuleOverrides (One-to-Many)
+  db.Tenants.hasMany(db.TenantSaaSModuleOverrides, {
+    foreignKey: "tenant_id",
+    sourceKey: "tenant_id",
+    as: "saasModuleOverrides",
+    constraints: false,
+  });
+  db.TenantSaaSModuleOverrides.belongsTo(db.Tenants, {
+    foreignKey: "tenant_id",
+    targetKey: "tenant_id",
+    as: "tenant",
+    constraints: false,
+  });
+
+  // SaaSModules -> TenantSaaSModuleOverrides (One-to-Many)
+  db.SaaSModules.hasMany(db.TenantSaaSModuleOverrides, {
+    foreignKey: "module_id",
+    sourceKey: "module_id",
+    as: "tenantOverrides",
+    constraints: false,
+  });
+  db.TenantSaaSModuleOverrides.belongsTo(db.SaaSModules, {
+    foreignKey: "module_id",
+    targetKey: "module_id",
+    as: "saasModule",
+    constraints: false,
+  });
+
+  // SaaSModules -> NavigationItems (One-to-Many)
+  db.SaaSModules.hasMany(db.NavigationItems, {
+    foreignKey: "module_id",
+    sourceKey: "module_id",
+    as: "navigationItems",
+    constraints: false,
+  });
+  db.NavigationItems.belongsTo(db.SaaSModules, {
+    foreignKey: "module_id",
+    targetKey: "module_id",
+    as: "saasModule",
+    constraints: false,
+  });
+
+  // NavigationItems -> NavigationItems (Self relation)
+  db.NavigationItems.hasMany(db.NavigationItems, {
+    foreignKey: "parent_item_id",
+    sourceKey: "navigation_item_id",
+    as: "children",
+    constraints: false,
+  });
+  db.NavigationItems.belongsTo(db.NavigationItems, {
+    foreignKey: "parent_item_id",
+    targetKey: "navigation_item_id",
+    as: "parent",
+    constraints: false,
+  });
+
   // ========================================
   // CONTACT RELATIONSHIPS
   // ========================================
 
-  // Contacts → Leads (One-to-One)
-  db.Contacts.hasOne(db.Leads, {
+  // Contacts → Leads (One-to-Many)
+  db.Contacts.hasMany(db.Leads, {
     foreignKey: "contact_id",
     sourceKey: "contact_id",
-    as: "lead",
+    as: "leads",
     constraints: false,
   });
   db.Leads.belongsTo(db.Contacts, {
@@ -431,7 +571,6 @@ export const defineAssociations = (db) => {
     constraints: false,
   });
 
-
   db.Doctors.hasMany(db.DoctorAvailability, {
     foreignKey: "doctor_id",
     sourceKey: "doctor_id",
@@ -479,17 +618,47 @@ export const defineAssociations = (db) => {
     constraints: false,
   });
 
-  // Appointment -> Outcomes (One-to-Many)
-  db.Appointments.hasMany(db.AppointmentOutcomes, {
+  // Appointment -> Outcome (One-to-One: unique index on appointment_id enforces one outcome per appointment)
+  db.Appointments.hasOne(db.AppointmentOutcomes, {
     foreignKey: "appointment_id",
     sourceKey: "appointment_id",
-    as: "outcomes",
+    as: "outcome",
     constraints: false,
   });
   db.AppointmentOutcomes.belongsTo(db.Appointments, {
     foreignKey: "appointment_id",
     targetKey: "appointment_id",
     as: "appointment",
+    constraints: false,
+  });
+
+  // Appointment -> ScheduledMessages (One-to-Many)
+  db.Appointments.hasMany(db.ScheduledMessages, {
+    foreignKey: "appointment_id",
+    sourceKey: "appointment_id",
+    as: "scheduledMessages",
+    constraints: false,
+  });
+  db.ScheduledMessages.belongsTo(db.Appointments, {
+    foreignKey: "appointment_id",
+    targetKey: "appointment_id",
+    as: "appointment",
+    constraints: false,
+  });
+
+  // ScheduledMessages -> Contact (Belongs-to)
+  db.ScheduledMessages.belongsTo(db.Contacts, {
+    foreignKey: "contact_id",
+    targetKey: "contact_id",
+    as: "contact",
+    constraints: false,
+  });
+
+  // ScheduledMessages -> WhatsappTemplate (Belongs-to via business key)
+  db.ScheduledMessages.belongsTo(db.WhatsappTemplates, {
+    foreignKey: "template_id",
+    targetKey: "template_id",
+    as: "template",
     constraints: false,
   });
 
@@ -694,8 +863,82 @@ export const defineAssociations = (db) => {
   });
 
   // ========================================
+  // BILLING CYCLES RELATIONSHIPS
+  // ========================================
+
+  // Tenant → BillingCycles (One-to-Many)
+  db.Tenants.hasMany(db.BillingCycles, {
+    foreignKey: "tenant_id",
+    sourceKey: "tenant_id",
+    as: "billingCycles",
+    constraints: false,
+  });
+  db.BillingCycles.belongsTo(db.Tenants, {
+    foreignKey: "tenant_id",
+    targetKey: "tenant_id",
+    as: "tenant",
+    constraints: false,
+  });
+
+  // BillingCycles → BillingLedger (One-to-Many)
+  db.BillingCycles.hasMany(db.BillingLedger, {
+    foreignKey: "billing_cycle_id",
+    sourceKey: "id",
+    as: "ledgerEntries",
+    constraints: false,
+  });
+  db.BillingLedger.belongsTo(db.BillingCycles, {
+    foreignKey: "billing_cycle_id",
+    targetKey: "id",
+    as: "billingCycle",
+    constraints: false,
+  });
+
+  // BillingCycles → AiTokenUsage (One-to-Many)
+  db.BillingCycles.hasMany(db.AiTokenUsage, {
+    foreignKey: "billing_cycle_id",
+    sourceKey: "id",
+    as: "aiTokenUsages",
+    constraints: false,
+  });
+  db.AiTokenUsage.belongsTo(db.BillingCycles, {
+    foreignKey: "billing_cycle_id",
+    targetKey: "id",
+    as: "billingCycle",
+    constraints: false,
+  });
+
+  // ========================================
   // COURSES & MENTORS RELATIONSHIPS
   // ========================================
+
+  // Tenant → Mentors (One-to-Many)
+  db.Tenants.hasMany(db.Mentors, {
+    foreignKey: "tenant_id",
+    sourceKey: "tenant_id",
+    as: "mentors",
+    constraints: false,
+  });
+  db.Mentors.belongsTo(db.Tenants, {
+    foreignKey: "tenant_id",
+    targetKey: "tenant_id",
+    as: "tenant",
+    constraints: false,
+  });
+
+  // Tenant → Courses (One-to-Many)
+  db.Tenants.hasMany(db.Courses, {
+    foreignKey: "tenant_id",
+    sourceKey: "tenant_id",
+    as: "tenantCourses",
+    constraints: false,
+  });
+  db.Courses.belongsTo(db.Tenants, {
+    foreignKey: "tenant_id",
+    targetKey: "tenant_id",
+    as: "tenant",
+    constraints: false,
+  });
 
   // Mentor → Courses (One-to-Many)
   db.Mentors.hasMany(db.Courses, {

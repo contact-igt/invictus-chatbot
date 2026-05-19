@@ -53,6 +53,18 @@ export const TenantsTable = (sequelize, Sequelize) => {
         defaultValue: "general",
       },
 
+      industry_id: {
+        type: Sequelize.STRING,
+        allowNull: true,
+        defaultValue: null,
+      },
+
+      plan_id: {
+        type: Sequelize.STRING,
+        allowNull: true,
+        defaultValue: null,
+      },
+
       address: {
         type: Sequelize.TEXT,
         allowNull: true,
@@ -250,6 +262,14 @@ export const TenantsTable = (sequelize, Sequelize) => {
           name: "unique_owner_mobile",
           unique: true,
           fields: ["owner_mobile"],
+        },
+        {
+          name: "idx_tenant_industry_id",
+          fields: ["industry_id"],
+        },
+        {
+          name: "idx_tenant_plan_id",
+          fields: ["plan_id"],
         },
       ],
     },
