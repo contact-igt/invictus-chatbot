@@ -19,12 +19,18 @@ import {
   buildAvailableDoctorListAppointmentResponse,
   handleAdvancedAppointmentBooking,
 } from "../AppointmentModel/Advanced_Appointment_Booking.service.js";
+import { handleManageBookedAppointments } from "../AppointmentModel/Manage_Booked_Appointments.service.js";
 import {
+  getAdvancedAppointmentStartReason,
   hasAppointmentStartSignal,
+  isContextualPositiveBookingReply,
   isDoctorListRequest,
   isPureSmallTalkMessage,
-  shouldStartAdvancedAppointmentFlow,
 } from "../AppointmentModel/appointmentRoutingGuard.service.js";
+import {
+  hasManageAppointmentStartSignal,
+  shouldStartManageAppointmentsFlow,
+} from "../AppointmentModel/manageAppointmentRoutingGuard.service.js";
 
 const httpsAgent = new https.Agent({
   family: 4,
@@ -80,6 +86,7 @@ const shouldEnforceStrictGrounding = (message = "", intentResult = null) => {
 
   // Keep booking/appointment and doctor-flow logic unchanged.
   if (intentResult?.intent === "APPOINTMENT_ACTION") return false;
+  if (intentResult?.intent === "MANAGE_APPOINTMENTS_ACTION") return false;
   if (intentResult?.requires?.appointments) return false;
   if (intentResult?.requires?.doctors) return false;
 
@@ -798,9 +805,13 @@ export const getOpenAIReply = async (
     console.log("language", languageInfo);
 
     const chatHistory = buildChatHistory(memory);
+    const hasContextualBookingShortcut = isContextualPositiveBookingReply({
+      message: cleanMessage,
+      chatHistory,
+    });
 
     // ── Phase 1.5: Intent Classification — what data does this message need? ──
-    let intentResult = isPureSmallTalkMessage(cleanMessage)
+    let intentResult = isPureSmallTalkMessage(cleanMessage) && !hasContextualBookingShortcut
       ? {
           intent: "GENERAL_QUESTION",
           requires: { knowledge: false, doctors: false, appointments: false },
@@ -811,7 +822,13 @@ export const getOpenAIReply = async (
           chatHistory,
           tenant_id,
         );
-    if (hasAppointmentStartSignal(cleanMessage)) {
+    if (hasManageAppointmentStartSignal(cleanMessage)) {
+      intentResult = {
+        ...intentResult,
+        intent: "MANAGE_APPOINTMENTS_ACTION",
+        requires: { knowledge: false, doctors: true, appointments: true },
+      };
+    } else if (hasAppointmentStartSignal(cleanMessage)) {
       intentResult = {
         ...intentResult,
         intent: "APPOINTMENT_ACTION",
@@ -836,14 +853,57 @@ export const getOpenAIReply = async (
 
     faqTrace("[AI-FLOW] intent classified", { intent: intentResult.intent, requires: intentResult.requires, msg: cleanMessage.substring(0, 60) });
 
-    // NEW: Route appointment intents directly — skip heavy AI call and knowledge search
     if (
       ENABLE_APPOINTMENT_FLOW &&
-      shouldStartAdvancedAppointmentFlow({
+      shouldStartManageAppointmentsFlow({
         intent: intentResult.intent,
         message: cleanMessage,
       })
-    ) { // NEW
+    ) {
+      const contactObj = {
+        contact_id,
+        phone_number: phone,
+        phone,
+        ...(cachedData?.contact || {}),
+      };
+      const manageAppointmentResult = await handleManageBookedAppointments({
+        tenantId: tenant_id,
+        userPhone: phone,
+        contact: contactObj,
+        message: cleanMessage,
+        interactiveReplyId: null,
+        intent: intentResult.intent,
+      });
+      if (!manageAppointmentResult?.handoverToNormalRouter) {
+        return {
+          message: manageAppointmentResult.message,
+          tagDetected: null,
+          tagPayload: null,
+          intent: intentResult.intent,
+          requires: intentResult.requires,
+          lead_intelligence: intentResult.lead_intelligence || null,
+          _manageAppointmentResult: manageAppointmentResult,
+        };
+      }
+    }
+
+    const advancedStartReason = ENABLE_APPOINTMENT_FLOW
+      ? getAdvancedAppointmentStartReason({
+          intent: intentResult.intent,
+          message: cleanMessage,
+          chatHistory,
+        })
+      : null;
+    if (intentResult.intent === "APPOINTMENT_ACTION") {
+      faqTrace("[AI-FLOW] advanced start gate", {
+        allowed: Boolean(advancedStartReason),
+        reason: advancedStartReason || "blocked",
+        msg: cleanMessage.substring(0, 60),
+      });
+    }
+
+    // NEW: Route appointment intents directly — skip heavy AI call and knowledge search
+    if (advancedStartReason) { // NEW
       const contactObj = { // NEW
         contact_id, // NEW
         phone_number: phone, // NEW

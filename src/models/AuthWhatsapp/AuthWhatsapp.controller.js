@@ -25,14 +25,23 @@ import {
   buildAvailableDoctorListAppointmentResponse,
   handleAdvancedAppointmentBooking,
 } from "../AppointmentModel/Advanced_Appointment_Booking.service.js";
+import { handleManageBookedAppointments } from "../AppointmentModel/Manage_Booked_Appointments.service.js";
 import {
   getActiveAppointmentSession,
   isSessionExpired,
 } from "../AppointmentModel/appointmentSession.service.js";
 import {
+  getActiveManageAppointmentSession,
+  isManageAppointmentSessionExpired,
+} from "../AppointmentModel/manageAppointmentSession.service.js";
+import {
   isDoctorListRequest,
   shouldRouteActiveAdvancedAppointmentMessage,
 } from "../AppointmentModel/appointmentRoutingGuard.service.js";
+import {
+  isManageAppointmentReplyId,
+  shouldRouteActiveManageAppointmentMessage,
+} from "../AppointmentModel/manageAppointmentRoutingGuard.service.js";
 import { sendAppointmentPayload } from "../AppointmentModel/whatsappAppointmentTemplates.service.js";
 import { parseButtonReply, sendQuickReply, sendListMessage, sendAppointmentCard } from "./whatsappButtons.service.js"; // NEW
 
@@ -1047,6 +1056,21 @@ export const receiveMessage = async (req, res) => {
           return;
         }
 
+        const handledByManageAppointment =
+          await tryHandleManageAppointmentFlow({
+            tenant_id,
+            phone,
+            contactObj,
+            contactsaved,
+            phone_number_id,
+            name,
+            message: buttonReplyId || text,
+            visibleText: text,
+            interactiveReplyId: buttonReplyId,
+          });
+
+        if (handledByManageAppointment) return;
+
         const handledByAdvancedAppointment =
           await tryHandleAdvancedAppointmentFlow({
             tenant_id,
@@ -1269,6 +1293,18 @@ export const receiveMessage = async (req, res) => {
         const _apptTrace = { _appointmentResult: !!aiResult?._appointmentResult, tagDetected: aiResult?.tagDetected, msgPreview: String(aiResult?.message || "").substring(0, 60) };
         try { import("fs").then(fs => fs.default.appendFileSync("/tmp/faq_trace.log", `[${new Date().toISOString()}] [CONTROLLER] aiResult check ${JSON.stringify(_apptTrace)}\n`)).catch(() => {}); } catch {}
         console.log("[FAQ-PIPELINE][CTRL] aiResult:", JSON.stringify(_apptTrace));
+        if (aiResult?._manageAppointmentResult) {
+          await handleAdvancedAppointmentResponse(
+            aiResult._manageAppointmentResult,
+            tenant_id,
+            phone,
+            contactsaved,
+            phone_number_id,
+            name,
+          );
+          return;
+        }
+
         if (aiResult?._appointmentResult) {
           await handleAdvancedAppointmentResponse(
             aiResult._appointmentResult,
@@ -1483,6 +1519,21 @@ export const receiveMessage = async (req, res) => {
                   return;
                 }
 
+                const queuedHandledByManageAppointment =
+                  await tryHandleManageAppointmentFlow({
+                    tenant_id,
+                    phone,
+                    contactObj: queuedContactObj,
+                    contactsaved: pending.contactsaved || null,
+                    phone_number_id,
+                    name: pending.name || pending.contactsaved?.name || null,
+                    message: queuedEffectiveText,
+                    visibleText: pending.text || "",
+                    interactiveReplyId: queuedInteractiveReplyId,
+                  });
+
+                if (queuedHandledByManageAppointment) return;
+
                 const queuedHandledByAdvancedAppointment =
                   await tryHandleAdvancedAppointmentFlow({
                     tenant_id,
@@ -1576,6 +1627,18 @@ export const receiveMessage = async (req, res) => {
                   {}, // cachedData
                   pending.messageId || null,
                 );
+
+                if (aiResult?._manageAppointmentResult) {
+                  await handleAdvancedAppointmentResponse(
+                    aiResult._manageAppointmentResult,
+                    tenant_id,
+                    phone,
+                    pending.contactsaved || null,
+                    phone_number_id,
+                    pending.name || pending.contactsaved?.name || null,
+                  );
+                  return;
+                }
 
                 if (aiResult?._appointmentResult) {
                   await handleAdvancedAppointmentResponse(
@@ -1769,6 +1832,94 @@ async function expireAdvancedAppointmentSessionIfNeeded({
     interactiveReplyId: null,
     whatsappMessageId,
   });
+  return true;
+}
+
+async function tryHandleManageAppointmentFlow({
+  tenant_id,
+  phone,
+  contactObj,
+  contactsaved = null,
+  phone_number_id = null,
+  name = null,
+  message = "",
+  visibleText = "",
+  interactiveReplyId = null,
+}) {
+  const activeManageSession = await getActiveManageAppointmentSession({
+    tenantId: tenant_id,
+    userPhone: phone,
+  });
+
+  const hasManageReply = isManageAppointmentReplyId(interactiveReplyId || message);
+  let isLegacyManageButton = false;
+  if (interactiveReplyId === "cancel_appointment") {
+    const activeAdvancedSession = await getActiveAppointmentSession({
+      tenantId: tenant_id,
+      contactId: contactObj?.contact_id || contactsaved?.contact_id,
+      userPhone: phone,
+    });
+    isLegacyManageButton = !activeAdvancedSession;
+  }
+  const shouldTry =
+    hasManageReply ||
+    isLegacyManageButton ||
+    Boolean(activeManageSession && shouldRouteActiveManageAppointmentMessage({
+      state: activeManageSession.state,
+      message: visibleText || message,
+      interactiveReplyId,
+    }));
+
+  if (!shouldTry) return false;
+
+  if (activeManageSession && isManageAppointmentSessionExpired(activeManageSession)) {
+    await handleManageBookedAppointments({
+      tenantId: tenant_id,
+      userPhone: phone,
+      contact: contactObj,
+      message: visibleText || message,
+      interactiveReplyId,
+    });
+    return false;
+  }
+
+  const manageResult = await handleManageBookedAppointments({
+    tenantId: tenant_id,
+    userPhone: phone,
+    contact: contactObj,
+    message: visibleText || message,
+    interactiveReplyId: isLegacyManageButton ? "view_my_appointments" : interactiveReplyId,
+  });
+
+  if (manageResult?.handoverToNormalRouter) return false;
+
+  if (manageResult?.handoverToBooking) {
+    const advancedResult = await handleAdvancedAppointmentBooking({
+      tenantId: tenant_id,
+      userPhone: phone,
+      contact: contactObj,
+      message: "create_appointment",
+      interactiveReplyId: "create_appointment",
+    });
+    await handleAdvancedAppointmentResponse(
+      advancedResult,
+      tenant_id,
+      phone,
+      contactsaved,
+      phone_number_id,
+      name,
+    );
+    return true;
+  }
+
+  await handleAdvancedAppointmentResponse(
+    manageResult,
+    tenant_id,
+    phone,
+    contactsaved,
+    phone_number_id,
+    name,
+  );
   return true;
 }
 

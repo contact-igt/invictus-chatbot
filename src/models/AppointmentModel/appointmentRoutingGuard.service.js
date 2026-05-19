@@ -70,6 +70,37 @@ const APPOINTMENT_START_PATTERNS = [
   /^(appointment|book appointment|booking|consultation)$/i,
 ];
 
+const CONTEXTUAL_BOOKING_WINDOW_MS = 10 * 60 * 1000;
+const CONTEXTUAL_ASSISTANT_MESSAGE_LIMIT = 3;
+
+const POSITIVE_BOOKING_SHORTCUTS = new Set([
+  "yes",
+  "y",
+  "yeah",
+  "yep",
+  "ok",
+  "okay",
+  "sure",
+  "proceed",
+  "go ahead",
+  "yes please",
+  "haan",
+  "han",
+  "ha",
+  "ji",
+  "confirm",
+]);
+
+const BOOKING_OFFER_PATTERNS = [
+  /\bwould\s+you\s+like\s+to\s+book\b/i,
+  /\bbook\s+a\s+new\s+appointment\b/i,
+  /\bschedule\s+an?\s+appointment\b/i,
+  /\bcreate\s+a\s+booking\b/i,
+  /\bbook\s+a\s+consultation\b/i,
+  /\bbook\s+(a\s+)?(demo|session|class|visit)\b/i,
+  /\bwould\s+you\s+like\s+to\s+(schedule|create|reserve|make)\b.*\b(appointment|booking|consultation|meeting|demo|session|class|visit)\b/i,
+];
+
 const DOCTOR_LIST_REQUEST_PATTERNS = [
   /^(doctor|doctors|dr|drs)$/i,
   /\b(show|list|view|see|available|which|who)\b.*\b(doctors?|drs?)\b/i,
@@ -93,6 +124,39 @@ const normalizeText = (value = "") =>
   String(value || "")
     .replace(/\s+/g, " ")
     .trim();
+
+const normalizeShortcutText = (value = "") =>
+  normalizeText(value)
+    .toLowerCase()
+    .replace(/[!?.]+$/g, "");
+
+const isPositiveBookingShortcut = (message = "") =>
+  POSITIVE_BOOKING_SHORTCUTS.has(normalizeShortcutText(message));
+
+const isRecentContextMessage = (messageAt, now = Date.now()) => {
+  if (!messageAt) return false;
+  const timestamp = new Date(messageAt).getTime();
+  return Number.isFinite(timestamp) && now - timestamp <= CONTEXTUAL_BOOKING_WINDOW_MS;
+};
+
+const hasBookingOfferText = (message = "") =>
+  BOOKING_OFFER_PATTERNS.some((pattern) => pattern.test(String(message || "")));
+
+export const isContextualPositiveBookingReply = ({
+  message = "",
+  chatHistory = [],
+  now = Date.now(),
+} = {}) => {
+  if (!isPositiveBookingShortcut(message)) return false;
+
+  const recentAssistantMessages = [...(Array.isArray(chatHistory) ? chatHistory : [])]
+    .reverse()
+    .filter((entry) => entry?.role === "assistant")
+    .filter((entry) => isRecentContextMessage(entry.message_at, now))
+    .slice(0, CONTEXTUAL_ASSISTANT_MESSAGE_LIMIT);
+
+  return recentAssistantMessages.some((entry) => hasBookingOfferText(entry.content));
+};
 
 export const hasAppointmentStartSignal = (message = "") => {
   const text = normalizeText(message);
@@ -159,14 +223,24 @@ export const isAppointmentReply = (value = "") => {
   return decoded.type !== APPOINTMENT_REPLY_TYPES.UNKNOWN;
 };
 
-export const shouldStartAdvancedAppointmentFlow = ({
+export const getAdvancedAppointmentStartReason = ({
   intent,
   message,
   interactiveReplyId = null,
+  chatHistory = [],
 } = {}) => {
-  if (interactiveReplyId === "create_appointment") return true;
-  if (isPureSmallTalkMessage(message)) return false;
-  return intent === "APPOINTMENT_ACTION" && hasAppointmentStartSignal(message);
+  if (interactiveReplyId === "create_appointment") return "interactive_create_appointment";
+  if (intent !== "APPOINTMENT_ACTION") return null;
+  if (hasAppointmentStartSignal(message)) return "direct_start_signal";
+  if (isContextualPositiveBookingReply({ message, chatHistory })) {
+    return "contextual_positive_shortcut";
+  }
+  if (isPureSmallTalkMessage(message)) return null;
+  return null;
+};
+
+export const shouldStartAdvancedAppointmentFlow = (args = {}) => {
+  return Boolean(getAdvancedAppointmentStartReason(args));
 };
 
 const looksLikeNameInput = (message = "") => {

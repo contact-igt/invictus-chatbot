@@ -3,8 +3,10 @@ import * as AppointmentService from "./appointment.service.js";
 const VALID_STATUSES = [
   "Pending",
   "Confirmed",
+  "Rescheduled",
   "Completed",
   "Cancelled",
+  "Expired",
   "Noshow",
 ];
 

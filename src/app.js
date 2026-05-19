@@ -60,6 +60,7 @@ import { runHardDeleteCron } from "./utils/lifecycle/hardDeleteCron.js";
 import { runMissingMessageBillingReconciliationCron } from "./cron/reconciliationCron.js";
 import { cleanupExpiredSessions } from "./models/AppointmentModel/appointmentConversation.service.js";
 import { expireAdvancedAppointmentSessions } from "./models/AppointmentModel/Advanced_Appointment_Booking.service.js";
+import { expireManageAppointmentSessions } from "./models/AppointmentModel/Manage_Booked_Appointments.service.js";
 
 dns.setDefaultResultOrder("ipv4first");
 
@@ -271,6 +272,12 @@ cron.schedule("* * * * *", () => {
     logger.error(`[CRON] Advanced appointment expiry failed: ${err.message}`);
   });
 }); // Every minute — expire advanced appointment sessions and release slot locks
+
+cron.schedule("* * * * *", () => {
+  expireManageAppointmentSessions().catch((err) => {
+    logger.error(`[CRON] Manage appointment expiry failed: ${err.message}`);
+  });
+}); // Every minute — expire manage appointment sessions
 
 cron.schedule("*/15 * * * *", () => {
   checkHealthAlerts();

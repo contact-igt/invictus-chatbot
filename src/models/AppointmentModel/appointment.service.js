@@ -95,6 +95,7 @@ const getDayOfWeekFromDate = (date) => {
 };
 
 const ALLOWED_FOLLOW_UP_TYPES = new Set(["Call", "Visit", "WhatsApp"]);
+const BOOKED_SLOT_STATUSES = ["Pending", "Confirmed", "Rescheduled"];
 
 const createFollowUpPlaceholder = async ({
   appointment_id,
@@ -215,6 +216,9 @@ export const createAppointmentService = async (data) => {
     age,
     notes,
     email,
+    branch_name,
+    service_name,
+    slot_id,
     send_creation_email = true,
     creation_email_type = "Confirmed",
   } = data;
@@ -388,7 +392,7 @@ export const createAppointmentService = async (data) => {
           doctor_id,
           is_deleted: false,
           appointment_date: buildAppointmentDateWhere(appointment_date),
-          status: { [Op.in]: ["Pending", "Confirmed"] },
+          status: { [Op.in]: BOOKED_SLOT_STATUSES },
         },
         attributes: ["appointment_time"],
         transaction,
@@ -454,6 +458,9 @@ export const createAppointmentService = async (data) => {
         token_number,
         notes: notes || null,
         email,
+        branch_name: branch_name || null,
+        service_name: service_name || null,
+        slot_id: slot_id || null,
       },
       { transaction },
     );
@@ -499,7 +506,7 @@ export const getActiveAppointmentsByContactService = async (
         tenant_id,
         contact_id,
         is_deleted: false,
-        status: { [Op.in]: ["Pending", "Confirmed"] },
+        status: { [Op.in]: BOOKED_SLOT_STATUSES },
         appointment_date: { [Op.gte]: today },
       },
       include: [
@@ -539,7 +546,7 @@ export const getRecentAppointmentsForAIService = async (
           // Active appointments
           {
             is_deleted: false,
-            status: { [Op.in]: ["Pending", "Confirmed", "Completed"] },
+            status: { [Op.in]: ["Pending", "Confirmed", "Rescheduled", "Completed"] },
             appointment_date: {
               [Op.gte]: new Date(today.getTime() - 3 * 24 * 60 * 60 * 1000),
             },
@@ -992,7 +999,7 @@ export const checkAvailabilityService = async (
       doctor_id,
       is_deleted: false,
       appointment_date: buildAppointmentDateWhere(normalizedDate),
-      status: { [Op.in]: ["Pending", "Confirmed"] },
+      status: { [Op.in]: BOOKED_SLOT_STATUSES },
     };
 
     if (excludeAppointmentId) {
@@ -1175,6 +1182,11 @@ export const updateAppointmentService = async (
     if (data.notes !== undefined) updateFields.notes = data.notes;
     if (data.age !== undefined) updateFields.age = data.age;
     if (data.email !== undefined) updateFields.email = data.email;
+    if (data.branch_name !== undefined) updateFields.branch_name = data.branch_name;
+    if (data.service_name !== undefined) updateFields.service_name = data.service_name;
+    if (data.slot_id !== undefined) updateFields.slot_id = data.slot_id;
+    if (data.cancelled_at !== undefined) updateFields.cancelled_at = data.cancelled_at;
+    if (data.cancelled_by !== undefined) updateFields.cancelled_by = data.cancelled_by;
 
     if (data.appointment_time !== undefined) {
       updateFields.appointment_time = normalizeTimeFormat(
@@ -1187,15 +1199,6 @@ export const updateAppointmentService = async (
       updateFields,
     );
 
-    // Check if there's anything to update
-    if (Object.keys(updateFields).length === 0) {
-      console.error(
-        `[UPDATE-APPOINTMENT-SERVICE] No fields to update - rolling back`,
-      );
-      await transaction.rollback();
-      return appointment; // Return existing appointment without changes
-    }
-
     if (data.country_code !== undefined) {
       let cc = data.country_code.toString().replace(/\D/g, "");
       updateFields.country_code = `+${cc}`;
@@ -1207,6 +1210,15 @@ export const updateAppointmentService = async (
         throw new Error("Mobile number must be exactly 10 digits.");
       }
       updateFields.contact_number = contact_number;
+    }
+
+    // Check if there's anything to update after all supported fields are normalized.
+    if (Object.keys(updateFields).length === 0) {
+      console.error(
+        `[UPDATE-APPOINTMENT-SERVICE] No fields to update - rolling back`,
+      );
+      await transaction.rollback();
+      return appointment; // Return existing appointment without changes
     }
 
     // 1. Check for patient conflict (prevent same patient having two apps at same time)
@@ -1295,7 +1307,7 @@ export const updateAppointmentService = async (
           is_deleted: false,
           id: { [Op.ne]: appointment.id },
           appointment_date: buildAppointmentDateWhere(checkDate),
-          status: { [Op.in]: ["Pending", "Confirmed"] },
+          status: { [Op.in]: BOOKED_SLOT_STATUSES },
         },
         transaction,
         lock: transaction.LOCK.UPDATE,
@@ -1507,7 +1519,7 @@ export const getAvailableSlotsService = async (tenant_id, doctor_id, date) => {
         doctor_id,
         is_deleted: false,
         appointment_date: buildAppointmentDateWhere(normalizedDate),
-        status: { [Op.in]: ["Pending", "Confirmed"] },
+        status: { [Op.in]: BOOKED_SLOT_STATUSES },
       },
       attributes: ["appointment_time"],
     });

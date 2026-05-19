@@ -46,6 +46,8 @@ export const tableNames = {
   BOOKING_SESSIONS: "booking_sessions",
   APPOINTMENT_SLOTS: "appointment_slots",
   APPOINTMENT_STATE_LOGS: "appointment_state_logs",
+  APPOINTMENT_AUDIT_LOGS: "appointment_audit_logs",
+  MANAGE_APPOINTMENT_SESSIONS: "manage_appointment_sessions",
   BILLING_CYCLES: "billing_cycles",
   MONTHLY_INVOICES: "monthly_invoices",
   ADMIN_AUDIT_LOG: "admin_audit_log",

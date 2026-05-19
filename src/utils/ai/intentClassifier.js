@@ -2,7 +2,11 @@ import { callAI } from "./coreAi.js";
 import { getTenantSettingsService } from "../../models/TenantModel/tenant.service.js";
 import { getDomainSummary } from "./domainContextHelper.js";
 
-const VALID_INTENTS = ["APPOINTMENT_ACTION", "GENERAL_QUESTION"];
+const VALID_INTENTS = [
+  "APPOINTMENT_ACTION",
+  "MANAGE_APPOINTMENTS_ACTION",
+  "GENERAL_QUESTION",
+];
 
 // Granular appointment intents used by the message pipeline/orchestrator
 export const APPOINTMENT_INTENTS = [
@@ -14,6 +18,7 @@ export const APPOINTMENT_INTENTS = [
   "list_available_doctors",
   "get_doctor_info",
   "APPOINTMENT_ACTION",
+  "MANAGE_APPOINTMENTS_ACTION",
 ];
 
 // Fast greeting keywords to short-circuit simple messages and avoid AI calls
@@ -270,6 +275,7 @@ const deriveIntentInterestScore = (
 ) => {
   if (negativeNotInterested) return INTENT_NOT_INTERESTED_SCORE;
   if (intent === "APPOINTMENT_ACTION") return 92;
+  if (intent === "MANAGE_APPOINTMENTS_ACTION") return 88;
   // Budget/timeline mention = high domain interest
   if (detectBudgetMention(userMessage) || detectTimelineMention(userMessage))
     return 85;
@@ -289,7 +295,7 @@ const getDefaultLeadIntelligence = (
   const authorityMentioned = detectAuthorityMention(userMessage);
   const baseConversationLeadScore = negativeNotInterested
     ? 10
-    : intent === "APPOINTMENT_ACTION"
+    : intent === "APPOINTMENT_ACTION" || intent === "MANAGE_APPOINTMENTS_ACTION"
       ? 82
       : 50;
 
@@ -300,7 +306,7 @@ const getDefaultLeadIntelligence = (
     primary_intent: intent,
     buying_signal_score: negativeNotInterested
       ? 10
-      : intent === "APPOINTMENT_ACTION"
+      : intent === "APPOINTMENT_ACTION" || intent === "MANAGE_APPOINTMENTS_ACTION"
         ? 75
         : 45,
     clarity_score: userMessage?.trim()?.length > 24 ? 55 : 35,
@@ -453,11 +459,12 @@ export const classifyIntent = async (
       appointments: parsed.requires?.appointments === true,
     };
 
-    if (
-      APPOINTMENT_INTENTS.includes(intent) ||
-      intent === "APPOINTMENT_ACTION"
-    ) {
+    if (intent === "APPOINTMENT_ACTION") {
       requires.knowledge = true;
+      requires.doctors = true;
+      requires.appointments = true;
+    } else if (intent === "MANAGE_APPOINTMENTS_ACTION") {
+      requires.knowledge = false;
       requires.doctors = true;
       requires.appointments = true;
     }
@@ -505,23 +512,23 @@ ${contextSection}${orgSection}TASK: Classify the customer's message AND determin
 INTENT VALUES (pick exactly one):
 ═══════════════════════════════════════════════════
 
-APPOINTMENT_ACTION — The customer wants to actively book or engage:
+APPOINTMENT_ACTION — The customer wants to actively create a new booking:
 - Book / schedule / enroll in a session, appointment, class, consultation, meeting, or demo
-- Reschedule or cancel an existing booking / session / enrollment
 - Check availability of staff, doctors, teachers, lawyers, or consultants for booking
 - Provide information DURING an active booking or enrollment flow (name, date, time, slot, confirmation)
 
+MANAGE_APPOINTMENTS_ACTION — The customer wants to view or manage existing booked appointments:
+- Show/view/check their appointment or booking details
+- Manage appointment, edit appointment, update appointment details
+- Reschedule/re-schedule/postpone/move an existing appointment
+- Cancel an existing appointment
+- Examples: "show my appointment", "view my booking", "my appointments", "appointment details", "edit appointment", "reschedule appointment", "cancel appointment"
+
 GENERAL_QUESTION — Everything else:
-- Greetings, small talk ("hi", "hello", "thanks", "ok")
+- Greetings, small talk ("hi", "hello", "thanks", "ok") when they do not include explicit or contextual action intent
 - Asking about services, programs, courses, prices, timings, policies, location, or eligibility
 - Asking about staff or professionals (info only, not booking)
-- Asking about their own bookings, sessions, or enrollment history (info only, not modifying)
 - Any factual question about the business
-
-view_my_appointments
-  Customer wants to SEE their existing appointments.
-  Examples: "show my appointments", "my bookings", "do I have any appointments?",
-  "when is my next appointment?", "my appointment details"
 
 "knowledge": true/false — Does the AI need uploaded business documents?
   true → questions about services, programs, courses, prices, timings, policies, location, procedures, fees, eligibility
@@ -538,11 +545,24 @@ view_my_appointments
 CONTEXT RULES:
 - Look at RECENT CONTEXT to detect if customer is mid-flow.
 - If assistant just asked for booking/enrollment details and customer replied with info → APPOINTMENT_ACTION.
-- "yes", "confirm", "book it", "cancel it", "enroll me" during active flow → APPOINTMENT_ACTION.
 - Number reply ("1", "2", "3") during slot/option selection → APPOINTMENT_ACTION.
-- Greetings are always GENERAL_QUESTION with all requires = false.
+- Greetings are always GENERAL_QUESTION with all requires = false unless the same message includes explicit booking/manage intent.
 - If ambiguous → GENERAL_QUESTION.
 - For APPOINTMENT_ACTION, ignore the requires flags (system will load everything).
+- For MANAGE_APPOINTMENTS_ACTION, set appointments=true and do not treat it as new booking.
+
+UNIVERSAL CONTEXTUAL SHORT REPLY RULE:
+- Short replies are NOT standalone intents. Classify them from the latest Assistant message in RECENT CONTEXT plus the current Customer message.
+- Positive short replies include: "yes", "y", "yeah", "yep", "ok", "okay", "sure", "proceed", "go ahead", "yes please", "haan", "han", "ha", "ji", "confirm".
+- Negative short replies include: "no", "nope", "not now", "later", "cancel", "stop", "back", "main menu".
+- Booking words include: appointment, booking, consultation, meeting, demo, session, class, visit, slot, enrollment.
+- Manage words include: view, show, check, manage, edit, update, change, reschedule, re-schedule, postpone, cancel, details, existing appointment, my appointment.
+- If the latest Assistant message offered to create/book/schedule a booking/appointment/consultation/meeting/demo/session/class/visit and the Customer replies positively → APPOINTMENT_ACTION.
+- If the latest Assistant message asked for details needed to create a booking (name, phone, email, doctor/staff, branch, date, time, slot, reason/service) and the Customer provides the requested value → APPOINTMENT_ACTION.
+- If the latest Assistant message asked about viewing, editing, updating, rescheduling, cancelling, or confirming cancellation/reschedule of an existing booked item and the Customer replies positively → MANAGE_APPOINTMENTS_ACTION.
+- If the latest Assistant message asked a general/factual follow-up (for example timings, fees, location, services, policies, whether they want more information) and the Customer replies positively → GENERAL_QUESTION.
+- If a short reply has no clear actionable latest Assistant context, it must stay GENERAL_QUESTION and must NOT start APPOINTMENT_ACTION or MANAGE_APPOINTMENTS_ACTION.
+- "cancel appointment", "reschedule appointment", "edit appointment", "show my appointment", and similar explicit manage phrases are MANAGE_APPOINTMENTS_ACTION, not negative short replies.
 
 RECENT CONTEXT:
 {RECENT_CONTEXT}
@@ -639,7 +659,7 @@ FOUR LEVELS — pick the one that fits best:
 
 Return ONLY valid JSON with this exact shape:
 {
-  "intent": "APPOINTMENT_ACTION" or "GENERAL_QUESTION",
+  "intent": "APPOINTMENT_ACTION" or "MANAGE_APPOINTMENTS_ACTION" or "GENERAL_QUESTION",
   "requires": {
     "knowledge": true/false,
     "doctors": true/false,
