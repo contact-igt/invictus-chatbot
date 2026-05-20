@@ -11,6 +11,7 @@ const DEFAULT_PLAN_KEY = "default";
 const DEFAULT_PLAN_NAME = "Default Plan";
 const ALWAYS_ENABLED_MODULE_KEYS = new Set([
   "followups",
+  "knowledge",
   "whatsapp_settings",
   "whatsapp_playground",
 ]);
@@ -22,6 +23,15 @@ const EXTRA_FEATURE_SEEDS = [
     category: "common",
     group: "Contacts & Leads",
     route: "/followups",
+    isCommon: true,
+    allowedIndustries: [...INDUSTRY_TYPES],
+  },
+  {
+    key: "knowledge",
+    label: "Knowledge Base",
+    category: "common",
+    group: "Knowledge Base",
+    route: "/knowledge?tab=data-sources",
     isCommon: true,
     allowedIndustries: [...INDUSTRY_TYPES],
   },
