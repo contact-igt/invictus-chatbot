@@ -46,7 +46,7 @@ export const createDoctorController = async (req, res) => {
       : consultationDuration;
   const finalTitle = (title || "").replace(".", "");
 
-  const requiredFields = { name, mobile, email };
+  const requiredFields = { name };
   const missing = await missingFieldsChecker(requiredFields);
   if (missing.length > 0) {
     return res
@@ -77,9 +77,9 @@ export const createDoctorController = async (req, res) => {
     const result = await createDoctorService(tenant_id, {
       title: finalTitle,
       name,
-      country_code: cleanedCC,
-      mobile: normalizedMobile,
-      email,
+      country_code: normalizedMobile ? cleanedCC : null,
+      mobile: normalizedMobile || null,
+      email: email || null,
       status: finalStatus,
       consultation_duration: finalConsultationDuration,
       specializations,

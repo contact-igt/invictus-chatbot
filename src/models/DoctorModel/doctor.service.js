@@ -402,8 +402,8 @@ export const updateDoctorService = async (doctor_id, tenant_id, data) => {
     if (data.name !== undefined) updateFields.name = data.name;
     if (data.country_code !== undefined)
       updateFields.country_code = data.country_code;
-    if (data.mobile !== undefined) updateFields.mobile = data.mobile;
-    if (data.email !== undefined) updateFields.email = data.email;
+    if (data.mobile !== undefined) updateFields.mobile = data.mobile || null;
+    if (data.email !== undefined) updateFields.email = data.email || null;
     if (data.status !== undefined) updateFields.status = data.status;
     if (data.consultation_duration !== undefined)
       updateFields.consultation_duration = data.consultation_duration;
