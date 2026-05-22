@@ -220,7 +220,10 @@ export const buildReasonServiceListPayload = (
   return payload;
 };
 
-export const buildConfirmPayload = (to, draft) => {
+const withSessionScope = (id, sessionId = null) =>
+  sessionId ? `${id}_${sessionId}` : id;
+
+export const buildConfirmPayload = (to, draft, sessionId = null) => {
   const text =
     `Please confirm your appointment booking.\n\n` +
     `Name: ${draft.name || "-"}\n` +
@@ -231,9 +234,9 @@ export const buildConfirmPayload = (to, draft) => {
     `Reason: ${draft.reason || "-"}`;
 
   return buildButtonPayload(to, text, [
-    { id: "confirm_booking", title: "Confirm" },
-    { id: "edit_details", title: "Edit" },
-    { id: "cancel_booking", title: "Cancel" },
+    { id: withSessionScope("confirm_booking", sessionId), title: "Confirm" },
+    { id: withSessionScope("edit_details", sessionId), title: "Edit" },
+    { id: withSessionScope("cancel_booking", sessionId), title: "Cancel" },
   ]);
 };
 
@@ -274,5 +277,15 @@ export const buildAppointmentResumeCancelPayload = (to) =>
     [
       { id: "continue_appointment", title: "Continue" },
       { id: "cancel_appointment", title: "Cancel" },
+    ],
+  );
+
+export const buildBookingSessionExpiredPayload = (to) =>
+  buildButtonPayload(
+    to,
+    "Your appointment booking session has expired.\n\nWould you like to start booking again?",
+    [
+      { id: "create_appointment", title: "Start Booking" },
+      { id: "view_my_appointments", title: "Manage" },
     ],
   );

@@ -16,6 +16,7 @@ import {
 } from "./appointmentReplyDecoder.js";
 import {
   buildAppointmentResumeCancelPayload,
+  buildBookingSessionExpiredPayload,
   buildConfirmPayload,
   buildDateListPayload,
   buildDoctorListPayload,
@@ -54,6 +55,7 @@ import {
   logAppointmentStateTransition,
 } from "./appointmentStateLog.service.js";
 import { isAppointmentQuitRequest } from "./appointmentRoutingGuard.service.js";
+import { buildStaleBookingManagePromptPayload } from "./manageAppointmentTemplates.service.js";
 
 export const APPOINTMENT_STATES = {
   COLLECT_NAME: "COLLECT_NAME",
@@ -153,6 +155,9 @@ const validateEmail = (value) => {
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return { valid: false };
   return { valid: true, value: email };
 };
+
+const hasRequiredBookingEmail = (draft = {}) =>
+  Boolean(draft.email && draft.emailCollectedInSession === true);
 
 const validateReason = (value) => {
   const reason = String(value || "").replace(/\s+/g, " ").trim();
@@ -669,7 +674,7 @@ const shouldMoveLegacySessionToReasonStep = (session) => {
   if (session.current_step !== APPOINTMENT_STATES.SELECT_DOCTOR) return false;
   const draft = getSessionDraft(session);
   return Boolean(
-    draft.email &&
+    hasRequiredBookingEmail(draft) &&
       !draft.reason &&
       !draft.reasonServiceId &&
       !draft.reasonSource &&
@@ -681,7 +686,7 @@ const shouldMoveLegacySessionToReasonStep = (session) => {
 
 export const getNextIncompleteAppointmentState = (draft = {}) => {
   if (!draft.name) return APPOINTMENT_STATES.COLLECT_NAME;
-  if (!draft.email) return APPOINTMENT_STATES.COLLECT_EMAIL;
+  if (!hasRequiredBookingEmail(draft)) return APPOINTMENT_STATES.COLLECT_EMAIL;
   if (!draft.reason) return APPOINTMENT_STATES.COLLECT_REASON;
   if (!draft.doctorId) return APPOINTMENT_STATES.SELECT_DOCTOR;
   if (!draft.date) return APPOINTMENT_STATES.SELECT_DATE;
@@ -770,6 +775,255 @@ const makeStatePromptResult = ({ context, payload }) => {
   });
 };
 
+const SESSION_REQUIRED_REPLY_TYPES = new Set([
+  APPOINTMENT_REPLY_TYPES.DATE_SELECTED,
+  APPOINTMENT_REPLY_TYPES.SLOT_GROUP_SELECTED,
+  APPOINTMENT_REPLY_TYPES.TIME_SELECTED,
+  APPOINTMENT_REPLY_TYPES.REASON_SELECTED,
+  APPOINTMENT_REPLY_TYPES.CONFIRM_BOOKING,
+  APPOINTMENT_REPLY_TYPES.EDIT_DETAILS,
+  APPOINTMENT_REPLY_TYPES.CANCEL_BOOKING,
+  APPOINTMENT_REPLY_TYPES.CONTINUE_APPOINTMENT,
+  APPOINTMENT_REPLY_TYPES.EDIT_NAME,
+  APPOINTMENT_REPLY_TYPES.EDIT_EMAIL,
+  APPOINTMENT_REPLY_TYPES.EDIT_DOCTOR,
+  APPOINTMENT_REPLY_TYPES.EDIT_DATE,
+  APPOINTMENT_REPLY_TYPES.EDIT_TIME,
+  APPOINTMENT_REPLY_TYPES.EDIT_REASON,
+  APPOINTMENT_REPLY_TYPES.BACK_TO_CONFIRM,
+]);
+
+const EDIT_REPLY_TYPES = new Set([
+  APPOINTMENT_REPLY_TYPES.EDIT_NAME,
+  APPOINTMENT_REPLY_TYPES.EDIT_EMAIL,
+  APPOINTMENT_REPLY_TYPES.EDIT_DOCTOR,
+  APPOINTMENT_REPLY_TYPES.EDIT_DATE,
+  APPOINTMENT_REPLY_TYPES.EDIT_TIME,
+  APPOINTMENT_REPLY_TYPES.EDIT_REASON,
+]);
+
+const isSessionRequiredBookingReply = (decodedReply, interactiveReplyId = null) =>
+  Boolean(interactiveReplyId) && SESSION_REQUIRED_REPLY_TYPES.has(decodedReply?.type);
+
+const makeStaleBookingReplyResult = async ({
+  tenantId,
+  userPhone,
+  session = null,
+  message = null,
+  replyId = null,
+  whatsappMessageId = null,
+  reason = "stale_booking_reply",
+}) => {
+  await logAppointmentStateTransition({
+    tenantId,
+    userPhone,
+    sessionId: session?.session_id || null,
+    fromState: session?.current_step || null,
+    toState: "STALE_BOOKING_REPLY",
+    message,
+    replyId,
+    whatsappMessageId,
+  });
+  return makeResult({
+    payload: buildStaleBookingManagePromptPayload(userPhone),
+    session,
+    event: "stale_booking_reply",
+    extra: { staleBookingReply: true, reason },
+  });
+};
+
+const makeBookingSessionExpiredResult = async ({
+  tenantId,
+  userPhone,
+  session = null,
+  message = null,
+  replyId = null,
+  whatsappMessageId = null,
+  reason = "booking_session_expired",
+}) => {
+  await logAppointmentStateTransition({
+    tenantId,
+    userPhone,
+    sessionId: session?.session_id || null,
+    fromState: session?.current_step || null,
+    toState: "BOOKING_SESSION_EXPIRED",
+    message,
+    replyId,
+    whatsappMessageId,
+  });
+  return makeResult({
+    payload: buildBookingSessionExpiredPayload(userPhone),
+    session,
+    event: "booking_session_expired",
+    extra: { expiredBookingSession: true, reason },
+  });
+};
+
+const BOOKING_OVERRIDE_REPLY_TYPES = {
+  REASON: "reason",
+  DOCTOR: "doctor",
+  DATE: "date",
+  TIME: "time",
+};
+
+const REASON_OVERRIDE_STATES = new Set([
+  APPOINTMENT_STATES.SELECT_DOCTOR,
+  APPOINTMENT_STATES.SELECT_DATE,
+  APPOINTMENT_STATES.SELECT_TIME,
+  APPOINTMENT_STATES.CONFIRM_BOOKING,
+  APPOINTMENT_STATES.EDIT_MENU,
+  APPOINTMENT_STATES.EDIT_FIELD,
+]);
+
+const DOCTOR_OVERRIDE_STATES = new Set([
+  APPOINTMENT_STATES.SELECT_DATE,
+  APPOINTMENT_STATES.SELECT_TIME,
+  APPOINTMENT_STATES.CONFIRM_BOOKING,
+  APPOINTMENT_STATES.EDIT_MENU,
+  APPOINTMENT_STATES.EDIT_FIELD,
+]);
+
+const DATE_OVERRIDE_STATES = new Set([
+  APPOINTMENT_STATES.SELECT_TIME,
+  APPOINTMENT_STATES.CONFIRM_BOOKING,
+  APPOINTMENT_STATES.EDIT_MENU,
+  APPOINTMENT_STATES.EDIT_FIELD,
+]);
+
+const TIME_OVERRIDE_STATES = new Set([
+  APPOINTMENT_STATES.CONFIRM_BOOKING,
+  APPOINTMENT_STATES.EDIT_MENU,
+  APPOINTMENT_STATES.EDIT_FIELD,
+]);
+
+export const getInSessionBookingOverrideType = ({ decodedReply, state }) => {
+  const type = decodedReply?.type;
+  if (type === APPOINTMENT_REPLY_TYPES.REASON_SELECTED && REASON_OVERRIDE_STATES.has(state)) {
+    return BOOKING_OVERRIDE_REPLY_TYPES.REASON;
+  }
+  if (type === APPOINTMENT_REPLY_TYPES.DOCTOR_SELECTED && DOCTOR_OVERRIDE_STATES.has(state)) {
+    return BOOKING_OVERRIDE_REPLY_TYPES.DOCTOR;
+  }
+  if (type === APPOINTMENT_REPLY_TYPES.DATE_SELECTED && DATE_OVERRIDE_STATES.has(state)) {
+    return BOOKING_OVERRIDE_REPLY_TYPES.DATE;
+  }
+  if (
+    [APPOINTMENT_REPLY_TYPES.TIME_SELECTED, APPOINTMENT_REPLY_TYPES.SLOT_GROUP_SELECTED].includes(type) &&
+    TIME_OVERRIDE_STATES.has(state)
+  ) {
+    return BOOKING_OVERRIDE_REPLY_TYPES.TIME;
+  }
+  return null;
+};
+
+const handleInSessionBookingOverride = async (context, overrideType) => {
+  await logAppointmentStateTransition({
+    tenantId: context.tenantId,
+    userPhone: context.userPhone,
+    sessionId: context.session?.session_id || null,
+    fromState: context.session?.current_step || null,
+    toState: `OVERRIDE_${String(overrideType || "").toUpperCase()}`,
+    message: context.message || null,
+    replyId: context.interactiveReplyId || null,
+    whatsappMessageId: context.whatsappMessageId || null,
+  });
+
+  if (overrideType === BOOKING_OVERRIDE_REPLY_TYPES.REASON) {
+    return handleCollectReason(context);
+  }
+  if (overrideType === BOOKING_OVERRIDE_REPLY_TYPES.DOCTOR) {
+    return handleSelectDoctor(context);
+  }
+  if (overrideType === BOOKING_OVERRIDE_REPLY_TYPES.DATE) {
+    return handleSelectDate(context);
+  }
+  if (overrideType === BOOKING_OVERRIDE_REPLY_TYPES.TIME) {
+    return handleSelectTime(context);
+  }
+
+  return sendStatePrompt(context, context.session.current_step);
+};
+
+const makeDuplicateBookingMessageResult = (session = null) => ({
+  success: true,
+  duplicate: true,
+  suppressResponse: true,
+  session: session
+    ? {
+        session_id: session.session_id,
+        state: session.current_step,
+        status: session.status,
+        draft: getSessionDraft(session),
+        expires_at: session.expires_at,
+      }
+    : null,
+});
+
+const isReplyValidForBookingState = ({ decodedReply, state }) => {
+  const type = decodedReply?.type;
+  if (!type || type === APPOINTMENT_REPLY_TYPES.UNKNOWN) return true;
+
+  if (state === APPOINTMENT_STATES.COLLECT_NAME) return false;
+  if (state === APPOINTMENT_STATES.COLLECT_EMAIL) return false;
+
+  if (state === APPOINTMENT_STATES.COLLECT_REASON) {
+    return type === APPOINTMENT_REPLY_TYPES.REASON_SELECTED;
+  }
+
+  if (state === APPOINTMENT_STATES.SELECT_DOCTOR) {
+    return (
+      type === APPOINTMENT_REPLY_TYPES.DOCTOR_SELECTED ||
+      type === APPOINTMENT_REPLY_TYPES.EDIT_DETAILS ||
+      EDIT_REPLY_TYPES.has(type)
+    );
+  }
+
+  if (state === APPOINTMENT_STATES.SELECT_DATE) {
+    return (
+      type === APPOINTMENT_REPLY_TYPES.DATE_SELECTED ||
+      type === APPOINTMENT_REPLY_TYPES.EDIT_DETAILS ||
+      EDIT_REPLY_TYPES.has(type)
+    );
+  }
+
+  if (state === APPOINTMENT_STATES.SELECT_TIME) {
+    return (
+      type === APPOINTMENT_REPLY_TYPES.SLOT_GROUP_SELECTED ||
+      type === APPOINTMENT_REPLY_TYPES.TIME_SELECTED ||
+      type === APPOINTMENT_REPLY_TYPES.EDIT_DETAILS ||
+      EDIT_REPLY_TYPES.has(type)
+    );
+  }
+
+  if (state === APPOINTMENT_STATES.CONFIRM_BOOKING) {
+    return [
+      APPOINTMENT_REPLY_TYPES.CONFIRM_BOOKING,
+      APPOINTMENT_REPLY_TYPES.EDIT_DETAILS,
+      APPOINTMENT_REPLY_TYPES.CANCEL_BOOKING,
+    ].includes(type);
+  }
+
+  if (state === APPOINTMENT_STATES.EDIT_MENU) {
+    return (
+      type === APPOINTMENT_REPLY_TYPES.CONTINUE_APPOINTMENT ||
+      type === APPOINTMENT_REPLY_TYPES.BACK_TO_CONFIRM ||
+      EDIT_REPLY_TYPES.has(type)
+    );
+  }
+
+  if (state === APPOINTMENT_STATES.AWAITING_RESUME_DECISION) {
+    return [
+      APPOINTMENT_REPLY_TYPES.CONTINUE_APPOINTMENT,
+      APPOINTMENT_REPLY_TYPES.CANCEL_BOOKING,
+    ].includes(type);
+  }
+
+  if (state === APPOINTMENT_STATES.EDIT_FIELD) return false;
+  if (state === APPOINTMENT_STATES.BOOKING_COMPLETE) return false;
+
+  return true;
+};
+
 const clearSlotSelectionFromDraft = (draft = {}) => {
   const nextDraft = { ...draft };
   delete nextDraft.slotSelection;
@@ -826,7 +1080,7 @@ export const getEditResetForTarget = (target, draft = {}) => {
 
   if (target === "edit_email") {
     return {
-      draft: { ...draft, email: null },
+      draft: { ...draft, email: null, emailCollectedInSession: false },
       nextState: APPOINTMENT_STATES.COLLECT_EMAIL,
       clearedFields: ["email"],
       releaseLock: false,
@@ -1046,7 +1300,11 @@ const sendStatePrompt = async (context, state = context.session.current_step) =>
     return makeStatePromptResult({
       context,
       state,
-      payload: buildConfirmPayload(context.userPhone, draft),
+      payload: buildConfirmPayload(
+        context.userPhone,
+        draft,
+        context.session?.session_id || null,
+      ),
     });
   }
 
@@ -1095,7 +1353,10 @@ export const handleCollectName = async (context) => {
 export const handleCollectEmail = async (context) => {
   const validation = validateEmail(context.message);
   if (!validation.valid) return enterIrrelevantInputGuard(context, "invalid_email");
-  const draft = await updateAppointmentDraft(context.session, { email: validation.value });
+  const draft = await updateAppointmentDraft(context.session, {
+    email: validation.value,
+    emailCollectedInSession: true,
+  });
   return transitionAndPrompt(context, getNextIncompleteAppointmentState(draft), { draft });
 };
 
@@ -1120,7 +1381,11 @@ export const handleSelectDoctor = async (context) => {
 
   if (!doctor) return enterIrrelevantInputGuard(context, "doctor_not_available");
 
-  if (currentDraft.doctorId && currentDraft.doctorId !== doctor.doctor_id) {
+  if (
+    currentDraft.time ||
+    currentDraft.slotSelection ||
+    (currentDraft.doctorId && currentDraft.doctorId !== doctor.doctor_id)
+  ) {
     await releaseLockedSlots(context.session.session_id);
   }
 
@@ -1151,7 +1416,11 @@ export const handleSelectDate = async (context) => {
   });
   if (!available) return enterIrrelevantInputGuard(context, "date_not_available");
 
-  if (draft.date && draft.date !== context.decodedReply.value) {
+  if (
+    draft.time ||
+    draft.slotSelection ||
+    (draft.date && draft.date !== context.decodedReply.value)
+  ) {
     await releaseLockedSlots(context.session.session_id);
   }
 
@@ -1230,6 +1499,10 @@ export const handleSelectTime = async (context) => {
     });
   }
 
+  if (draft.time && draft.time !== selectedTime) {
+    await releaseLockedSlots(context.session.session_id);
+  }
+
   await lockAppointmentSlot({
     tenantId: context.tenantId,
     session: context.session,
@@ -1248,6 +1521,22 @@ export const handleSelectTime = async (context) => {
 };
 
 export const handleCollectReason = async (context) => {
+  const currentDraft = getSessionDraft(context.session);
+  const clearDownstreamPatch = {
+    doctorId: null,
+    doctorName: null,
+    date: null,
+    time: null,
+    slotSelection: undefined,
+  };
+  const hasDownstreamSelection = Boolean(
+    currentDraft.doctorId ||
+      currentDraft.doctorName ||
+      currentDraft.date ||
+      currentDraft.time ||
+      currentDraft.slotSelection,
+  );
+
   if (context.decodedReply.type === APPOINTMENT_REPLY_TYPES.REASON_SELECTED) {
     const service = await getAvailableReasonServiceById(
       context.tenantId,
@@ -1265,11 +1554,15 @@ export const handleCollectReason = async (context) => {
       selectedSpecializationName: service.specializationName || service.name,
       reasonAiValidation: null,
       _reasonInvalidAttempts: 0,
+      ...clearDownstreamPatch,
     };
     const resolved = await resolveDoctorListForDraft({
       tenantId: context.tenantId,
-      draft: { ...getSessionDraft(context.session), ...nextDraftPatch },
+      draft: { ...currentDraft, ...nextDraftPatch },
     });
+    if (hasDownstreamSelection) {
+      await releaseLockedSlots(context.session.session_id);
+    }
     const draft = await updateAppointmentDraft(context.session, {
       ...nextDraftPatch,
       doctorListMode: resolved.doctorListMode,
@@ -1318,11 +1611,15 @@ export const handleCollectReason = async (context) => {
     },
     doctorListMode: DOCTOR_LIST_MODE.ALL_ACTIVE_DOCTORS,
     _reasonInvalidAttempts: 0,
+    ...clearDownstreamPatch,
   };
   const resolved = await resolveDoctorListForDraft({
     tenantId: context.tenantId,
-    draft: { ...getSessionDraft(context.session), ...nextDraftPatch },
+    draft: { ...currentDraft, ...nextDraftPatch },
   });
+  if (hasDownstreamSelection) {
+    await releaseLockedSlots(context.session.session_id);
+  }
   const draft = await updateAppointmentDraft(context.session, nextDraftPatch);
   logAppointmentDebug("manual_reason_accepted", {
     tenantId: context.tenantId,
@@ -1387,7 +1684,7 @@ export const handleEditField = async (context) => {
   } else if (target === "edit_email") {
     const validation = validateEmail(context.message);
     if (!validation.valid) return enterIrrelevantInputGuard(context, "invalid_edit_email");
-    patch = { email: validation.value };
+    patch = { email: validation.value, emailCollectedInSession: true };
   } else if (target === "edit_reason") {
     const validation = validateReason(context.message);
     if (!validation.valid) return enterIrrelevantInputGuard(context, "invalid_edit_reason");
@@ -1410,6 +1707,12 @@ export const handleBookingComplete = async (context) => {
   const completionFromState =
     context.session.current_step || APPOINTMENT_STATES.CONFIRM_BOOKING;
   const draft = getSessionDraft(context.session);
+  if (!hasRequiredBookingEmail(draft)) {
+    return transitionAndPrompt(context, APPOINTMENT_STATES.COLLECT_EMAIL, {
+      draft: { ...draft, email: null, emailCollectedInSession: false },
+      lastValidState: APPOINTMENT_STATES.COLLECT_EMAIL,
+    });
+  }
   const required = ["name", "email", "doctorId", "doctorName", "date", "time", "reason"];
   const missing = required.filter((field) => !draft[field]);
   if (missing.length) {
@@ -1560,6 +1863,10 @@ export const handleAdvancedAppointmentBooking = async ({
   const isDoctorSelectionStart =
     decodedReply.type === APPOINTMENT_REPLY_TYPES.DOCTOR_SELECTED;
   let session = await getActiveAppointmentSession({ tenantId, contactId, userPhone });
+  const needsActiveBookingSession = isSessionRequiredBookingReply(
+    decodedReply,
+    interactiveReplyId,
+  );
 
   if (session && isSessionExpired(session)) {
     const previousState = session.current_step;
@@ -1579,12 +1886,36 @@ export const handleAdvancedAppointmentBooking = async ({
       previousState,
       expiredAt: new Date(),
     });
-    return {
-      success: true,
-      expired: true,
-      handoverToNormalRouter: true,
-      message: "Your appointment booking session has expired. Please start again.",
-    };
+    return makeBookingSessionExpiredResult({
+      tenantId,
+      userPhone,
+      session,
+      message,
+      replyId: interactiveReplyId,
+      whatsappMessageId,
+      reason: "expired_booking_session",
+    });
+  }
+
+  if (whatsappMessageId) {
+    const alreadyProcessed = await hasProcessedAppointmentMessage(
+      tenantId,
+      whatsappMessageId,
+    );
+    if (alreadyProcessed) {
+      return makeDuplicateBookingMessageResult(session);
+    }
+  }
+
+  if (!session && needsActiveBookingSession) {
+    return makeBookingSessionExpiredResult({
+      tenantId,
+      userPhone,
+      message,
+      replyId: interactiveReplyId,
+      whatsappMessageId,
+      reason: "missing_active_booking_session",
+    });
   }
 
   const { session: activeSession, created } = await getOrCreateAppointmentSession({
@@ -1596,7 +1927,8 @@ export const handleAdvancedAppointmentBooking = async ({
       : APPOINTMENT_STATES.COLLECT_NAME,
     draft: {
       name: contact?.name && contact.name !== userPhone ? contact.name : null,
-      email: contact?.email || null,
+      email: null,
+      emailCollectedInSession: false,
     },
   });
   session = activeSession;
@@ -1612,18 +1944,71 @@ export const handleAdvancedAppointmentBooking = async ({
     session,
   };
 
-  if (whatsappMessageId) {
-    const alreadyProcessed = await hasProcessedAppointmentMessage(
+  if (
+    decodedReply.sessionId &&
+    session?.session_id &&
+    decodedReply.sessionId !== session.session_id
+  ) {
+    return makeStaleBookingReplyResult({
       tenantId,
+      userPhone,
+      session,
+      message,
+      replyId: interactiveReplyId,
       whatsappMessageId,
-    );
-    if (alreadyProcessed) {
-      return makeResult({
-        payload: buildTextPayload(userPhone, "I already received that response. Please continue with the latest appointment prompt."),
-        session,
-        extra: { duplicate: true },
-      });
+      reason: "booking_session_mismatch",
+    });
+  }
+
+  if (
+    !created &&
+    ![
+      APPOINTMENT_STATES.COLLECT_NAME,
+      APPOINTMENT_STATES.COLLECT_EMAIL,
+      APPOINTMENT_STATES.EDIT_MENU,
+      APPOINTMENT_STATES.EDIT_FIELD,
+      APPOINTMENT_STATES.AWAITING_RESUME_DECISION,
+      APPOINTMENT_STATES.BOOKING_COMPLETE,
+    ].includes(session.current_step) &&
+    !hasRequiredBookingEmail(getSessionDraft(session))
+  ) {
+    return transitionAndPrompt(context, APPOINTMENT_STATES.COLLECT_EMAIL, {
+      draft: {
+        ...getSessionDraft(session),
+        email: null,
+        emailCollectedInSession: false,
+      },
+      lastValidState: APPOINTMENT_STATES.COLLECT_EMAIL,
+    });
+  }
+
+  if (
+    !created &&
+    interactiveReplyId &&
+    !isReplyValidForBookingState({
+      decodedReply,
+      state: session.current_step,
+    })
+  ) {
+    const overrideType = getInSessionBookingOverrideType({
+      decodedReply,
+      state: session.current_step,
+    });
+    if (overrideType) {
+      return handleInSessionBookingOverride(context, overrideType);
     }
+
+    await logAppointmentStateTransition({
+      tenantId,
+      userPhone,
+      sessionId: session.session_id,
+      fromState: session.current_step,
+      toState: "ACTIVE_BOOKING_REPLY_REPROMPT",
+      message,
+      replyId: interactiveReplyId,
+      whatsappMessageId,
+    });
+    return sendStatePrompt(context, session.current_step);
   }
 
   if (isCancelKeyword(message, interactiveReplyId)) {

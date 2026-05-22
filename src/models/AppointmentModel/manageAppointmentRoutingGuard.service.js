@@ -6,6 +6,9 @@ const MANAGE_START_PATTERNS = [
   /\b(edit|update|change|modify)\b.*\b(my\s+)?(appointment|booking)\b/i,
   /\b(reschedule|re-schedule|postpone|move)\b.*\b(my\s+)?(appointment|booking)\b/i,
   /\b(cancel)\b.*\b(my\s+)?(appointment|booking)\b/i,
+  /\b(i want|i need|need|want|would like|please|can i|help me)\b.*\b(reschedule|re schedule|re-schedule|postpone|move)\b/i,
+  /\b(i want|i need|need|want|would like|please|can i|help me)\b.*\b(edit|update|modify|change)\b/i,
+  /\b(i want|i need|need|want|would like|please|can i|help me)\b.*\b(cancel|delete)\b/i,
   /\b(when|do|have)\b.*\b(my\s+)?(next|upcoming|booked)?\s*(appointment|appointments|booking|bookings)\b/i,
   /^(my appointments|my appointment|appointment details|manage appointment|edit appointment|reschedule appointment|re-schedule appointment|cancel appointment|show booked appointment|view my booking)$/i,
 ];
@@ -29,6 +32,9 @@ export const MANAGE_APPOINTMENT_REPLY_IDS = new Set([
   "manage_appt_edit_phone",
   "manage_appt_edit_email",
   "manage_appt_edit_reason",
+  "manage_appt_edit_doctor",
+  "manage_appt_edit_date",
+  "manage_appt_edit_time",
   "manage_appt_back_details",
   "manage_appt_confirm_reschedule",
   "manage_appt_confirm_cancel",
@@ -39,6 +45,8 @@ export const MANAGE_APPOINTMENT_REPLY_IDS = new Set([
 
 const MANAGE_APPOINTMENT_REPLY_PREFIXES = [
   "manage_appt_select_",
+  "manage_appt_reason_",
+  "manage_appt_doctor_",
   "manage_appt_date_",
   "manage_appt_slot_",
   "manage_appt_slot_group_",
@@ -76,6 +84,18 @@ export const shouldStartManageAppointmentsFlow = ({ intent, message, interactive
   return intent === "MANAGE_APPOINTMENTS_ACTION" && hasManageAppointmentStartSignal(message);
 };
 
+const MANAGE_EDIT_INPUT_STATES = new Set([
+  "AWAITING_EDIT_VALUE",
+  "WAITING_FOR_NAME_UPDATE",
+  "WAITING_FOR_EMAIL_UPDATE",
+  "WAITING_FOR_PHONE_UPDATE",
+  "WAITING_FOR_REASON_UPDATE",
+  "WAITING_FOR_DOCTOR_UPDATE",
+  "WAITING_FOR_SERVICE_UPDATE",
+  "WAITING_FOR_DATE_UPDATE",
+  "WAITING_FOR_SLOT_UPDATE",
+]);
+
 export const shouldRouteActiveManageAppointmentMessage = ({
   state,
   message = "",
@@ -84,7 +104,7 @@ export const shouldRouteActiveManageAppointmentMessage = ({
   if (isManageAppointmentExitCommand(message)) return true;
   if (isManageAppointmentReplyId(interactiveReplyId || message)) return true;
 
-  if (state === "AWAITING_EDIT_VALUE") return true;
+  if (MANAGE_EDIT_INPUT_STATES.has(state)) return true;
 
   return false;
 };

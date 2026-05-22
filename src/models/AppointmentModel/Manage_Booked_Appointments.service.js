@@ -4,8 +4,11 @@ import {
   buildManageAppointmentSelectionPayload,
   buildManageCancelConfirmPayload,
   buildManageDateListPayload,
+  buildManageDoctorListPayload,
   buildManageEditMenuPayload,
+  buildManageReasonServiceListPayload,
   buildManageRescheduleConfirmPayload,
+  buildManageSessionExpiredPayload,
   buildManageSlotListPayload,
   buildManageTextPayload,
   buildNoManageAppointmentsPayload,
@@ -25,6 +28,7 @@ import {
   getActiveManageAppointmentSession,
   getSessionAppointmentIds,
   getSessionPendingValue,
+  isManageEditInputState,
   isManageAppointmentSessionExpired,
   replaceManageAppointmentSession,
   updateManageAppointmentSession,
@@ -36,6 +40,9 @@ import {
 import {
   cancelManageAppointment,
   confirmManageReschedule,
+  getManageDoctorsForService,
+  getManageReasonServiceById,
+  getManageReasonServices,
   getManageAvailableDates,
   getManageAvailableSlotSelection,
   getManageSlotRows,
@@ -54,6 +61,10 @@ import {
   shouldStartManageAppointmentsFlow,
 } from "./manageAppointmentRoutingGuard.service.js";
 import { releaseLockedSlots } from "./appointmentSlotLock.service.js";
+import {
+  hasProcessedAppointmentMessage,
+  logAppointmentStateTransition,
+} from "./appointmentStateLog.service.js";
 
 const makeResult = ({ payload = null, payloads = null, session = null, message = null, ...rest } = {}) => ({
   payload,
@@ -93,6 +104,48 @@ const parseSelectedDate = (replyId = "") => {
   if (!id.startsWith("manage_appt_date_")) return null;
   const value = id.slice("manage_appt_date_".length);
   return /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : null;
+};
+
+const parseSelectedReasonServiceId = (replyId = "") =>
+  String(replyId || "").startsWith("manage_appt_reason_")
+    ? String(replyId).slice("manage_appt_reason_".length)
+    : null;
+
+const parseSelectedDoctorId = (replyId = "") =>
+  String(replyId || "").startsWith("manage_appt_doctor_")
+    ? String(replyId).slice("manage_appt_doctor_".length)
+    : null;
+
+const MANAGE_EDIT_ACTION = "EDIT_APPOINTMENT";
+
+const EDIT_WAITING_STATE_BY_FIELD = {
+  name: MANAGE_APPOINTMENT_STATES.WAITING_FOR_NAME_UPDATE,
+  email: MANAGE_APPOINTMENT_STATES.WAITING_FOR_EMAIL_UPDATE,
+  phone: MANAGE_APPOINTMENT_STATES.WAITING_FOR_PHONE_UPDATE,
+  reason: MANAGE_APPOINTMENT_STATES.WAITING_FOR_REASON_UPDATE,
+  doctor: MANAGE_APPOINTMENT_STATES.WAITING_FOR_DOCTOR_UPDATE,
+  service: MANAGE_APPOINTMENT_STATES.WAITING_FOR_SERVICE_UPDATE,
+  date: MANAGE_APPOINTMENT_STATES.WAITING_FOR_DATE_UPDATE,
+  time: MANAGE_APPOINTMENT_STATES.WAITING_FOR_SLOT_UPDATE,
+};
+
+const buildManageEditPendingValue = (patch = {}) => ({
+  mode: "MANAGE_APPOINTMENT",
+  action: MANAGE_EDIT_ACTION,
+  ...patch,
+});
+
+const isActiveManageEditInputSession = (session) => {
+  const pending = getSessionPendingValue(session) || {};
+  return (
+    session?.status === MANAGE_APPOINTMENT_SESSION_STATUS.ACTIVE &&
+    (
+      (pending?.mode === "MANAGE_APPOINTMENT" &&
+        pending?.action === MANAGE_EDIT_ACTION) ||
+      Boolean(session?.pending_edit_field)
+    ) &&
+    isManageEditInputState(session.state)
+  );
 };
 
 const getSelectedAppointment = async ({ tenantId, userPhone, session }) => {
@@ -230,6 +283,131 @@ const handleNextPage = async ({ tenantId, userPhone, session }) => {
   });
 };
 
+const startReasonEditSelection = async ({ tenantId, userPhone, session }) => {
+  const services = await getManageReasonServices(tenantId);
+  const nextSession = await updateManageAppointmentSession(session, {
+    state: MANAGE_APPOINTMENT_STATES.WAITING_FOR_SERVICE_UPDATE,
+    pending_edit_field: "service",
+    pending_edit_value: buildManageEditPendingValue({
+      appointmentId: session.selected_appointment_id || null,
+      editField: "service",
+    }),
+  });
+
+  if (!services.length) {
+    return makeResult({
+      payload: buildManageTextPayload(userPhone, "Please type the updated reason for visit."),
+      session: nextSession,
+    });
+  }
+
+  return makeResult({
+    payload: buildManageReasonServiceListPayload(userPhone, services),
+    session: nextSession,
+  });
+};
+
+const startDoctorEditSelection = async ({
+  tenantId,
+  userPhone,
+  session,
+  serviceId = null,
+  reason = null,
+}) => {
+  const doctors = await getManageDoctorsForService({ tenantId, serviceId });
+  if (!doctors.length) {
+    return makeResult({
+      payload: buildManageTextPayload(userPhone, "No doctors are available for this service right now."),
+      session,
+    });
+  }
+
+  const pending = {
+    ...(getSessionPendingValue(session) || {}),
+    mode: "MANAGE_APPOINTMENT",
+    action: MANAGE_EDIT_ACTION,
+    appointmentId: session.selected_appointment_id || null,
+    editField: "doctor",
+    ...(serviceId ? { serviceId } : {}),
+    ...(reason ? { reason } : {}),
+  };
+  const nextSession = await updateManageAppointmentSession(session, {
+    state: MANAGE_APPOINTMENT_STATES.WAITING_FOR_DOCTOR_UPDATE,
+    pending_edit_field: "doctor",
+    pending_edit_value: pending,
+  });
+
+  return makeResult({
+    payload: buildManageDoctorListPayload(
+      userPhone,
+      doctors,
+      serviceId
+        ? "Please choose a doctor for the selected service."
+        : "Please choose the updated doctor.",
+    ),
+    session: nextSession,
+  });
+};
+
+const showDateSelectionForDoctor = async ({ tenantId, userPhone, session, appointment }) => {
+  const doctorId = session.selected_doctor_id || appointment.doctor_id;
+  const dates = await getManageAvailableDates({
+    tenantId,
+    appointment,
+    session,
+    doctorId,
+  });
+  if (!dates.length) {
+    return makeResult({
+      payload: buildManageTextPayload(userPhone, "No dates are currently available for this doctor."),
+      session,
+    });
+  }
+  const nextSession = await updateManageAppointmentSession(session, {
+    state: MANAGE_APPOINTMENT_STATES.SELECT_DATE,
+    selected_date: null,
+    selected_time: null,
+    selected_slot_id: null,
+  });
+  return makeResult({
+    payload: buildManageDateListPayload(userPhone, dates),
+    session: nextSession,
+  });
+};
+
+const showSlotSelectionForDate = async ({ tenantId, userPhone, session, appointment, date }) => {
+  await releaseLockedSlots(session.session_id);
+  const doctorId = session.selected_doctor_id || appointment.doctor_id;
+  const slotSelection = await getManageAvailableSlotSelection({
+    tenantId,
+    appointment,
+    session,
+    date,
+    doctorId,
+  });
+  const slotRows = getManageSlotRows(slotSelection);
+  if (!slotRows.rows.length) {
+    return makeResult({
+      payload: buildManageTextPayload(userPhone, "No slots are available for this date. Please choose another date."),
+      session,
+    });
+  }
+  const nextSession = await updateManageAppointmentSession(session, {
+    state: MANAGE_APPOINTMENT_STATES.SELECT_TIME,
+    selected_date: date,
+    selected_time: null,
+    selected_slot_id: null,
+    pending_edit_value: {
+      ...(getSessionPendingValue(session) || {}),
+      slotSelection,
+    },
+  });
+  return makeResult({
+    payload: buildManageSlotListPayload(userPhone, slotRows.rows, slotRows.bodyText, slotRows.sectionTitle),
+    session: nextSession,
+  });
+};
+
 const handleEditFieldValue = async ({ tenantId, userPhone, session, message }) => {
   const appointment = await getSelectedAppointment({ tenantId, userPhone, session });
   if (!appointment) {
@@ -266,6 +444,22 @@ const handleEditFieldValue = async ({ tenantId, userPhone, session, message }) =
     auditAction = MANAGE_APPOINTMENT_AUDIT_ACTIONS.UPDATED_REASON;
     oldValue = { notes: appointment.notes, service_name: appointment.service_name };
     newValue = { notes: validation.value, service_name: validation.value };
+  } else if (field === "service") {
+    validation = await validateManageReasonWithAI({ tenantId, reason: message });
+    if (!validation.valid) {
+      return makeResult({
+        payload: buildManageTextPayload(userPhone, validation.reason || "Please send a valid reason for visit."),
+        session,
+      });
+    }
+    return startDoctorEditSelection({
+      tenantId,
+      userPhone,
+      session,
+      reason: validation.value,
+    });
+  } else if (field === "doctor") {
+    return startDoctorEditSelection({ tenantId, userPhone, session });
   } else {
     return makeResult({ payload: buildManageEditMenuPayload(userPhone), session });
   }
@@ -296,7 +490,7 @@ const handleEditFieldValue = async ({ tenantId, userPhone, session, message }) =
 
   return makeResult({
     payloads: [
-      buildManageTextPayload(userPhone, "Appointment details updated successfully."),
+      buildManageTextPayload(userPhone, "Your appointment has been updated successfully."),
       await buildManageAppointmentDetailsPayload({ tenantId, to: userPhone, appointment: updated }),
     ],
     session: nextSession,
@@ -347,26 +541,13 @@ const handleDateSelection = async ({ tenantId, userPhone, session, date }) => {
       session,
     });
   }
-  await releaseLockedSlots(session.session_id);
-  const slotSelection = await getManageAvailableSlotSelection({ tenantId, appointment, session, date });
-  const slotRows = getManageSlotRows(slotSelection);
-  if (!slotRows.rows.length) {
-    return makeResult({
-      payload: buildManageTextPayload(userPhone, "No slots are available for this date. Please choose another date."),
-      session,
-    });
-  }
-  const nextSession = await updateManageAppointmentSession(session, {
-    state: MANAGE_APPOINTMENT_STATES.SELECT_TIME,
-    selected_date: date,
-    selected_time: null,
-    selected_slot_id: null,
-    pending_edit_value: { slotSelection },
-  });
-  return makeResult({
-    payload: buildManageSlotListPayload(userPhone, slotRows.rows, slotRows.bodyText, slotRows.sectionTitle),
-    session: nextSession,
-  });
+  return showSlotSelectionForDate({ tenantId, userPhone, session, appointment, date });
+};
+
+const getPendingWithoutSlotSelection = (session) => {
+  const pending = { ...(getSessionPendingValue(session) || {}) };
+  delete pending.slotSelection;
+  return pending;
 };
 
 const handleSlotSelection = async ({ tenantId, userPhone, session, replyId }) => {
@@ -379,7 +560,7 @@ const handleSlotSelection = async ({ tenantId, userPhone, session, replyId }) =>
     const nextSlotSelection = { ...slotSelection, selectedGroupId: resolved.group.id };
     const slotRows = getManageSlotRows(nextSlotSelection, resolved.group.id);
     const nextSession = await updateManageAppointmentSession(session, {
-      pending_edit_value: { slotSelection: nextSlotSelection },
+      pending_edit_value: { ...pending, slotSelection: nextSlotSelection },
     });
     return makeResult({
       payload: buildManageSlotListPayload(userPhone, slotRows.rows, slotRows.bodyText, slotRows.sectionTitle),
@@ -396,12 +577,20 @@ const handleSlotSelection = async ({ tenantId, userPhone, session, replyId }) =>
 
   const date = session.selected_date;
   const time = resolved.slot.time;
-  const lockedSlot = await lockManageRescheduleSlot({ tenantId, session, appointment, date, time });
+  const doctorId = session.selected_doctor_id || appointment.doctor_id;
+  const lockedSlot = await lockManageRescheduleSlot({
+    tenantId,
+    session,
+    appointment,
+    date,
+    time,
+    doctorId,
+  });
   const nextSession = await updateManageAppointmentSession(session, {
     state: MANAGE_APPOINTMENT_STATES.CONFIRM_RESCHEDULE,
     selected_time: time,
     selected_slot_id: lockedSlot?.id ? String(lockedSlot.id) : resolved.slot.id,
-    pending_edit_value: null,
+    pending_edit_value: getPendingWithoutSlotSelection(session),
   });
 
   return makeResult({
@@ -410,7 +599,9 @@ const handleSlotSelection = async ({ tenantId, userPhone, session, replyId }) =>
       oldAppointment: appointment,
       newDate: date,
       newTime: time,
-      newDoctorName: appointment.doctor?.name,
+      newDoctorName:
+        pending.doctorName ||
+        (doctorId === appointment.doctor_id ? appointment.doctor?.name : null),
     }),
     session: nextSession,
   });
@@ -554,6 +745,76 @@ const handleManageReply = async ({ tenantId, userPhone, contact, session, messag
     return handleAppointmentSelection({ tenantId, userPhone, session, appointmentId: selectedId });
   }
 
+  const selectedReasonServiceId = parseSelectedReasonServiceId(replyId);
+  if (selectedReasonServiceId) {
+    const service = await getManageReasonServiceById({
+      tenantId,
+      serviceId: selectedReasonServiceId,
+    });
+    if (!service) {
+      return makeResult({
+        payload: buildManageTextPayload(userPhone, "That service selection is no longer available. Please choose again."),
+        session,
+      });
+    }
+    return startDoctorEditSelection({
+      tenantId,
+      userPhone,
+      session,
+      serviceId: service.specialization_id,
+      reason: service.name,
+    });
+  }
+
+  const selectedDoctorId = parseSelectedDoctorId(replyId);
+  if (selectedDoctorId) {
+    const currentPending = getSessionPendingValue(session) || {};
+    const doctors = await getManageDoctorsForService({
+      tenantId,
+      serviceId: currentPending.serviceId || null,
+    });
+    const selectedDoctor = doctors.find(
+      (doctor) => doctor.doctor_id === selectedDoctorId,
+    );
+    if (!selectedDoctor) {
+      return makeResult({
+        payload: buildManageTextPayload(userPhone, "That doctor selection is no longer available. Please choose again."),
+        session,
+      });
+    }
+    const pending = {
+      ...currentPending,
+      mode: "MANAGE_APPOINTMENT",
+      action: MANAGE_EDIT_ACTION,
+      appointmentId: session.selected_appointment_id || null,
+      editField: "doctor",
+      doctorId: selectedDoctorId,
+      doctorName: selectedDoctor.name || null,
+    };
+    const nextSession = await updateManageAppointmentSession(session, {
+      state: MANAGE_APPOINTMENT_STATES.WAITING_FOR_DATE_UPDATE,
+      selected_doctor_id: selectedDoctorId,
+      selected_date: null,
+      selected_time: null,
+      selected_slot_id: null,
+      pending_edit_field: "date",
+      pending_edit_value: pending,
+    });
+    const appointment = await getSelectedAppointment({ tenantId, userPhone, session: nextSession });
+    if (!appointment) {
+      return makeResult({
+        payload: buildManageTextPayload(userPhone, "I couldn’t verify this appointment anymore. Please ask to view your appointments again."),
+        session: nextSession,
+      });
+    }
+    return showDateSelectionForDoctor({
+      tenantId,
+      userPhone,
+      session: nextSession,
+      appointment,
+    });
+  }
+
   if (replyId === "manage_appt_back_details") {
     await releaseLockedSlots(session.session_id);
     const appointment = await getSelectedAppointment({ tenantId, userPhone, session });
@@ -565,6 +826,9 @@ const handleManageReply = async ({ tenantId, userPhone, contact, session, messag
     const nextSession = await updateManageAppointmentSession(session, {
       state: MANAGE_APPOINTMENT_STATES.EDIT_MENU,
       pending_edit_field: null,
+      pending_edit_value: buildManageEditPendingValue({
+        appointmentId: session.selected_appointment_id || null,
+      }),
     });
     return makeResult({ payload: buildManageEditMenuPayload(userPhone), session: nextSession });
   }
@@ -573,6 +837,9 @@ const handleManageReply = async ({ tenantId, userPhone, contact, session, messag
     const nextSession = await updateManageAppointmentSession(session, {
       state: MANAGE_APPOINTMENT_STATES.EDIT_MENU,
       pending_edit_field: null,
+      pending_edit_value: buildManageEditPendingValue({
+        appointmentId: session.selected_appointment_id || null,
+      }),
     });
     return makeResult({ payload: buildManageEditMenuPayload(userPhone), session: nextSession });
   }
@@ -581,27 +848,73 @@ const handleManageReply = async ({ tenantId, userPhone, contact, session, messag
     manage_appt_edit_name: { field: "name", prompt: "Please type the updated patient name." },
     manage_appt_edit_phone: { field: "phone", prompt: "Please type the updated phone number." },
     manage_appt_edit_email: { field: "email", prompt: "Please type the updated email address." },
-    manage_appt_edit_reason: { field: "reason", prompt: "Please type the updated reason for visit." },
   };
 
-  if (editFieldMap[replyId]) {
+  if (replyId === "manage_appt_edit_reason") {
+    return startReasonEditSelection({ tenantId, userPhone, session });
+  }
+
+  if (replyId === "manage_appt_edit_doctor") {
+    return startDoctorEditSelection({ tenantId, userPhone, session });
+  }
+
+  if (replyId === "manage_appt_edit_date" || replyId === "manage_appt_edit_time") {
+    const appointment = await getSelectedAppointment({ tenantId, userPhone, session });
+    if (!appointment) {
+      return makeResult({
+        payload: buildManageTextPayload(userPhone, "I couldn’t verify this appointment anymore. Please ask to view your appointments again."),
+        session,
+      });
+    }
     const nextSession = await updateManageAppointmentSession(session, {
-      state: MANAGE_APPOINTMENT_STATES.AWAITING_EDIT_VALUE,
-      pending_edit_field: editFieldMap[replyId].field,
-      pending_edit_value: null,
+      state:
+        replyId === "manage_appt_edit_date"
+          ? MANAGE_APPOINTMENT_STATES.WAITING_FOR_DATE_UPDATE
+          : MANAGE_APPOINTMENT_STATES.WAITING_FOR_SLOT_UPDATE,
+      selected_doctor_id: appointment.doctor_id || null,
+      selected_date:
+        replyId === "manage_appt_edit_time"
+          ? String(appointment.appointment_date || "").slice(0, 10)
+          : null,
+      selected_time: null,
+      selected_slot_id: null,
+      pending_edit_field: replyId === "manage_appt_edit_date" ? "date" : "time",
+      pending_edit_value: buildManageEditPendingValue({
+        appointmentId: session.selected_appointment_id || null,
+        editField: replyId === "manage_appt_edit_date" ? "date" : "time",
+      }),
+    });
+    if (replyId === "manage_appt_edit_time") {
+      return showSlotSelectionForDate({
+        tenantId,
+        userPhone,
+        session: nextSession,
+        appointment,
+        date: String(appointment.appointment_date || "").slice(0, 10),
+      });
+    }
+    return showDateSelectionForDoctor({
+      tenantId,
+      userPhone,
+      session: nextSession,
+      appointment,
+    });
+  }
+
+  if (editFieldMap[replyId]) {
+    const field = editFieldMap[replyId].field;
+    const nextSession = await updateManageAppointmentSession(session, {
+      state: EDIT_WAITING_STATE_BY_FIELD[field] || MANAGE_APPOINTMENT_STATES.AWAITING_EDIT_VALUE,
+      pending_edit_field: field,
+      pending_edit_value: buildManageEditPendingValue({
+        appointmentId: session.selected_appointment_id || null,
+        editField: field,
+      }),
     });
     return makeResult({
       payload: buildManageTextPayload(userPhone, editFieldMap[replyId].prompt),
       session: nextSession,
     });
-  }
-
-  if (session.state === MANAGE_APPOINTMENT_STATES.AWAITING_EDIT_VALUE) {
-    return handleEditFieldValue({ tenantId, userPhone, session, message });
-  }
-
-  if (replyId === "manage_appt_reschedule" || normalizedMessage === "reschedule appointment" || normalizedMessage === "re-schedule appointment") {
-    return handleRescheduleStart({ tenantId, userPhone, session });
   }
 
   const selectedDate = parseSelectedDate(replyId);
@@ -611,6 +924,14 @@ const handleManageReply = async ({ tenantId, userPhone, contact, session, messag
 
   if (String(replyId || "").startsWith("manage_appt_slot_")) {
     return handleSlotSelection({ tenantId, userPhone, session, replyId });
+  }
+
+  if (isManageEditInputState(session.state)) {
+    return handleEditFieldValue({ tenantId, userPhone, session, message });
+  }
+
+  if (replyId === "manage_appt_reschedule" || normalizedMessage === "reschedule appointment" || normalizedMessage === "re-schedule appointment") {
+    return handleRescheduleStart({ tenantId, userPhone, session });
   }
 
   if (replyId === "manage_appt_confirm_reschedule") {
@@ -638,11 +959,12 @@ export const handleManageBookedAppointments = async ({
   message = "",
   interactiveReplyId = null,
   intent = null,
+  whatsappMessageId = null,
 } = {}) => {
   const normalizedPhone = normalizeManagePhone(userPhone);
   if (!tenantId || !normalizedPhone) {
     return makeResult({
-      payload: buildManageTextPayload(userPhone, "I couldn’t verify your WhatsApp number for appointment management."),
+      payload: buildManageTextPayload(userPhone, "I couldn't verify your WhatsApp number for appointment management."),
     });
   }
 
@@ -650,11 +972,40 @@ export const handleManageBookedAppointments = async ({
     tenantId,
     userPhone: normalizedPhone,
   });
+  const isActiveEditInput = isActiveManageEditInputSession(session);
+
+  // Per-message dedup: prevent duplicate responses if Meta retries the webhook
+  if (whatsappMessageId && !isActiveEditInput) {
+    const alreadyProcessed = await hasProcessedAppointmentMessage(tenantId, whatsappMessageId);
+    if (alreadyProcessed) {
+      return {
+        success: true,
+        alreadyProcessed: true,
+        duplicate: true,
+        suppressResponse: true,
+      };
+    }
+    // Claim this messageId immediately before any async work begins
+    await logAppointmentStateTransition({
+      tenantId,
+      userPhone: normalizedPhone,
+      sessionId: session?.session_id || null,
+      fromState: null,
+      toState: "manage_processing",
+      message,
+      whatsappMessageId,
+    });
+  }
 
   if (session && isManageAppointmentSessionExpired(session)) {
     await releaseLockedSlots(session.session_id);
-    await expireManageAppointmentSession(session);
-    return { handoverToNormalRouter: true, expired: true };
+    session = await expireManageAppointmentSession(session);
+    return makeResult({
+      payload: buildManageSessionExpiredPayload(normalizedPhone),
+      session,
+      expired: true,
+      event: "manage_session_expired",
+    });
   }
 
   if (!session) {

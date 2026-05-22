@@ -17,11 +17,8 @@ import { getIO } from "../../middlewares/socket/socket.js";
 import { classifyIntent } from "../../utils/ai/intentClassifier.js";
 import {
   buildAvailableDoctorListAppointmentResponse,
-  handleAdvancedAppointmentBooking,
 } from "../AppointmentModel/Advanced_Appointment_Booking.service.js";
-import { handleManageBookedAppointments } from "../AppointmentModel/Manage_Booked_Appointments.service.js";
 import {
-  getAdvancedAppointmentStartReason,
   hasAppointmentStartSignal,
   isContextualPositiveBookingReply,
   isDoctorListRequest,
@@ -29,8 +26,13 @@ import {
 } from "../AppointmentModel/appointmentRoutingGuard.service.js";
 import {
   hasManageAppointmentStartSignal,
-  shouldStartManageAppointmentsFlow,
 } from "../AppointmentModel/manageAppointmentRoutingGuard.service.js";
+import {
+  APPOINTMENT_OPERATION_ROUTES,
+  APPOINTMENT_OPERATION_SOURCES,
+  getAppointmentOperationRouterMode,
+  isAppointmentOperationSafetyEnabled,
+} from "../AppointmentModel/appointmentOperationRouter.service.js";
 
 const httpsAgent = new https.Agent({
   family: 4,
@@ -38,8 +40,6 @@ const httpsAgent = new https.Agent({
 });
 
 const FIXED_MISSING_INFO_FALLBACK = MISSING_INFO_FALLBACK_REPLY;
-
-const ENABLE_APPOINTMENT_FLOW = true;
 
 const FACTUAL_KEYWORD_PATTERN =
   /\b(price|cost|fee|fees|timing|timings|hours|open|close|policy|policies|service|services|treatment|treatments|procedure|procedures|operation|surgery|medication|medicine|diet|drink|drinks|food|before|after|insurance|package|offer|facility|facilities|address|location|contact|refund|payment|emi|warranty|guarantee|side effects?)\b/i;
@@ -657,6 +657,35 @@ export const markMessageProcessed = async (
   }
 };
 
+export const getProcessedMessageInsertCount = (result, metadata = null) => {
+  const candidates = [result, metadata].flat().filter(Boolean);
+  for (const candidate of candidates) {
+    if (typeof candidate === "number") return candidate;
+    if (typeof candidate?.affectedRows === "number") return candidate.affectedRows;
+    if (typeof candidate?.rowCount === "number") return candidate.rowCount;
+  }
+  return 0;
+};
+
+export const tryMarkMessageProcessed = async (
+  tenant_id,
+  phone_number_id,
+  message_id,
+  phone,
+) => {
+  try {
+    const [result, metadata] = await db.sequelize.query(
+      `INSERT IGNORE INTO ${tableNames.PROCESSEDMESSAGE}
+     (tenant_id, phone_number_id, message_id, phone)
+     VALUES (?, ?, ? , ?)`,
+      { replacements: [tenant_id, phone_number_id, message_id, phone] },
+    );
+    return getProcessedMessageInsertCount(result, metadata) > 0;
+  } catch (err) {
+    throw err;
+  }
+};
+
 /**
  * Atomic lock acquisition — combines check + acquire + stale cleanup in one operation.
  * Returns true if lock was acquired, false if already locked by another process.
@@ -769,6 +798,7 @@ export const getOpenAIReply = async (
   phone_number_id = null,
   cachedData = {},
   messageId = null,
+  routingContext = {},
 ) => {
   try {
     if (!userMessage) return null;
@@ -811,17 +841,20 @@ export const getOpenAIReply = async (
     });
 
     // ── Phase 1.5: Intent Classification — what data does this message need? ──
-    let intentResult = isPureSmallTalkMessage(cleanMessage) && !hasContextualBookingShortcut
-      ? {
-          intent: "GENERAL_QUESTION",
-          requires: { knowledge: false, doctors: false, appointments: false },
-          lead_intelligence: null,
-        }
-      : await classifyIntent(
-          cleanMessage,
-          chatHistory,
-          tenant_id,
-        );
+    let intentResult =
+      routingContext?.classifierResult ||
+      routingContext?.intentResult ||
+      (isPureSmallTalkMessage(cleanMessage) && !hasContextualBookingShortcut
+        ? {
+            intent: "GENERAL_QUESTION",
+            requires: { knowledge: false, doctors: false, appointments: false },
+            lead_intelligence: null,
+          }
+        : await classifyIntent(
+            cleanMessage,
+            chatHistory,
+            tenant_id,
+          ));
     if (hasManageAppointmentStartSignal(cleanMessage)) {
       intentResult = {
         ...intentResult,
@@ -845,89 +878,50 @@ export const getOpenAIReply = async (
       });
     }
 
-    console.log(
-      "[AI FLOW]",
-      "Appointment flow enabled:",
-      ENABLE_APPOINTMENT_FLOW,
-    );
-
     faqTrace("[AI-FLOW] intent classified", { intent: intentResult.intent, requires: intentResult.requires, msg: cleanMessage.substring(0, 60) });
 
+    const routerMode =
+      routingContext?.routerMode || getAppointmentOperationRouterMode();
+    console.log("[AI FLOW]", "Appointment router mode:", routerMode);
     if (
-      ENABLE_APPOINTMENT_FLOW &&
-      shouldStartManageAppointmentsFlow({
-        intent: intentResult.intent,
-        message: cleanMessage,
-      })
+      isAppointmentOperationSafetyEnabled(routerMode) &&
+      (intentResult.intent === "APPOINTMENT_ACTION" ||
+        intentResult.intent === "MANAGE_APPOINTMENTS_ACTION")
     ) {
-      const contactObj = {
-        contact_id,
-        phone_number: phone,
-        phone,
-        ...(cachedData?.contact || {}),
+      const route =
+        intentResult.intent === "MANAGE_APPOINTMENTS_ACTION"
+          ? APPOINTMENT_OPERATION_ROUTES.MANAGE_APPOINTMENT
+          : APPOINTMENT_OPERATION_ROUTES.BOOK_APPOINTMENT;
+      const envelope = {
+        shouldHandle: true,
+        route,
+        action: "unknown",
+        source: APPOINTMENT_OPERATION_SOURCES.CLASSIFIER_INTENT,
+        confidence: 0.78,
+        reason: `Normal AI blocked because intent is ${intentResult.intent}.`,
+        entities: {},
       };
-      const manageAppointmentResult = await handleManageBookedAppointments({
-        tenantId: tenant_id,
-        userPhone: phone,
-        contact: contactObj,
-        message: cleanMessage,
-        interactiveReplyId: null,
-        intent: intentResult.intent,
-      });
-      if (!manageAppointmentResult?.handoverToNormalRouter) {
-        return {
-          message: manageAppointmentResult.message,
-          tagDetected: null,
-          tagPayload: null,
-          intent: intentResult.intent,
-          requires: intentResult.requires,
-          lead_intelligence: intentResult.lead_intelligence || null,
-          _manageAppointmentResult: manageAppointmentResult,
-        };
-      }
-    }
-
-    const advancedStartReason = ENABLE_APPOINTMENT_FLOW
-      ? getAdvancedAppointmentStartReason({
-          intent: intentResult.intent,
+      console.log(
+        "[AI_APPOINTMENT_BLOCKED]",
+        JSON.stringify({
+          tenantId: tenant_id,
+          phone,
           message: cleanMessage,
-          chatHistory,
-        })
-      : null;
-    if (intentResult.intent === "APPOINTMENT_ACTION") {
-      faqTrace("[AI-FLOW] advanced start gate", {
-        allowed: Boolean(advancedStartReason),
-        reason: advancedStartReason || "blocked",
-        msg: cleanMessage.substring(0, 60),
-      });
+          intent: intentResult.intent,
+          route,
+          mode: routerMode,
+        }),
+      );
+      return {
+        message: null,
+        tagDetected: null,
+        tagPayload: null,
+        intent: intentResult.intent,
+        requires: intentResult.requires,
+        lead_intelligence: intentResult.lead_intelligence || null,
+        _appointmentRoute: envelope,
+      };
     }
-
-    // NEW: Route appointment intents directly — skip heavy AI call and knowledge search
-    if (advancedStartReason) { // NEW
-      const contactObj = { // NEW
-        contact_id, // NEW
-        phone_number: phone, // NEW
-        phone, // NEW
-        ...(cachedData?.contact || {}), // NEW
-      }; // NEW
-      const advancedApptResult = await handleAdvancedAppointmentBooking({
-        tenantId: tenant_id,
-        userPhone: phone,
-        contact: contactObj,
-        message: cleanMessage,
-        interactiveReplyId: null,
-        whatsappMessageId: messageId || null,
-      });
-      if (!advancedApptResult?.handoverToNormalRouter) {
-        return { // NEW
-          message: advancedApptResult.message, // NEW
-          tagDetected: null, // NEW
-          tagPayload: null, // NEW
-          intent: intentResult.intent, // NEW
-          _appointmentResult: advancedApptResult,
-        }; // NEW
-      }
-    } // NEW
 
     const factualKnowledgeNeeded = isLikelyFactualQuestion(cleanMessage);
     if (!intentResult.requires.knowledge && factualKnowledgeNeeded) {

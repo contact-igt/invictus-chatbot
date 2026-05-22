@@ -33,6 +33,10 @@ const STATIC_REPLY_MAP = {
   back_confirm: APPOINTMENT_REPLY_TYPES.BACK_TO_CONFIRM,
 };
 
+const STATIC_REPLY_IDS = Object.keys(STATIC_REPLY_MAP).sort(
+  (a, b) => b.length - a.length,
+);
+
 export const encodeSlotTime = (time) =>
   String(time || "")
     .replace(/^(\d):/, "0$1:")
@@ -91,8 +95,17 @@ export const decodeAppointmentReply = (replyId) => {
       : { type: APPOINTMENT_REPLY_TYPES.UNKNOWN };
   }
 
-  const mapped = STATIC_REPLY_MAP[id];
-  return mapped
-    ? { type: mapped }
-    : { type: APPOINTMENT_REPLY_TYPES.UNKNOWN };
+  for (const staticId of STATIC_REPLY_IDS) {
+    if (id === staticId) {
+      return { type: STATIC_REPLY_MAP[staticId] };
+    }
+    if (id.startsWith(`${staticId}_`)) {
+      const sessionId = id.slice(staticId.length + 1);
+      return sessionId
+        ? { type: STATIC_REPLY_MAP[staticId], sessionId }
+        : { type: APPOINTMENT_REPLY_TYPES.UNKNOWN };
+    }
+  }
+
+  return { type: APPOINTMENT_REPLY_TYPES.UNKNOWN };
 };

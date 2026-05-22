@@ -15,7 +15,7 @@ export const TenantSecretsTable = (sequelize, Sequelize) => {
         allowNull: false,
       },
       type: {
-        type: Sequelize.ENUM("openai", "whatsapp"),
+        type: Sequelize.STRING(64),
         allowNull: false,
       },
       encrypted_value: {

@@ -2,18 +2,16 @@ import { createUserMessageService } from "../Messages/messages.service.js";
 import { downloadAndStoreIncomingMedia } from "../../services/chatAttachmentService.js";
 import { formatPhoneNumber } from "../../utils/helpers/formatPhoneNumber.js";
 import fs from "fs";
+import os from "os";
 import {
   getOpenAIReply,
   getOpenAIVisionReply,
-  isChatLocked,
-  isMessageProcessed,
-  lockChat,
-  markMessageProcessed,
   sendWhatsAppMessage,
   sendTypingIndicator,
   sendReadReceipt,
   unlockChat,
   tryAcquireLock,
+  tryMarkMessageProcessed,
   queuePendingMessage,
   consumePendingMessage,
 } from "./AuthWhatsapp.service.js";
@@ -27,21 +25,25 @@ import {
 } from "../AppointmentModel/Advanced_Appointment_Booking.service.js";
 import { handleManageBookedAppointments } from "../AppointmentModel/Manage_Booked_Appointments.service.js";
 import {
+  cancelAppointmentSession,
   getActiveAppointmentSession,
   isSessionExpired,
 } from "../AppointmentModel/appointmentSession.service.js";
 import {
-  getActiveManageAppointmentSession,
-  isManageAppointmentSessionExpired,
+  clearManageAppointmentSession,
+  MANAGE_APPOINTMENT_SESSION_STATUS,
 } from "../AppointmentModel/manageAppointmentSession.service.js";
+import { releaseLockedSlots } from "../AppointmentModel/appointmentSlotLock.service.js";
+import { isDoctorListRequest } from "../AppointmentModel/appointmentRoutingGuard.service.js";
 import {
-  isDoctorListRequest,
-  shouldRouteActiveAdvancedAppointmentMessage,
-} from "../AppointmentModel/appointmentRoutingGuard.service.js";
-import {
-  isManageAppointmentReplyId,
-  shouldRouteActiveManageAppointmentMessage,
-} from "../AppointmentModel/manageAppointmentRoutingGuard.service.js";
+  APPOINTMENT_OPERATION_ROUTES,
+  canonicalizeManageOperationMessage,
+  getAppointmentOperationRouterMode,
+  isAppointmentOperationDecisionEnabled,
+  logAppointmentOperationRouterDecision,
+  normalizeAppointmentOperationInput,
+  routeAppointmentOperation,
+} from "../AppointmentModel/appointmentOperationRouter.service.js";
 import { sendAppointmentPayload } from "../AppointmentModel/whatsappAppointmentTemplates.service.js";
 import { parseButtonReply, sendQuickReply, sendListMessage, sendAppointmentCard } from "./whatsappButtons.service.js"; // NEW
 
@@ -718,15 +720,32 @@ export const receiveMessage = async (req, res) => {
 
     // NEW: Extract button reply ID for appointment routing (separate from display text)
     const buttonReplyId = type === "interactive" ? parseButtonReply(msg) : null;
+    const normalizedMessage = normalizeAppointmentOperationInput({
+      messageText: text,
+      buttonReplyId,
+      messageType: type,
+      rawPayload: msg,
+    });
 
-    // 4. Deduplication Check
-    const ismessage = await isMessageProcessed(
+    // Diagnostic: log every webhook receipt to detect multi-instance delivery
+    console.log("[WEBHOOK-RECV]", { pid: process.pid, host: os.hostname(), messageId, phone, tenant_id });
+
+    // 4. Atomic dedupe gate. If this did not insert, Meta already delivered it.
+    const didMarkMessage = await tryMarkMessageProcessed(
       tenant_id,
       phone_number_id,
       messageId,
+      phone,
     );
-    if (ismessage?.length > 0) return res.sendStatus(200);
-    await markMessageProcessed(tenant_id, phone_number_id, messageId, phone);
+    if (!didMarkMessage) {
+      console.log("[WEBHOOK] Duplicate inbound message ignored:", {
+        tenant_id,
+        phone_number_id,
+        messageId,
+        phone,
+      });
+      return res.sendStatus(200);
+    }
 
     // 5. Manage Contact and LiveChat
     // Use WhatsApp profile name directly
@@ -980,6 +999,7 @@ export const receiveMessage = async (req, res) => {
       queuePendingMessage(tenant_id, phone, {
         text,
         buttonReplyId,
+        normalizedMessage,
         type,
         contact_id: contactsaved?.contact_id,
         phone_number_id,
@@ -1025,7 +1045,7 @@ export const receiveMessage = async (req, res) => {
 
         // Build a contact object that appointment handlers expect.
         const contactObj = { ...contactsaved, phone_number: phone }; // NEW
-        const effectiveText = buttonReplyId || text;
+        const currentNormalizedMessage = normalizedMessage;
 
         console.log(
           "[AI FLOW]",
@@ -1055,36 +1075,6 @@ export const receiveMessage = async (req, res) => {
           );
           return;
         }
-
-        const handledByManageAppointment =
-          await tryHandleManageAppointmentFlow({
-            tenant_id,
-            phone,
-            contactObj,
-            contactsaved,
-            phone_number_id,
-            name,
-            message: buttonReplyId || text,
-            visibleText: text,
-            interactiveReplyId: buttonReplyId,
-          });
-
-        if (handledByManageAppointment) return;
-
-        const handledByAdvancedAppointment =
-          await tryHandleAdvancedAppointmentFlow({
-            tenant_id,
-            phone,
-            contactObj,
-            contactsaved,
-            phone_number_id,
-            name,
-            message: buttonReplyId || text,
-            interactiveReplyId: buttonReplyId,
-            whatsappMessageId: messageId || null,
-          });
-
-        if (handledByAdvancedAppointment) return;
 
         // ── Vision: Image messages → GPT-4o reads the image + conversation history ──
         if (type === "image") {
@@ -1166,78 +1156,6 @@ export const receiveMessage = async (req, res) => {
           return;
         }
 
-        if (buttonReplyId && isAdvancedBookingReplyId(buttonReplyId)) {
-          const advancedResult = await handleAdvancedAppointmentBooking({
-            tenantId: tenant_id,
-            userPhone: phone,
-            contact: contactObj,
-            message: effectiveText,
-            interactiveReplyId: buttonReplyId,
-            whatsappMessageId: messageId || null,
-          });
-          if (!advancedResult?.handoverToNormalRouter) {
-            await handleAdvancedAppointmentResponse(
-              advancedResult,
-              tenant_id,
-              phone,
-              contactsaved,
-              phone_number_id,
-              name,
-            );
-            return;
-          }
-        }
-
-        const legacyConfirmSession = await db.BookingSessions.findOne({
-          where: {
-            contact_id: contactsaved.contact_id,
-            tenant_id,
-            status: "active",
-            flow_type: ["edit", "cancel"],
-            current_step: "confirming",
-          },
-          order: [["updatedAt", "DESC"]],
-        });
-        if (legacyConfirmSession) {
-          const confirmResult = await handleLegacyAppointmentConfirmation(
-            effectiveText,
-            contactObj,
-            tenant_id,
-          );
-          if (confirmResult) {
-            await handleAppointmentResponse(
-              confirmResult,
-              tenant_id,
-              phone,
-              contactsaved,
-              phone_number_id,
-              name,
-            );
-            return;
-          }
-        }
-
-        if (buttonReplyId && isLegacyAppointmentManagementReplyId(buttonReplyId)) {
-          const legacyIntent = getLegacyAppointmentIntentForReply(buttonReplyId);
-          if (legacyIntent) {
-            const legacyResult = await handleLegacyAppointmentIntent(
-              legacyIntent,
-              effectiveText,
-              contactObj,
-              tenant_id,
-            );
-            await handleAppointmentResponse(
-              legacyResult,
-              tenant_id,
-              phone,
-              contactsaved,
-              phone_number_id,
-              name,
-            );
-            return;
-          }
-        }
-
         // Greetings and non-booking questions stay in normal AI/GENERAL_QUESTION routing.
 
         // Check wallet status before AI processing (pass small estimated cost for prepaid check)
@@ -1272,14 +1190,38 @@ export const receiveMessage = async (req, res) => {
           return;
         }
 
+        const {
+          handled: handledByRouter,
+          routingResult,
+          routerMode,
+        } = await routeAndMaybeHandleAppointmentOperation({
+          tenant_id,
+          phone,
+          contact_id: contactsaved?.contact_id,
+          normalizedMessage: currentNormalizedMessage,
+          contactObj,
+          contactsaved,
+          phone_number_id,
+          name,
+          whatsappMessageId: messageId || null,
+          message_db_id: savedMsg?.id || null,
+          io,
+        });
+        if (handledByRouter) return;
+
         const aiResult = await getOpenAIReply(
           tenant_id,
           phone,
-          text,
+          currentNormalizedMessage.messageText,
           contactsaved?.contact_id,
           phone_number_id,
           cachedData,
           messageId || null,
+          {
+            classifierResult: routingResult.classifierResult,
+            routerMode,
+            appointmentOperationDecision: routingResult.decision,
+          },
         );
 
         // Log AI result for debugging UPDATE/CANCEL issues
@@ -1293,6 +1235,24 @@ export const receiveMessage = async (req, res) => {
         const _apptTrace = { _appointmentResult: !!aiResult?._appointmentResult, tagDetected: aiResult?.tagDetected, msgPreview: String(aiResult?.message || "").substring(0, 60) };
         try { import("fs").then(fs => fs.default.appendFileSync("/tmp/faq_trace.log", `[${new Date().toISOString()}] [CONTROLLER] aiResult check ${JSON.stringify(_apptTrace)}\n`)).catch(() => {}); } catch {}
         console.log("[FAQ-PIPELINE][CTRL] aiResult:", JSON.stringify(_apptTrace));
+        if (
+          aiResult?._appointmentRoute &&
+          isAppointmentOperationDecisionEnabled(aiResult._appointmentRoute, routerMode)
+        ) {
+          const handledByAiSafetyRoute = await handleAppointmentOperationDecision({
+            decision: aiResult._appointmentRoute,
+            normalizedMessage: currentNormalizedMessage,
+            tenant_id,
+            phone,
+            contactObj,
+            contactsaved,
+            phone_number_id,
+            name,
+            whatsappMessageId: messageId || null,
+          });
+          if (handledByAiSafetyRoute) return;
+        }
+
         if (aiResult?._manageAppointmentResult) {
           await handleAdvancedAppointmentResponse(
             aiResult._manageAppointmentResult,
@@ -1488,9 +1448,14 @@ export const receiveMessage = async (req, res) => {
                   phone,
                 };
                 const queuedInteractiveReplyId = pending.buttonReplyId || null;
-                const queuedEffectiveText =
-                  queuedInteractiveReplyId || pending.text || "";
-
+                const queuedNormalizedMessage =
+                  pending.normalizedMessage ||
+                  normalizeAppointmentOperationInput({
+                    messageText: pending.text || "",
+                    buttonReplyId: queuedInteractiveReplyId,
+                    messageType: pending.type || "text",
+                    rawPayload: pending.rawPayload || null,
+                  });
                 if (
                   isDoctorListTemplateRequest({
                     text: pending.text || "",
@@ -1519,86 +1484,6 @@ export const receiveMessage = async (req, res) => {
                   return;
                 }
 
-                const queuedHandledByManageAppointment =
-                  await tryHandleManageAppointmentFlow({
-                    tenant_id,
-                    phone,
-                    contactObj: queuedContactObj,
-                    contactsaved: pending.contactsaved || null,
-                    phone_number_id,
-                    name: pending.name || pending.contactsaved?.name || null,
-                    message: queuedEffectiveText,
-                    visibleText: pending.text || "",
-                    interactiveReplyId: queuedInteractiveReplyId,
-                  });
-
-                if (queuedHandledByManageAppointment) return;
-
-                const queuedHandledByAdvancedAppointment =
-                  await tryHandleAdvancedAppointmentFlow({
-                    tenant_id,
-                    phone,
-                    contactObj: queuedContactObj,
-                    contactsaved: pending.contactsaved || null,
-                    phone_number_id,
-                    name: pending.name || pending.contactsaved?.name || null,
-                    message: queuedEffectiveText,
-                    interactiveReplyId: queuedInteractiveReplyId,
-                    whatsappMessageId: pending.messageId || null,
-                  });
-
-                if (queuedHandledByAdvancedAppointment) return;
-
-                if (
-                  queuedInteractiveReplyId &&
-                  isAdvancedBookingReplyId(queuedInteractiveReplyId)
-                ) {
-                  const advancedResult = await handleAdvancedAppointmentBooking({
-                    tenantId: tenant_id,
-                    userPhone: phone,
-                    contact: queuedContactObj,
-                    message: queuedEffectiveText,
-                    interactiveReplyId: queuedInteractiveReplyId,
-                    whatsappMessageId: pending.messageId || null,
-                  });
-                  if (!advancedResult?.handoverToNormalRouter) {
-                    await handleAdvancedAppointmentResponse(
-                      advancedResult,
-                      tenant_id,
-                      phone,
-                      pending.contactsaved || null,
-                      phone_number_id,
-                      pending.name || pending.contactsaved?.name || null,
-                    );
-                    return;
-                  }
-                }
-
-                if (
-                  queuedInteractiveReplyId &&
-                  isLegacyAppointmentManagementReplyId(queuedInteractiveReplyId)
-                ) {
-                  const legacyIntent =
-                    getLegacyAppointmentIntentForReply(queuedInteractiveReplyId);
-                  if (legacyIntent) {
-                    const legacyResult = await handleLegacyAppointmentIntent(
-                      legacyIntent,
-                      queuedEffectiveText,
-                      queuedContactObj,
-                      tenant_id,
-                    );
-                    await handleAppointmentResponse(
-                      legacyResult,
-                      tenant_id,
-                      phone,
-                      pending.contactsaved || null,
-                      phone_number_id,
-                      pending.name || pending.contactsaved?.name || null,
-                    );
-                    return;
-                  }
-                }
-
                 // Check wallet before processing queued message
                 const queuedWalletCheck = await canUseAI(tenant_id, 0.5);
                 if (!queuedWalletCheck.allowed) {
@@ -1618,15 +1503,61 @@ export const receiveMessage = async (req, res) => {
 
                 console.log("AI started for:", phone);
 
+                const {
+                  handled: queuedHandledByRouter,
+                  routingResult: queuedRoutingResult,
+                  routerMode: queuedRouterMode,
+                } = await routeAndMaybeHandleAppointmentOperation({
+                  tenant_id,
+                  phone,
+                  contact_id: pending.contact_id,
+                  normalizedMessage: queuedNormalizedMessage,
+                  contactObj: queuedContactObj,
+                  contactsaved: pending.contactsaved || null,
+                  phone_number_id,
+                  name: pending.name || pending.contactsaved?.name || null,
+                  whatsappMessageId: pending.messageId || null,
+                  message_db_id: pending.message_db_id || null,
+                  io,
+                });
+                if (queuedHandledByRouter) return;
+
                 const aiResult = await getOpenAIReply(
                   tenant_id,
                   phone,
-                  queuedEffectiveText,
+                  queuedNormalizedMessage.messageText,
                   pending.contact_id,
                   phone_number_id,
                   {}, // cachedData
                   pending.messageId || null,
+                  {
+                    classifierResult: queuedRoutingResult.classifierResult,
+                    routerMode: queuedRouterMode,
+                    appointmentOperationDecision: queuedRoutingResult.decision,
+                  },
                 );
+
+                if (
+                  aiResult?._appointmentRoute &&
+                  isAppointmentOperationDecisionEnabled(
+                    aiResult._appointmentRoute,
+                    queuedRouterMode,
+                  )
+                ) {
+                  const queuedHandledByAiSafetyRoute =
+                    await handleAppointmentOperationDecision({
+                      decision: aiResult._appointmentRoute,
+                      normalizedMessage: queuedNormalizedMessage,
+                      tenant_id,
+                      phone,
+                      contactObj: queuedContactObj,
+                      contactsaved: pending.contactsaved || null,
+                      phone_number_id,
+                      name: pending.name || pending.contactsaved?.name || null,
+                      whatsappMessageId: pending.messageId || null,
+                    });
+                  if (queuedHandledByAiSafetyRoute) return;
+                }
 
                 if (aiResult?._manageAppointmentResult) {
                   await handleAdvancedAppointmentResponse(
@@ -1807,6 +1738,416 @@ export const receiveMessage = async (req, res) => {
   }
 };
 
+async function applyAppointmentRouterLeadUpdate({
+  tenant_id,
+  contact_id,
+  message_id = null,
+  message_text = "",
+  routingResult,
+  io = null,
+}) {
+  const classifierResult = routingResult?.classifierResult;
+  if (!tenant_id || !contact_id || !classifierResult) return;
+  try {
+    await updateLeadService(tenant_id, contact_id, {
+      sourceEvent: "user_message",
+      message_id,
+      message_text,
+      intentResult: {
+        intent: classifierResult.intent,
+        requires: classifierResult.requires,
+        lead_intelligence: classifierResult.lead_intelligence,
+      },
+    });
+    const ioInstance = io || getIO();
+    ioInstance.to(`tenant-${tenant_id}`).emit("lead-updated", {
+      tenant_id,
+      contact_id,
+    });
+  } catch (leadErr) {
+    console.error(
+      "[APPOINTMENT_OPERATION_ROUTER] Lead update failed:",
+      leadErr.message,
+    );
+  }
+}
+
+async function routeAndMaybeHandleAppointmentOperation({
+  tenant_id,
+  phone,
+  contact_id,
+  normalizedMessage,
+  contactObj,
+  contactsaved = null,
+  phone_number_id = null,
+  name = null,
+  whatsappMessageId = null,
+  message_db_id = null,
+  io = null,
+}) {
+  const routerMode = getAppointmentOperationRouterMode();
+  const routingResult = await routeAppointmentOperation({
+    tenantId: tenant_id,
+    phone,
+    contactId: contact_id,
+    normalizedMessage,
+  });
+  logAppointmentOperationRouterDecision({
+    tenantId: tenant_id,
+    phone,
+    normalizedMessage,
+    routingResult,
+    mode: routerMode,
+  });
+
+  if (!isAppointmentOperationDecisionEnabled(routingResult.decision, routerMode)) {
+    return { handled: false, routingResult, routerMode };
+  }
+
+  await closeSupersededAppointmentSession({
+    tenant_id,
+    phone,
+    routingResult,
+    normalizedMessage,
+  });
+
+  await applyAppointmentRouterLeadUpdate({
+    tenant_id,
+    contact_id,
+    message_id: message_db_id,
+    message_text: normalizeAppointmentOperationInput(normalizedMessage).messageText,
+    routingResult,
+    io,
+  });
+
+  const handled = await handleAppointmentOperationDecision({
+    decision: routingResult.decision,
+    normalizedMessage,
+    tenant_id,
+    phone,
+    contactObj,
+    contactsaved,
+    phone_number_id,
+    name,
+    whatsappMessageId,
+  });
+
+  return { handled, routingResult, routerMode };
+}
+
+const closeBookingSessionSilently = async (session) => {
+  if (!session) return;
+  try {
+    await releaseLockedSlots(session.session_id);
+    await cancelAppointmentSession(session);
+  } catch (err) {
+    console.error(
+      "[APPOINTMENT_OPERATION_ROUTER] Silent booking session close failed:",
+      err.message,
+    );
+  }
+};
+
+const closeManageSessionSilently = async (session) => {
+  if (!session) return;
+  try {
+    await releaseLockedSlots(session.session_id);
+    await clearManageAppointmentSession(
+      session,
+      MANAGE_APPOINTMENT_SESSION_STATUS.CANCELLED,
+    );
+  } catch (err) {
+    console.error(
+      "[APPOINTMENT_OPERATION_ROUTER] Silent manage session close failed:",
+      err.message,
+    );
+  }
+};
+
+async function closeSupersededAppointmentSession({
+  routingResult,
+  normalizedMessage,
+}) {
+  const decision = routingResult?.decision;
+  if (!decision?.shouldHandle) return;
+
+  const input = normalizeAppointmentOperationInput(normalizedMessage);
+  const activeBookingSession = routingResult?.activeBookingSession || null;
+  const activeManageSession = routingResult?.activeManageSession || null;
+
+  if (decision.route === APPOINTMENT_OPERATION_ROUTES.MANAGE_APPOINTMENT) {
+    await closeBookingSessionSilently(activeBookingSession);
+    return;
+  }
+
+  if (decision.route !== APPOINTMENT_OPERATION_ROUTES.BOOK_APPOINTMENT) return;
+
+  if (activeManageSession) {
+    await closeManageSessionSilently(activeManageSession);
+    return;
+  }
+
+  if (activeBookingSession && input.buttonReplyId === "create_appointment") {
+    await closeBookingSessionSilently(activeBookingSession);
+  }
+}
+
+const canonicalizeBookingOperationMessage = ({ decision, normalizedMessage }) => {
+  const input = normalizeAppointmentOperationInput(normalizedMessage);
+  if (input.buttonReplyId) return input.effectiveText;
+  switch (decision?.action) {
+    case "confirm":
+      return "confirm_booking";
+    case "reject":
+    case "cancel":
+    case "exit":
+      return "cancel_booking";
+    case "continue":
+      return "continue_appointment";
+    case "edit":
+      return "edit_details";
+    default:
+      return input.effectiveText || "create_appointment";
+  }
+};
+
+const isManageCanonicalReplyId = (value = "") => {
+  const id = String(value || "").trim();
+  return (
+    id === "view_my_appointments" ||
+    id.startsWith("manage_appt_") ||
+    id.startsWith("appt_") ||
+    id.startsWith("confirm_cancel_") ||
+    id.startsWith("confirm_reschedule_")
+  );
+};
+
+const getAppointmentResponsePayloadCount = (result) => {
+  if (Array.isArray(result?.payloads)) return result.payloads.length;
+  if (result?.payload) return 1;
+  if (result?.message) return 1;
+  return 0;
+};
+
+const logAppointmentOperationDispatch = ({
+  tenantId,
+  phone,
+  messageId = null,
+  decision,
+  result,
+}) => {
+  try {
+    console.log(
+      "[APPOINTMENT_OPERATION_DISPATCH]",
+      JSON.stringify({
+        tenantId,
+        phone,
+        messageId,
+        route: decision?.route || null,
+        action: decision?.action || null,
+        source: decision?.source || null,
+        responsePayloadCount: getAppointmentResponsePayloadCount(result),
+      }),
+    );
+  } catch (err) {
+    console.log("[APPOINTMENT_OPERATION_DISPATCH]", {
+      tenantId,
+      phone,
+      messageId,
+      route: decision?.route || null,
+      action: decision?.action || null,
+      source: decision?.source || null,
+      responsePayloadCount: getAppointmentResponsePayloadCount(result),
+    });
+  }
+};
+
+async function handleAppointmentOperationDecision({
+  decision,
+  normalizedMessage,
+  tenant_id,
+  phone,
+  contactObj,
+  contactsaved = null,
+  phone_number_id = null,
+  name = null,
+  whatsappMessageId = null,
+}) {
+  if (!decision?.shouldHandle) return false;
+  const input = normalizeAppointmentOperationInput(normalizedMessage);
+  const legacyReplyId = input.buttonReplyId || input.effectiveText;
+
+  if (
+    ["confirm_yes", "confirm_no"].includes(legacyReplyId) &&
+    (contactsaved?.contact_id || contactObj?.contact_id)
+  ) {
+    const legacyConfirmSession = await db.BookingSessions.findOne({
+      where: {
+        contact_id: contactsaved?.contact_id || contactObj?.contact_id,
+        tenant_id,
+        status: "active",
+        flow_type: ["edit", "cancel"],
+        current_step: "confirming",
+      },
+      order: [["updatedAt", "DESC"]],
+    });
+    if (legacyConfirmSession) {
+      const confirmResult = await handleLegacyAppointmentConfirmation(
+        input.effectiveText,
+        contactObj,
+        tenant_id,
+      );
+      if (confirmResult) {
+        logAppointmentOperationDispatch({
+          tenantId: tenant_id,
+          phone,
+          messageId: whatsappMessageId,
+          decision,
+          result: confirmResult,
+        });
+        await handleAppointmentResponse(
+          confirmResult,
+          tenant_id,
+          phone,
+          contactsaved,
+          phone_number_id,
+          name,
+        );
+        return true;
+      }
+    }
+  }
+
+  if (
+    input.buttonReplyId &&
+    input.buttonReplyId !== "view_my_appointments" &&
+    input.buttonReplyId !== "cancel_appointment" &&
+    isLegacyAppointmentManagementReplyId(input.buttonReplyId)
+  ) {
+    const legacyIntent = getLegacyAppointmentIntentForReply(input.buttonReplyId);
+    if (legacyIntent) {
+      const legacyResult = await handleLegacyAppointmentIntent(
+        legacyIntent,
+        input.effectiveText,
+        contactObj,
+        tenant_id,
+      );
+      logAppointmentOperationDispatch({
+        tenantId: tenant_id,
+        phone,
+        messageId: whatsappMessageId,
+        decision,
+        result: legacyResult,
+      });
+      await handleAppointmentResponse(
+        legacyResult,
+        tenant_id,
+        phone,
+        contactsaved,
+        phone_number_id,
+        name,
+      );
+      return true;
+    }
+  }
+
+  if (decision.route === APPOINTMENT_OPERATION_ROUTES.BOOK_APPOINTMENT) {
+    const bookingMessage = canonicalizeBookingOperationMessage({
+      decision,
+      normalizedMessage: input,
+    });
+    const advancedResult = await handleAdvancedAppointmentBooking({
+      tenantId: tenant_id,
+      userPhone: phone,
+      contact: contactObj,
+      message: bookingMessage,
+      interactiveReplyId: input.buttonReplyId,
+      whatsappMessageId,
+    });
+    if (advancedResult?.handoverToNormalRouter) return false;
+    logAppointmentOperationDispatch({
+      tenantId: tenant_id,
+      phone,
+      messageId: whatsappMessageId,
+      decision,
+      result: advancedResult,
+    });
+    await handleAdvancedAppointmentResponse(
+      advancedResult,
+      tenant_id,
+      phone,
+      contactsaved,
+      phone_number_id,
+      name,
+    );
+    return true;
+  }
+
+  if (decision.route === APPOINTMENT_OPERATION_ROUTES.MANAGE_APPOINTMENT) {
+    const manageMessage = canonicalizeManageOperationMessage({
+      decision,
+      normalizedMessage: input,
+    });
+    const manageReplyId =
+      input.buttonReplyId ||
+      (isManageCanonicalReplyId(manageMessage) ? manageMessage : null);
+    const manageResult = await handleManageBookedAppointments({
+      tenantId: tenant_id,
+      userPhone: phone,
+      contact: contactObj,
+      message: manageMessage,
+      interactiveReplyId: manageReplyId,
+      intent: "MANAGE_APPOINTMENTS_ACTION",
+      whatsappMessageId,
+    });
+    if (manageResult?.handoverToNormalRouter) return false;
+    if (manageResult?.handoverToBooking) {
+      const advancedResult = await handleAdvancedAppointmentBooking({
+        tenantId: tenant_id,
+        userPhone: phone,
+        contact: contactObj,
+        message: "create_appointment",
+        interactiveReplyId: "create_appointment",
+        whatsappMessageId,
+      });
+      logAppointmentOperationDispatch({
+        tenantId: tenant_id,
+        phone,
+        messageId: whatsappMessageId,
+        decision,
+        result: advancedResult,
+      });
+      await handleAdvancedAppointmentResponse(
+        advancedResult,
+        tenant_id,
+        phone,
+        contactsaved,
+        phone_number_id,
+        name,
+      );
+      return true;
+    }
+    logAppointmentOperationDispatch({
+      tenantId: tenant_id,
+      phone,
+      messageId: whatsappMessageId,
+      decision,
+      result: manageResult,
+    });
+    await handleAdvancedAppointmentResponse(
+      manageResult,
+      tenant_id,
+      phone,
+      contactsaved,
+      phone_number_id,
+      name,
+    );
+    return true;
+  }
+
+  return false;
+}
+
 async function expireAdvancedAppointmentSessionIfNeeded({
   tenant_id,
   phone,
@@ -1835,147 +2176,6 @@ async function expireAdvancedAppointmentSessionIfNeeded({
   return true;
 }
 
-async function tryHandleManageAppointmentFlow({
-  tenant_id,
-  phone,
-  contactObj,
-  contactsaved = null,
-  phone_number_id = null,
-  name = null,
-  message = "",
-  visibleText = "",
-  interactiveReplyId = null,
-}) {
-  const activeManageSession = await getActiveManageAppointmentSession({
-    tenantId: tenant_id,
-    userPhone: phone,
-  });
-
-  const hasManageReply = isManageAppointmentReplyId(interactiveReplyId || message);
-  let isLegacyManageButton = false;
-  if (interactiveReplyId === "cancel_appointment") {
-    const activeAdvancedSession = await getActiveAppointmentSession({
-      tenantId: tenant_id,
-      contactId: contactObj?.contact_id || contactsaved?.contact_id,
-      userPhone: phone,
-    });
-    isLegacyManageButton = !activeAdvancedSession;
-  }
-  const shouldTry =
-    hasManageReply ||
-    isLegacyManageButton ||
-    Boolean(activeManageSession && shouldRouteActiveManageAppointmentMessage({
-      state: activeManageSession.state,
-      message: visibleText || message,
-      interactiveReplyId,
-    }));
-
-  if (!shouldTry) return false;
-
-  if (activeManageSession && isManageAppointmentSessionExpired(activeManageSession)) {
-    await handleManageBookedAppointments({
-      tenantId: tenant_id,
-      userPhone: phone,
-      contact: contactObj,
-      message: visibleText || message,
-      interactiveReplyId,
-    });
-    return false;
-  }
-
-  const manageResult = await handleManageBookedAppointments({
-    tenantId: tenant_id,
-    userPhone: phone,
-    contact: contactObj,
-    message: visibleText || message,
-    interactiveReplyId: isLegacyManageButton ? "view_my_appointments" : interactiveReplyId,
-  });
-
-  if (manageResult?.handoverToNormalRouter) return false;
-
-  if (manageResult?.handoverToBooking) {
-    const advancedResult = await handleAdvancedAppointmentBooking({
-      tenantId: tenant_id,
-      userPhone: phone,
-      contact: contactObj,
-      message: "create_appointment",
-      interactiveReplyId: "create_appointment",
-    });
-    await handleAdvancedAppointmentResponse(
-      advancedResult,
-      tenant_id,
-      phone,
-      contactsaved,
-      phone_number_id,
-      name,
-    );
-    return true;
-  }
-
-  await handleAdvancedAppointmentResponse(
-    manageResult,
-    tenant_id,
-    phone,
-    contactsaved,
-    phone_number_id,
-    name,
-  );
-  return true;
-}
-
-async function tryHandleAdvancedAppointmentFlow({
-  tenant_id,
-  phone,
-  contactObj,
-  contactsaved = null,
-  phone_number_id = null,
-  name = null,
-  message = "",
-  interactiveReplyId = null,
-  whatsappMessageId = null,
-}) {
-  const activeAdvancedSession = await getActiveAppointmentSession({
-    tenantId: tenant_id,
-    contactId: contactObj?.contact_id || contactsaved?.contact_id,
-    userPhone: phone,
-  });
-
-  if (!activeAdvancedSession) return false;
-
-  if (
-    !isSessionExpired(activeAdvancedSession) &&
-    !shouldRouteActiveAdvancedAppointmentMessage({
-      currentState: activeAdvancedSession.current_step,
-      message,
-      interactiveReplyId,
-    })
-  ) {
-    return false;
-  }
-
-  const advancedResult = await handleAdvancedAppointmentBooking({
-    tenantId: tenant_id,
-    userPhone: phone,
-    contact: contactObj,
-    message,
-    interactiveReplyId,
-    whatsappMessageId,
-  });
-
-  if (advancedResult?.handoverToNormalRouter) return false;
-
-  await handleAdvancedAppointmentResponse(
-    advancedResult,
-    tenant_id,
-    phone,
-    contactsaved,
-    phone_number_id,
-    name,
-  );
-
-  return true;
-}
-
 async function handleAdvancedAppointmentResponse(
   result,
   tenant_id,
@@ -1985,6 +2185,13 @@ async function handleAdvancedAppointmentResponse(
   name = null,
 ) {
   if (!result) return;
+  if (result.suppressResponse || result.duplicate || result.alreadyProcessed) {
+    try {
+      const io = getIO();
+      io.to(`tenant-${tenant_id}`).emit("ai-typing", { tenant_id, phone, status: false });
+    } catch {}
+    return;
+  }
 
   const fallbackPayload = {
     messaging_product: "whatsapp",

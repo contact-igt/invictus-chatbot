@@ -3,6 +3,8 @@ import { Op } from "sequelize";
 import { callAI } from "../../utils/ai/coreAi.js";
 import { getDomainSummary } from "../../utils/ai/domainContextHelper.js";
 import { formatTimeToAMPM, timeToMinutes } from "../../utils/helpers/formatTime.js";
+import { tableNames } from "../../database/tableName.js";
+import { getDoctorListService } from "../DoctorModel/doctor.service.js";
 import {
   checkAvailabilityService,
   getAvailableSlotsService,
@@ -151,6 +153,71 @@ const getDoctorWithAvailability = async ({ tenantId, doctorId }) => {
   });
 };
 
+export const getManageReasonServices = async (tenantId) => {
+  const [rows] = await db.sequelize.query(
+    `SELECT DISTINCT
+        s.specialization_id,
+        s.name,
+        s.description
+     FROM ${tableNames.SPECIALIZATIONS} s
+     WHERE s.tenant_id = ?
+       AND s.is_active = true
+       AND s.is_deleted = false
+     ORDER BY s.name ASC
+     LIMIT 10`,
+    { replacements: [tenantId] },
+  );
+
+  return (rows || []).map((row) => ({
+    specialization_id: row.specialization_id,
+    id: row.specialization_id,
+    name: row.name,
+    description: row.description,
+  }));
+};
+
+export const getManageReasonServiceById = async ({ tenantId, serviceId }) => {
+  const services = await getManageReasonServices(tenantId);
+  return services.find((service) => service.specialization_id === serviceId) || null;
+};
+
+const uniqueDoctors = (doctors = []) => {
+  const seen = new Set();
+  return doctors.filter((doctor) => {
+    if (!doctor?.doctor_id || seen.has(doctor.doctor_id)) return false;
+    seen.add(doctor.doctor_id);
+    return true;
+  });
+};
+
+const getAvailableManageDoctors = async (tenantId) => {
+  const doctors = await getDoctorListService(tenantId);
+  return (doctors || []).filter((doctor) => doctor.status === "available");
+};
+
+export const getManageDoctorsForService = async ({ tenantId, serviceId = null }) => {
+  const doctors = await getAvailableManageDoctors(tenantId);
+  if (!serviceId) return doctors;
+
+  const matched = doctors.filter((doctor) =>
+    (doctor.specializations || []).some(
+      (specialization) => specialization.specialization_id === serviceId,
+    ),
+  );
+  if (matched.length) return uniqueDoctors(matched);
+
+  const general = doctors.filter((doctor) =>
+    (doctor.specializations || []).some(
+      (specialization) =>
+        String(specialization.name || "").trim().toLowerCase() === "general",
+    ),
+  );
+  const withoutSpecialization = doctors.filter(
+    (doctor) => !(doctor.specializations || []).length,
+  );
+  return uniqueDoctors([...general, ...withoutSpecialization]);
+};
+
 const getAvailableSlotsWithLocks = async ({ tenantId, doctorId, date, session, excludeAppointmentId = null }) => {
   const result = await getAvailableSlotsService(tenantId, doctorId, date);
   const baseSlots = (result?.slots || [])
@@ -200,8 +267,11 @@ const isDateAvailable = async ({ tenantId, doctor, date, session, excludeAppoint
   return slots.length > 0;
 };
 
-export const getManageAvailableDates = async ({ tenantId, appointment, session }) => {
-  const doctor = await getDoctorWithAvailability({ tenantId, doctorId: appointment.doctor_id });
+export const getManageAvailableDates = async ({ tenantId, appointment, session, doctorId = null }) => {
+  const doctor = await getDoctorWithAvailability({
+    tenantId,
+    doctorId: doctorId || appointment.doctor_id,
+  });
   const dates = [];
   const cursor = new Date();
 
@@ -316,10 +386,10 @@ export const resolveManageSlotReply = (replyId, slotSelection) => {
   return matched ? { type: "slot", slot: matched } : null;
 };
 
-export const getManageAvailableSlotSelection = async ({ tenantId, appointment, session, date }) => {
+export const getManageAvailableSlotSelection = async ({ tenantId, appointment, session, date, doctorId = null }) => {
   const slots = await getAvailableSlotsWithLocks({
     tenantId,
-    doctorId: appointment.doctor_id,
+    doctorId: doctorId || appointment.doctor_id,
     date,
     session,
     excludeAppointmentId: appointment.appointment_id,
@@ -327,10 +397,11 @@ export const getManageAvailableSlotSelection = async ({ tenantId, appointment, s
   return buildManageSlotSelection(slots);
 };
 
-export const lockManageRescheduleSlot = async ({ tenantId, session, appointment, date, time }) => {
+export const lockManageRescheduleSlot = async ({ tenantId, session, appointment, date, time, doctorId = null }) => {
+  const effectiveDoctorId = doctorId || appointment.doctor_id;
   const available = await checkAvailabilityService(
     tenantId,
-    appointment.doctor_id,
+    effectiveDoctorId,
     date,
     time,
     appointment.appointment_id,
@@ -341,7 +412,7 @@ export const lockManageRescheduleSlot = async ({ tenantId, session, appointment,
   const slot = await lockAppointmentSlot({
     tenantId,
     session,
-    doctorId: appointment.doctor_id,
+    doctorId: effectiveDoctorId,
     date,
     time,
   });
@@ -386,11 +457,17 @@ export const confirmManageReschedule = async ({ tenantId, session, appointment }
   const date = session.selected_date;
   const time = session.selected_time;
   if (!date || !time) throw new Error("Please select a new date and time first.");
+  const pending =
+    typeof session.pending_edit_value === "object"
+      ? session.pending_edit_value
+      : parseJsonObject(session.pending_edit_value) || {};
+  const effectiveDoctorId = session.selected_doctor_id || appointment.doctor_id;
 
   const updated = await updateAppointmentService(tenantId, appointment.appointment_id, {
     appointment_date: date,
     appointment_time: time,
-    doctor_id: appointment.doctor_id,
+    doctor_id: effectiveDoctorId,
+    ...(pending.reason ? { notes: pending.reason, service_name: pending.reason } : {}),
     status: "Rescheduled",
   });
 
@@ -398,7 +475,7 @@ export const confirmManageReschedule = async ({ tenantId, session, appointment }
   const slot = await markSlotBooked({
     tenantId,
     session,
-    doctorId: appointment.doctor_id,
+    doctorId: effectiveDoctorId,
     date,
     time,
     appointmentId: appointment.appointment_id,
