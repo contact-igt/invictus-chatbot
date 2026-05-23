@@ -32,6 +32,7 @@ export const MANAGE_APPOINTMENT_REPLY_IDS = new Set([
   "manage_appt_edit_phone",
   "manage_appt_edit_email",
   "manage_appt_edit_reason",
+  "manage_appt_edit_service",
   "manage_appt_edit_doctor",
   "manage_appt_edit_date",
   "manage_appt_edit_time",

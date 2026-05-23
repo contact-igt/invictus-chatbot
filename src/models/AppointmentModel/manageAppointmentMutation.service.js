@@ -489,6 +489,51 @@ export const confirmManageReschedule = async ({ tenantId, session, appointment }
   return getManageAppointmentById({ tenantId, appointmentId: updated.appointment_id });
 };
 
+export const confirmManageScheduleEdit = async ({ tenantId, session, appointment }) => {
+  const date = session.selected_date;
+  const time = session.selected_time;
+  if (!date || !time) throw new Error("Please select a new date and time first.");
+
+  const pending =
+    typeof session.pending_edit_value === "object"
+      ? session.pending_edit_value
+      : parseJsonObject(session.pending_edit_value) || {};
+  const effectiveDoctorId = session.selected_doctor_id || pending.doctorId || appointment.doctor_id;
+
+  const payload = {
+    appointment_date: date,
+    appointment_time: time,
+    doctor_id: effectiveDoctorId,
+    ...(pending.reason ? { notes: pending.reason, service_name: pending.reason } : {}),
+  };
+
+  const updated = await updateAppointmentService(
+    tenantId,
+    appointment.appointment_id,
+    payload,
+  );
+
+  await releaseBookedSlotForAppointment({
+    tenantId,
+    appointmentId: appointment.appointment_id,
+  });
+  const slot = await markSlotBooked({
+    tenantId,
+    session,
+    doctorId: effectiveDoctorId,
+    date,
+    time,
+    appointmentId: appointment.appointment_id,
+  });
+
+  await db.Appointments.update(
+    { slot_id: slot?.id ? String(slot.id) : session.selected_slot_id || null },
+    { where: { tenant_id: tenantId, appointment_id: appointment.appointment_id } },
+  );
+
+  return getManageAppointmentById({ tenantId, appointmentId: updated.appointment_id });
+};
+
 export const cancelManageAppointment = async ({ tenantId, appointment, userPhone }) => {
   const updated = await updateAppointmentService(tenantId, appointment.appointment_id, {
     status: "Cancelled",

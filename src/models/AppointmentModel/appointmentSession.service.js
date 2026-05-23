@@ -8,7 +8,7 @@ export const ADVANCED_SESSION_STATUS = {
   EXPIRED: "EXPIRED",
 };
 
-export const SESSION_TTL_MS = 10 * 60 * 1000;
+export const SESSION_TTL_MS = 5 * 60 * 1000;
 
 export const addSessionTtl = (base = new Date()) =>
   new Date(base.getTime() + SESSION_TTL_MS);

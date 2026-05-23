@@ -959,7 +959,7 @@ const makeDuplicateBookingMessageResult = (session = null) => ({
     : null,
 });
 
-const isReplyValidForBookingState = ({ decodedReply, state }) => {
+export const isReplyValidForBookingState = ({ decodedReply, state }) => {
   const type = decodedReply?.type;
   if (!type || type === APPOINTMENT_REPLY_TYPES.UNKNOWN) return true;
 
@@ -1000,7 +1000,7 @@ const isReplyValidForBookingState = ({ decodedReply, state }) => {
       APPOINTMENT_REPLY_TYPES.CONFIRM_BOOKING,
       APPOINTMENT_REPLY_TYPES.EDIT_DETAILS,
       APPOINTMENT_REPLY_TYPES.CANCEL_BOOKING,
-    ].includes(type);
+    ].includes(type) || EDIT_REPLY_TYPES.has(type);
   }
 
   if (state === APPOINTMENT_STATES.EDIT_MENU) {
@@ -1057,7 +1057,7 @@ const openContextualEditMenu = async (context) => {
   });
   context.session = await transitionAppointmentState({
     session: context.session,
-    toState: currentState,
+    toState: APPOINTMENT_STATES.EDIT_MENU,
     lastValidState: currentState,
     editTarget: null,
     refreshTimeout: true,
@@ -1071,18 +1071,20 @@ const openContextualEditMenu = async (context) => {
 export const getEditResetForTarget = (target, draft = {}) => {
   if (target === "edit_name") {
     return {
-      draft: { ...draft, name: null },
-      nextState: APPOINTMENT_STATES.COLLECT_NAME,
-      clearedFields: ["name"],
+      draft,
+      nextState: APPOINTMENT_STATES.EDIT_FIELD,
+      editTarget: target,
+      clearedFields: [],
       releaseLock: false,
     };
   }
 
   if (target === "edit_email") {
     return {
-      draft: { ...draft, email: null, emailCollectedInSession: false },
-      nextState: APPOINTMENT_STATES.COLLECT_EMAIL,
-      clearedFields: ["email"],
+      draft,
+      nextState: APPOINTMENT_STATES.EDIT_FIELD,
+      editTarget: target,
+      clearedFields: [],
       releaseLock: false,
     };
   }
@@ -1190,7 +1192,7 @@ const handleContextualEditSelection = async (context, currentState) => {
 
   return transitionAndPrompt(context, reset.nextState, {
     draft: reset.draft,
-    editTarget: null,
+    editTarget: reset.editTarget || null,
     lastValidState: reset.nextState,
   });
 };

@@ -269,20 +269,23 @@ export const buildManageAppointmentSelectionPayload = ({ to, appointments, page 
   );
 };
 
-export const buildManageEditMenuPayload = (to) =>
+export const DEFAULT_MANAGE_EDIT_MENU_ROWS = [
+  { id: "manage_appt_edit_name", title: "Patient Name", description: "Update patient name" },
+  { id: "manage_appt_edit_phone", title: "Phone Number", description: "Update phone number" },
+  { id: "manage_appt_edit_email", title: "Email", description: "Update email address" },
+  { id: "manage_appt_edit_reason", title: "Reason for Visit", description: "Update visit reason" },
+  { id: "manage_appt_edit_service", title: "Service", description: "Select service/reason" },
+  { id: "manage_appt_edit_doctor", title: "Doctor", description: "Choose another doctor" },
+  { id: "manage_appt_edit_date", title: "Date", description: "Choose a new date" },
+  { id: "manage_appt_edit_time", title: "Time Slot", description: "Choose a new time" },
+  { id: "manage_appt_back_details", title: "Back", description: "Return to details" },
+];
+
+export const buildManageEditMenuPayload = (to, rows = DEFAULT_MANAGE_EDIT_MENU_ROWS) =>
   buildManageListPayload(to, "What would you like to edit?", "Edit", [
     {
       title: "Appointment details",
-      rows: [
-        { id: "manage_appt_edit_name", title: "Patient Name", description: "Update patient name" },
-        { id: "manage_appt_edit_phone", title: "Phone Number", description: "Update phone number" },
-        { id: "manage_appt_edit_email", title: "Email", description: "Update email address" },
-        { id: "manage_appt_edit_reason", title: "Reason for Visit", description: "Update visit reason" },
-        { id: "manage_appt_edit_doctor", title: "Doctor", description: "Choose another doctor" },
-        { id: "manage_appt_edit_date", title: "Date", description: "Choose a new date" },
-        { id: "manage_appt_edit_time", title: "Time Slot", description: "Choose a new time" },
-        { id: "manage_appt_back_details", title: "Back", description: "Return to details" },
-      ],
+      rows,
     },
   ]);
 

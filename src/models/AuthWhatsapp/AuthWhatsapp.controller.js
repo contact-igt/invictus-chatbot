@@ -37,14 +37,19 @@ import { releaseLockedSlots } from "../AppointmentModel/appointmentSlotLock.serv
 import { isDoctorListRequest } from "../AppointmentModel/appointmentRoutingGuard.service.js";
 import {
   APPOINTMENT_OPERATION_ROUTES,
+  BOOKING_TO_MANAGE_SWITCH_REPLY_IDS,
   canonicalizeManageOperationMessage,
   getAppointmentOperationRouterMode,
   isAppointmentOperationDecisionEnabled,
+  isManageSwitchRequestFromBookingReplyId,
   logAppointmentOperationRouterDecision,
   normalizeAppointmentOperationInput,
   routeAppointmentOperation,
 } from "../AppointmentModel/appointmentOperationRouter.service.js";
-import { sendAppointmentPayload } from "../AppointmentModel/whatsappAppointmentTemplates.service.js";
+import {
+  buildBookingToManageSwitchConfirmPayload,
+  sendAppointmentPayload,
+} from "../AppointmentModel/whatsappAppointmentTemplates.service.js";
 import { parseButtonReply, sendQuickReply, sendListMessage, sendAppointmentCard } from "./whatsappButtons.service.js"; // NEW
 
 import { processBillingFromWebhook } from "../BillingModel/billing.service.js";
@@ -1804,6 +1809,21 @@ async function routeAndMaybeHandleAppointmentOperation({
     return { handled: false, routingResult, routerMode };
   }
 
+  const handledBookingToManageSwitch = await maybeHandleBookingToManageSwitch({
+    tenant_id,
+    phone,
+    contactObj,
+    contactsaved,
+    phone_number_id,
+    name,
+    whatsappMessageId,
+    routingResult,
+    normalizedMessage,
+  });
+  if (handledBookingToManageSwitch) {
+    return { handled: true, routingResult, routerMode };
+  }
+
   await closeSupersededAppointmentSession({
     tenant_id,
     phone,
@@ -1833,6 +1853,84 @@ async function routeAndMaybeHandleAppointmentOperation({
   });
 
   return { handled, routingResult, routerMode };
+}
+
+const isManageSwitchRequestFromBooking = (normalizedMessage = {}) => {
+  const input = normalizeAppointmentOperationInput(normalizedMessage);
+  return isManageSwitchRequestFromBookingReplyId(input.buttonReplyId);
+};
+
+async function maybeHandleBookingToManageSwitch({
+  tenant_id,
+  phone,
+  contactObj,
+  contactsaved = null,
+  phone_number_id = null,
+  name = null,
+  whatsappMessageId = null,
+  routingResult,
+  normalizedMessage,
+}) {
+  const activeBookingSession = routingResult?.activeBookingSession || null;
+  if (!activeBookingSession) return false;
+
+  const input = normalizeAppointmentOperationInput(normalizedMessage);
+  const replyId = String(input.buttonReplyId || "").trim();
+
+  if (replyId === BOOKING_TO_MANAGE_SWITCH_REPLY_IDS.CONFIRM) {
+    await closeBookingSessionSilently(activeBookingSession);
+    const manageResult = await handleManageBookedAppointments({
+      tenantId: tenant_id,
+      userPhone: phone,
+      contact: contactObj,
+      message: "view_my_appointments",
+      interactiveReplyId: "view_my_appointments",
+      intent: "MANAGE_APPOINTMENTS_ACTION",
+      whatsappMessageId,
+    });
+    await handleAdvancedAppointmentResponse(
+      manageResult,
+      tenant_id,
+      phone,
+      contactsaved,
+      phone_number_id,
+      name,
+    );
+    return true;
+  }
+
+  if (replyId === BOOKING_TO_MANAGE_SWITCH_REPLY_IDS.CANCEL) {
+    const bookingResult = await handleAdvancedAppointmentBooking({
+      tenantId: tenant_id,
+      userPhone: phone,
+      contact: contactObj,
+      message: "continue_appointment",
+      interactiveReplyId: "continue_appointment",
+      whatsappMessageId,
+    });
+    await handleAdvancedAppointmentResponse(
+      bookingResult,
+      tenant_id,
+      phone,
+      contactsaved,
+      phone_number_id,
+      name,
+    );
+    return true;
+  }
+
+  if (
+    routingResult?.decision?.route === APPOINTMENT_OPERATION_ROUTES.MANAGE_APPOINTMENT &&
+    isManageSwitchRequestFromBooking(input)
+  ) {
+    await sendAppointmentPayload(
+      tenant_id,
+      buildBookingToManageSwitchConfirmPayload(phone),
+    );
+    return true;
+  }
+
+  return false;
 }
 
 const closeBookingSessionSilently = async (session) => {

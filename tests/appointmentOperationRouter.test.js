@@ -4,11 +4,14 @@ import {
   APPOINTMENT_OPERATION_ACTIONS,
   APPOINTMENT_OPERATION_ROUTES,
   APPOINTMENT_OPERATION_SOURCES,
+  BOOKING_TO_MANAGE_SWITCH_REPLY_IDS,
   PREVIOUS_BOT_CONTEXTS,
   canonicalizeManageOperationMessage,
   detectPreviousBotContextFromText,
   getAppointmentOperationRouterMode,
+  isBookingToManageSwitchReplyId,
   isAppointmentOperationDecisionEnabled,
+  isManageSwitchRequestFromBookingReplyId,
   normalizeAppointmentOperationInput,
   resolveAppointmentOperationDecision,
 } from "../src/models/AppointmentModel/appointmentOperationRouter.service.js";
@@ -22,14 +25,33 @@ import {
 } from "../src/models/AppointmentModel/manageAppointmentRoutingGuard.service.js";
 import {
   buildBookingSessionExpiredPayload,
+  buildBookingToManageSwitchConfirmPayload,
   buildConfirmPayload,
 } from "../src/models/AppointmentModel/whatsappAppointmentTemplates.service.js";
-import { buildManageSessionExpiredPayload } from "../src/models/AppointmentModel/manageAppointmentTemplates.service.js";
+import {
+  buildManageEditMenuPayload,
+  buildManageSessionExpiredPayload,
+} from "../src/models/AppointmentModel/manageAppointmentTemplates.service.js";
 import {
   APPOINTMENT_STATES,
+  getEditResetForTarget,
   getInSessionBookingOverrideType,
   getNextIncompleteAppointmentState,
+  isReplyValidForBookingState,
 } from "../src/models/AppointmentModel/Advanced_Appointment_Booking.service.js";
+import { SESSION_TTL_MS } from "../src/models/AppointmentModel/appointmentSession.service.js";
+import {
+  buildManageEditRowsForAppointment,
+  resolveManageDateReplyIdFromText,
+  resolveManageDoctorReplyIdFromText,
+  resolveManageEditFieldReplyIdFromText,
+  resolveManageSlotReplyIdFromText,
+  getManageEditFieldFromReplyId,
+  getManageEditableFieldsForAppointment,
+  isManageEditFieldAllowed,
+  isManageScheduleEditPending,
+} from "../src/models/AppointmentModel/Manage_Booked_Appointments.service.js";
+import { MANAGE_APPOINTMENT_SESSION_TTL_MS } from "../src/models/AppointmentModel/manageAppointmentSession.service.js";
 
 const decisionFor = (messageText, overrides = {}) =>
   resolveAppointmentOperationDecision({
@@ -131,6 +153,48 @@ test("booking always requires email collected inside current session", () => {
     }),
     APPOINTMENT_STATES.CONFIRM_BOOKING,
   );
+});
+
+test("booking and manage appointment sessions expire after five minutes", () => {
+  assert.equal(SESSION_TTL_MS, 5 * 60 * 1000);
+  assert.equal(MANAGE_APPOINTMENT_SESSION_TTL_MS, 5 * 60 * 1000);
+});
+
+test("booking simple edit fields enter edit input state without clearing existing draft", () => {
+  const draft = {
+    name: "Wrong Name",
+    email: "wrong@example.com",
+    emailCollectedInSession: true,
+    reason: "Retina",
+    doctorId: "DOC123",
+    doctorName: "Dr Asha",
+    date: "2026-05-22",
+    time: "09:00 AM",
+  };
+
+  const nameReset = getEditResetForTarget("edit_name", draft);
+  assert.equal(nameReset.nextState, APPOINTMENT_STATES.EDIT_FIELD);
+  assert.equal(nameReset.editTarget, "edit_name");
+  assert.equal(nameReset.draft.name, "Wrong Name");
+
+  const emailReset = getEditResetForTarget("edit_email", draft);
+  assert.equal(emailReset.nextState, APPOINTMENT_STATES.EDIT_FIELD);
+  assert.equal(emailReset.editTarget, "edit_email");
+  assert.equal(emailReset.draft.email, "wrong@example.com");
+  assert.equal(emailReset.draft.emailCollectedInSession, true);
+});
+
+test("booking confirmation accepts edit menu field replies", () => {
+  for (const replyId of ["edit_name", "edit_email", "edit_reason", "edit_doctor", "edit_date", "edit_time"]) {
+    assert.equal(
+      isReplyValidForBookingState({
+        decodedReply: decodeAppointmentReply(replyId),
+        state: APPOINTMENT_STATES.CONFIRM_BOOKING,
+      }),
+      true,
+      replyId,
+    );
+  }
 });
 
 test("same active booking session accepts older menu replies as overwrites", () => {
@@ -265,8 +329,11 @@ test("manage reply ids route to manage appointment state machine", () => {
     ["view_my_appointments", APPOINTMENT_OPERATION_ACTIONS.VIEW],
     ["manage_appt_edit", APPOINTMENT_OPERATION_ACTIONS.EDIT],
     ["manage_appt_edit_doctor", APPOINTMENT_OPERATION_ACTIONS.EDIT],
+    ["manage_appt_edit_service", APPOINTMENT_OPERATION_ACTIONS.EDIT],
     ["manage_appt_reason_SPEC001", APPOINTMENT_OPERATION_ACTIONS.UNKNOWN],
     ["manage_appt_doctor_DOC001", APPOINTMENT_OPERATION_ACTIONS.UNKNOWN],
+    ["manage_appt_date_2026-05-30", APPOINTMENT_OPERATION_ACTIONS.RESCHEDULE],
+    ["manage_appt_slot_09-15-AM", APPOINTMENT_OPERATION_ACTIONS.RESCHEDULE],
     ["manage_appt_reschedule", APPOINTMENT_OPERATION_ACTIONS.RESCHEDULE],
     ["manage_appt_cancel", APPOINTMENT_OPERATION_ACTIONS.CANCEL],
     ["manage_appt_confirm_cancel", APPOINTMENT_OPERATION_ACTIONS.CONFIRM],
@@ -282,6 +349,165 @@ test("manage reply ids route to manage appointment state machine", () => {
     assert.equal(decision.action, action, replyId);
     assert.equal(decision.source, APPOINTMENT_OPERATION_SOURCES.INTERACTIVE_REPLY);
   }
+});
+
+test("manage schedule edit pending is distinct from reschedule", () => {
+  for (const editField of ["time", "date", "doctor", "service", "reason"]) {
+    assert.equal(
+      isManageScheduleEditPending({
+        mode: "MANAGE_APPOINTMENT",
+        action: "EDIT_APPOINTMENT",
+        editField,
+      }),
+      true,
+      editField,
+    );
+  }
+
+  assert.equal(
+    isManageScheduleEditPending({
+      mode: "MANAGE_APPOINTMENT",
+      action: "RESCHEDULE_APPOINTMENT",
+      editField: "time",
+    }),
+    false,
+  );
+  assert.equal(
+    isManageScheduleEditPending({
+      mode: "MANAGE_APPOINTMENT",
+      action: "EDIT_APPOINTMENT",
+      editField: "email",
+    }),
+    false,
+  );
+});
+
+test("manage edit menu is scoped to editable fields on the selected appointment", () => {
+  const appointment = {
+    appointment_id: "AP001",
+    patient_name: "Naveen",
+    email: "naveen@example.com",
+    country_code: "+91",
+    contact_number: "9999999999",
+    doctor_id: "DOC001",
+    appointment_date: "2026-05-30",
+  };
+
+  assert.deepEqual(getManageEditableFieldsForAppointment(appointment), [
+    "name",
+    "phone",
+    "email",
+    "reason",
+    "service",
+    "doctor",
+    "date",
+    "time",
+  ]);
+  assert.equal(getManageEditFieldFromReplyId("manage_appt_edit_time"), "time");
+  assert.equal(isManageEditFieldAllowed({ appointment, replyId: "manage_appt_edit_time" }), true);
+
+  const rows = buildManageEditRowsForAppointment(appointment);
+  assert.deepEqual(
+    rows.map((row) => row.id),
+    [
+      "manage_appt_edit_name",
+      "manage_appt_edit_phone",
+      "manage_appt_edit_email",
+      "manage_appt_edit_reason",
+      "manage_appt_edit_service",
+      "manage_appt_edit_doctor",
+      "manage_appt_edit_date",
+      "manage_appt_edit_time",
+      "manage_appt_back_details",
+    ],
+  );
+
+  const payload = buildManageEditMenuPayload("919999999999", rows);
+  assert.deepEqual(
+    payload.interactive.action.sections[0].rows.map((row) => row.id),
+    rows.map((row) => row.id),
+  );
+});
+
+test("manage edit time is unavailable without current doctor and date context", () => {
+  const appointment = {
+    appointment_id: "AP001",
+    patient_name: "Naveen",
+    email: "naveen@example.com",
+    country_code: "+91",
+    contact_number: "9999999999",
+  };
+
+  assert.deepEqual(getManageEditableFieldsForAppointment(appointment), [
+    "name",
+    "phone",
+    "email",
+    "reason",
+    "service",
+    "doctor",
+  ]);
+  assert.equal(isManageEditFieldAllowed({ appointment, replyId: "manage_appt_edit_time" }), false);
+  assert.equal(isManageEditFieldAllowed({ appointment, replyId: "manage_appt_edit_date" }), false);
+  assert.equal(isManageEditFieldAllowed({ appointment, replyId: "manage_appt_edit_doctor" }), true);
+});
+
+test("manage edit dependent selections resolve visible list text to manage reply ids", () => {
+  assert.equal(
+    resolveManageEditFieldReplyIdFromText("Time Slot\nChoose a new time"),
+    "manage_appt_edit_time",
+  );
+  assert.equal(
+    resolveManageEditFieldReplyIdFromText("Doctor\nChoose another doctor"),
+    "manage_appt_edit_doctor",
+  );
+  assert.equal(
+    resolveManageEditFieldReplyIdFromText("Date\nChoose a new date"),
+    "manage_appt_edit_date",
+  );
+
+  assert.equal(
+    resolveManageDoctorReplyIdFromText("Dr. Dr. Ashvin Bafna\nCataract, LASIK", [
+      {
+        doctor_id: "DOC001",
+        name: "Ashvin Bafna",
+        specializations: [{ name: "Cataract" }, { name: "LASIK" }],
+      },
+    ]),
+    "manage_appt_doctor_DOC001",
+  );
+
+  assert.equal(
+    resolveManageDateReplyIdFromText("Sat, 30 May\nSaturday, 30 May", [
+      {
+        value: "2026-05-30",
+        label: "Sat, 30 May",
+        description: "Saturday, 30 May",
+      },
+    ]),
+    "manage_appt_date_2026-05-30",
+  );
+
+  assert.equal(
+    resolveManageSlotReplyIdFromText("09:15 AM", {
+      availableSlots: [{ id: "manage_appt_slot_09-15-AM", time: "09:15 AM" }],
+      groupedSlots: [],
+    }),
+    "manage_appt_slot_09-15-AM",
+  );
+
+  assert.equal(
+    resolveManageSlotReplyIdFromText("09:00 AM-10:00 AM", {
+      availableSlots: [],
+      groupedSlots: [
+        {
+          id: "manage_appt_slot_group_1",
+          title: "09:00 AM-10:00 AM",
+          slots: [],
+        },
+      ],
+    }),
+    "manage_appt_slot_group_1",
+  );
 });
 
 test("previous appointment details context routes short manage replies", () => {
@@ -322,6 +548,40 @@ test("latest explicit manage signal takes ownership from active booking session"
     assert.equal(decision.route, APPOINTMENT_OPERATION_ROUTES.MANAGE_APPOINTMENT);
     assert.notEqual(decision.source, APPOINTMENT_OPERATION_SOURCES.ACTIVE_SESSION);
   }
+});
+
+test("active booking plus old manage buttons requires switch confirmation", () => {
+  for (const replyId of [
+    "view_my_appointments",
+    "manage_appt_reschedule",
+    "manage_appt_cancel",
+    "manage_appt_select_AP001",
+  ]) {
+    assert.equal(isManageSwitchRequestFromBookingReplyId(replyId), true, replyId);
+  }
+
+  for (const replyId of ["date_2026-05-30", "doctor_DOC123", "reason_SPEC001", "slot_09-15-AM"]) {
+    assert.equal(isManageSwitchRequestFromBookingReplyId(replyId), false, replyId);
+  }
+
+  assert.equal(
+    isBookingToManageSwitchReplyId(BOOKING_TO_MANAGE_SWITCH_REPLY_IDS.CONFIRM),
+    true,
+  );
+  assert.equal(
+    isBookingToManageSwitchReplyId(BOOKING_TO_MANAGE_SWITCH_REPLY_IDS.CANCEL),
+    true,
+  );
+
+  const payload = buildBookingToManageSwitchConfirmPayload("919999999999");
+  assert.equal(payload.interactive.body.text.includes("currently booking"), true);
+  assert.deepEqual(
+    payload.interactive.action.buttons.map((button) => button.reply.id),
+    [
+      BOOKING_TO_MANAGE_SWITCH_REPLY_IDS.CONFIRM,
+      BOOKING_TO_MANAGE_SWITCH_REPLY_IDS.CANCEL,
+    ],
+  );
 });
 
 test("same-flow booking text continues the active booking session", () => {
@@ -413,6 +673,22 @@ test("active manage edit input keeps reason text out of booking flow", () => {
     }),
     "eye pain",
   );
+});
+
+test("active manage session owns booking-style dependent replies", () => {
+  for (const replyId of ["doctor_DOC001", "date_2026-05-30", "slot_09-15-AM", "reason_SPEC001"]) {
+    const decision = decisionFor("Visible title", {
+      buttonReplyId: replyId,
+      activeManageSession: {
+        session_id: "MS0001",
+        state: "EDIT_MENU",
+      },
+    });
+
+    assert.equal(decision.route, APPOINTMENT_OPERATION_ROUTES.MANAGE_APPOINTMENT, replyId);
+    assert.equal(decision.source, APPOINTMENT_OPERATION_SOURCES.ACTIVE_SESSION, replyId);
+    assert.notEqual(decision.route, APPOINTMENT_OPERATION_ROUTES.BOOK_APPOINTMENT, replyId);
+  }
 });
 
 test("general phrases stay in normal AI route", () => {

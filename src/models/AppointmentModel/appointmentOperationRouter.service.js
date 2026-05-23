@@ -117,6 +117,7 @@ const MANAGE_REPLY_IDS = new Set([
   "manage_appt_edit_phone",
   "manage_appt_edit_email",
   "manage_appt_edit_reason",
+  "manage_appt_edit_service",
   "manage_appt_edit_doctor",
   "manage_appt_edit_date",
   "manage_appt_edit_time",
@@ -139,6 +140,21 @@ const MANAGE_REPLY_PREFIXES = [
   "confirm_reschedule_",
   "reschedule_",
 ];
+
+export const BOOKING_TO_MANAGE_SWITCH_REPLY_IDS = {
+  CONFIRM: "appt_switch_confirm_manage",
+  CANCEL: "appt_switch_cancel",
+};
+
+export const isManageSwitchRequestFromBookingReplyId = (replyId = "") => {
+  const id = String(replyId || "").trim();
+  return id === "view_my_appointments" || id.startsWith("manage_appt_");
+};
+
+export const isBookingToManageSwitchReplyId = (replyId = "") =>
+  Object.values(BOOKING_TO_MANAGE_SWITCH_REPLY_IDS).includes(
+    String(replyId || "").trim(),
+  );
 
 const POSITIVE_SHORT_REPLIES = new Set([
   "yes",
@@ -674,6 +690,27 @@ export const resolveAppointmentOperationDecision = ({
       entities: {
         sessionId: activeManageSession.session_id,
         state: activeManageSession.state,
+      },
+    });
+  }
+
+  if (
+    activeManageSession &&
+    input.buttonReplyId &&
+    input.buttonReplyId !== "create_appointment" &&
+    isBookingReplyId(input.buttonReplyId)
+  ) {
+    return makeDecision({
+      shouldHandle: true,
+      route: APPOINTMENT_OPERATION_ROUTES.MANAGE_APPOINTMENT,
+      action: APPOINTMENT_OPERATION_ACTIONS.EDIT,
+      source: APPOINTMENT_OPERATION_SOURCES.ACTIVE_SESSION,
+      confidence: 1,
+      reason: `Active manage appointment session owns legacy booking-style reply ${input.buttonReplyId}.`,
+      entities: {
+        sessionId: activeManageSession.session_id,
+        state: activeManageSession.state,
+        replyId: input.buttonReplyId,
       },
     });
   }

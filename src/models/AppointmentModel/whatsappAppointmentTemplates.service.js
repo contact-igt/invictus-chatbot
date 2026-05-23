@@ -289,3 +289,13 @@ export const buildBookingSessionExpiredPayload = (to) =>
       { id: "view_my_appointments", title: "Manage" },
     ],
   );
+
+export const buildBookingToManageSwitchConfirmPayload = (to) =>
+  buildButtonPayload(
+    to,
+    "You are currently booking an appointment.\n\nDo you want to stop this booking and open Manage Appointment?",
+    [
+      { id: "appt_switch_confirm_manage", title: "Yes, Manage" },
+      { id: "appt_switch_cancel", title: "No, Continue" },
+    ],
+  );

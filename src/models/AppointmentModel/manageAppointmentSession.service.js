@@ -2,7 +2,7 @@ import db from "../../database/index.js";
 import { Op } from "sequelize";
 import { releaseLockedSlots } from "./appointmentSlotLock.service.js";
 
-export const MANAGE_APPOINTMENT_SESSION_TTL_MS = 10 * 60 * 1000;
+export const MANAGE_APPOINTMENT_SESSION_TTL_MS = 5 * 60 * 1000;
 
 export const MANAGE_APPOINTMENT_SESSION_STATUS = {
   ACTIVE: "ACTIVE",
