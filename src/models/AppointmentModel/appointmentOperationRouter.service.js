@@ -357,7 +357,7 @@ export const detectPreviousBotContextFromText = (message = "") => {
   if (/middle of booking|continue your appointment booking/.test(text)) {
     return PREVIOUS_BOT_CONTEXTS.ASKED_RESUME_BOOKING;
   }
-  if (/your appointment details|patient name:|edit appointment|re-?schedule|cancel appointment/.test(text)) {
+  if (/your appointment details|patient name:|patient:|edit appointment|update appointments?|re-?schedule|reschedule appt|cancel appointments?/.test(text)) {
     return PREVIOUS_BOT_CONTEXTS.SHOWED_APPOINTMENT_DETAILS;
   }
   if (/what would you like to edit|appointment menu|please choose an option/.test(text)) {
@@ -392,7 +392,7 @@ const routeFromPreviousBotContext = (context, message = "") => {
   const text = normalizeShortcut(message);
   const positive = POSITIVE_SHORT_REPLIES.has(text);
   const negative = NEGATIVE_SHORT_REPLIES.has(text);
-  const edit = /\b(edit|change|modify)\b/.test(text);
+  const edit = /\b(edit|change|modify|update)\b/.test(text);
   const cancel = /\b(cancel|cancel it|not coming|can't come|cannot come|wont come|won't come)\b/.test(text);
   const reschedule = /\b(reschedule|re schedule|move|shift|change time|tomorrow|evening|morning|afternoon)\b/.test(text);
 

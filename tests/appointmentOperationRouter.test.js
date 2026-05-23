@@ -395,7 +395,6 @@ test("manage edit menu is scoped to editable fields on the selected appointment"
 
   assert.deepEqual(getManageEditableFieldsForAppointment(appointment), [
     "name",
-    "phone",
     "email",
     "reason",
     "service",
@@ -411,7 +410,6 @@ test("manage edit menu is scoped to editable fields on the selected appointment"
     rows.map((row) => row.id),
     [
       "manage_appt_edit_name",
-      "manage_appt_edit_phone",
       "manage_appt_edit_email",
       "manage_appt_edit_reason",
       "manage_appt_edit_service",
@@ -440,7 +438,6 @@ test("manage edit time is unavailable without current doctor and date context", 
 
   assert.deepEqual(getManageEditableFieldsForAppointment(appointment), [
     "name",
-    "phone",
     "email",
     "reason",
     "service",
@@ -510,9 +507,32 @@ test("manage edit dependent selections resolve visible list text to manage reply
   );
 });
 
+test("active manage edit menu preserves visible doctor field text for manage handler", () => {
+  const normalizedMessage = normalizeAppointmentOperationInput({
+    messageText: "Doctor",
+    buttonReplyId: null,
+    messageType: "interactive",
+  });
+  const decision = resolveAppointmentOperationDecision({
+    normalizedMessage,
+    previousBotContext: PREVIOUS_BOT_CONTEXTS.ASKED_MANAGE_ACTION,
+    activeManageSession: {
+      session_id: "MS0001",
+      state: "EDIT_MENU",
+    },
+  });
+
+  assert.equal(decision.route, APPOINTMENT_OPERATION_ROUTES.MANAGE_APPOINTMENT);
+  assert.equal(decision.source, APPOINTMENT_OPERATION_SOURCES.ACTIVE_SESSION);
+  assert.equal(
+    canonicalizeManageOperationMessage({ decision, normalizedMessage }),
+    "Doctor",
+  );
+});
+
 test("previous appointment details context routes short manage replies", () => {
   const context = detectPreviousBotContextFromText(
-    "Your Appointment Details\n\nPatient Name: Test\nEdit Appointment\nRe-schedule\nCancel Appointment",
+    "Your Appointment Details\n\nPatient: Test\nUpdate Appointments\nReschedule Appt\nCancel Appointments",
   );
   assert.equal(context, PREVIOUS_BOT_CONTEXTS.SHOWED_APPOINTMENT_DETAILS);
 

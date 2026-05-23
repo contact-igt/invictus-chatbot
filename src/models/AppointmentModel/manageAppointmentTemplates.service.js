@@ -135,9 +135,9 @@ export const buildNoManageAppointmentsPayload = (to) =>
 
 export const buildManageAppointmentActionsPayload = (to, detailsText) =>
   buildManageButtonPayload(to, detailsText, [
-    { id: "manage_appt_edit", title: "Edit Appointment" },
-    { id: "manage_appt_reschedule", title: "Re-schedule" },
-    { id: "manage_appt_cancel", title: "Cancel Appointment" },
+    { id: "manage_appt_edit", title: "Update Appointments" },
+    { id: "manage_appt_reschedule", title: "Reschedule Appt" },
+    { id: "manage_appt_cancel", title: "Cancel Appointments" },
   ]);
 
 export const buildStaleBookingManagePromptPayload = (to) =>
@@ -207,17 +207,17 @@ export const formatManageAppointmentDetails = async ({ tenantId, appointment }) 
     : "-";
 
   return (
-    `📌 Your Appointment Details\n\n` +
-    `👤 Patient Name: ${appointment.patient_name || "-"}\n` +
-    `📞 Phone: ${getAppointmentPhone(appointment)}\n` +
-    `📧 Email: ${appointment.email || appointment.contact?.email || "-"}\n` +
-    `🩺 Doctor: ${doctorName}\n` +
-    `🏥 Service: ${serviceName}\n` +
-    `📅 Date: ${String(appointment.appointment_date || "-").slice(0, 10)}\n` +
-    `🕒 Time: ${timeRange.start} - ${timeRange.end}\n` +
-    `📍 Branch: ${branchName || "-"}\n` +
-    `📝 Reason: ${appointment.notes || "-"}\n` +
-    `✅ Status: ${String(appointment.status || "-").toUpperCase()}`
+    `Your Appointment Details\n\n` +
+    `Patient: ${appointment.patient_name || "-"}\n` +
+    `Phone: ${getAppointmentPhone(appointment)}\n` +
+    `Email: ${appointment.email || appointment.contact?.email || "-"}\n` +
+    `Doctor: ${doctorName}\n` +
+    `Service: ${serviceName}\n` +
+    `Date: ${String(appointment.appointment_date || "-").slice(0, 10)}\n` +
+    `Time: ${timeRange.start} - ${timeRange.end}\n` +
+    `Branch: ${branchName || "-"}\n` +
+    `Reason: ${appointment.notes || "-"}\n` +
+    `Status: ${String(appointment.status || "-").toUpperCase()}`
   );
 };
 
@@ -271,7 +271,6 @@ export const buildManageAppointmentSelectionPayload = ({ to, appointments, page 
 
 export const DEFAULT_MANAGE_EDIT_MENU_ROWS = [
   { id: "manage_appt_edit_name", title: "Patient Name", description: "Update patient name" },
-  { id: "manage_appt_edit_phone", title: "Phone Number", description: "Update phone number" },
   { id: "manage_appt_edit_email", title: "Email", description: "Update email address" },
   { id: "manage_appt_edit_reason", title: "Reason for Visit", description: "Update visit reason" },
   { id: "manage_appt_edit_service", title: "Service", description: "Select service/reason" },

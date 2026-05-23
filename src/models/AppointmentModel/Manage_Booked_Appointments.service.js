@@ -238,6 +238,43 @@ const logManageEditTransition = ({
   } catch (_) {}
 };
 
+const logManageDoctorEditDebug = ({
+  event,
+  session = null,
+  replyId = null,
+  message = null,
+  interactiveReplyId = null,
+  pending = null,
+  extra = {},
+} = {}) => {
+  try {
+    const currentPending = pending || getSessionPendingValue(session) || {};
+    console.log(
+      "[ManageAppointmentDoctorEdit]",
+      JSON.stringify({
+        event,
+        sessionId: session?.session_id || null,
+        appointmentId: session?.selected_appointment_id || currentPending.appointmentId || null,
+        state: session?.state || null,
+        status: session?.status || null,
+        replyId: replyId || null,
+        message: message || null,
+        interactiveReplyId: interactiveReplyId || null,
+        pendingEditField: session?.pending_edit_field || null,
+        pendingAction: currentPending.action || null,
+        pendingMode: currentPending.mode || null,
+        pendingEditValueField: currentPending.editField || null,
+        pendingServiceId: currentPending.serviceId || null,
+        pendingDoctorId: currentPending.doctorId || null,
+        selectedDoctorId: session?.selected_doctor_id || null,
+        selectedDate: session?.selected_date || null,
+        selectedSlotId: session?.selected_slot_id || null,
+        ...extra,
+      }),
+    );
+  } catch (_) {}
+};
+
 const appointmentDateOnly = (appointment) =>
   String(appointment?.appointment_date || "").slice(0, 10);
 
@@ -262,7 +299,7 @@ export const resolveManageEditFieldReplyIdFromText = (message = "") => {
 
 export const getManageEditableFieldsForAppointment = (appointment = null) => {
   if (!appointment) return [];
-  const fields = ["name", "phone", "email", "reason", "service", "doctor"];
+  const fields = ["name", "email", "reason", "service", "doctor"];
   if (hasValue(appointment.doctor_id)) fields.push("date");
   if (hasValue(appointment.doctor_id) && hasValue(appointmentDateOnly(appointment))) {
     fields.push("time");
@@ -274,7 +311,6 @@ export const buildManageEditRowsForAppointment = (appointment = null) => {
   const fields = new Set(getManageEditableFieldsForAppointment(appointment));
   const rows = [
     fields.has("name") && { id: "manage_appt_edit_name", title: "Patient Name", description: "Update patient name" },
-    fields.has("phone") && { id: "manage_appt_edit_phone", title: "Phone Number", description: "Update phone number" },
     fields.has("email") && { id: "manage_appt_edit_email", title: "Email", description: "Update email address" },
     fields.has("reason") && { id: "manage_appt_edit_reason", title: "Reason for Visit", description: "Update visit reason" },
     fields.has("service") && { id: "manage_appt_edit_service", title: "Service", description: "Select service/reason" },
@@ -1247,6 +1283,24 @@ const handleManageReply = async ({ tenantId, userPhone, contact, session, messag
   const normalizedMessage = String(message || "").trim().toLowerCase();
   const pendingAtStart = getSessionPendingValue(session) || {};
   const isEditFlow = isManageEditPending(pendingAtStart);
+  const shouldLogDoctorEdit =
+    String(replyId || "").includes("doctor") ||
+    String(message || "").toLowerCase().includes("doctor") ||
+    session?.state === MANAGE_APPOINTMENT_STATES.WAITING_FOR_DOCTOR_UPDATE ||
+    session?.pending_edit_field === "doctor" ||
+    pendingAtStart?.editField === "doctor";
+
+  if (shouldLogDoctorEdit) {
+    logManageDoctorEditDebug({
+      event: "handle_reply_start",
+      session,
+      replyId,
+      message,
+      interactiveReplyId,
+      pending: pendingAtStart,
+      extra: { isEditFlow },
+    });
+  }
 
   if (isManageAppointmentExitCommand(message)) {
     await releaseLockedSlots(session.session_id);
@@ -1298,6 +1352,17 @@ const handleManageReply = async ({ tenantId, userPhone, contact, session, messag
         : null;
 
   if (editFieldReplyId) {
+    if (editFieldReplyId === "manage_appt_edit_doctor") {
+      logManageDoctorEditDebug({
+        event: "edit_field_selected",
+        session,
+        replyId,
+        message,
+        interactiveReplyId,
+        pending: pendingAtStart,
+        extra: { editFieldReplyId },
+      });
+    }
     return selectManageEditField({ tenantId, userPhone, session, replyId: editFieldReplyId });
   }
 
@@ -1346,6 +1411,20 @@ const handleManageReply = async ({ tenantId, userPhone, contact, session, messag
       : null;
   const selectedDoctorId = parseSelectedDoctorId(replyId) ||
     parseSelectedDoctorId(fallbackDoctorReplyId);
+  if (fallbackDoctorReplyId || selectedDoctorId || shouldLogDoctorEdit) {
+    logManageDoctorEditDebug({
+      event: "doctor_reply_parsed",
+      session,
+      replyId,
+      message,
+      interactiveReplyId,
+      pending: currentPendingForDoctor,
+      extra: {
+        fallbackDoctorReplyId,
+        selectedDoctorId,
+      },
+    });
+  }
   if (selectedDoctorId) {
     const currentPending = getSessionPendingValue(session) || {};
     if (
@@ -1353,6 +1432,20 @@ const handleManageReply = async ({ tenantId, userPhone, contact, session, messag
       session.state !== MANAGE_APPOINTMENT_STATES.WAITING_FOR_DOCTOR_UPDATE ||
       !["doctor", "service", "reason"].includes(currentPending?.editField)
     ) {
+      logManageDoctorEditDebug({
+        event: "doctor_reply_reprompt_due_state_mismatch",
+        session,
+        replyId,
+        message,
+        interactiveReplyId,
+        pending: currentPending,
+        extra: {
+          selectedDoctorId,
+          isManageEditPending: isManageEditPending(currentPending),
+          expectedState: MANAGE_APPOINTMENT_STATES.WAITING_FOR_DOCTOR_UPDATE,
+          allowedFields: ["doctor", "service", "reason"],
+        },
+      });
       return rePromptManageEditStep({ tenantId, userPhone, session, contact });
     }
     const doctors = await getManageDoctorsForService({
@@ -1362,6 +1455,20 @@ const handleManageReply = async ({ tenantId, userPhone, contact, session, messag
     const selectedDoctor = doctors.find(
       (doctor) => doctor.doctor_id === selectedDoctorId,
     );
+    logManageDoctorEditDebug({
+      event: "doctor_catalog_checked",
+      session,
+      replyId,
+      message,
+      interactiveReplyId,
+      pending: currentPending,
+      extra: {
+        selectedDoctorId,
+        doctorsCount: doctors.length,
+        doctorIds: doctors.map((doctor) => doctor.doctor_id).slice(0, 20),
+        found: Boolean(selectedDoctor),
+      },
+    });
     if (!selectedDoctor) {
       return makeResult({
         payload: buildManageTextPayload(userPhone, "That doctor selection is no longer available. Please choose again."),
@@ -1387,6 +1494,19 @@ const handleManageReply = async ({ tenantId, userPhone, contact, session, messag
       selected_slot_id: null,
       pending_edit_field: "date",
       pending_edit_value: pending,
+    });
+    logManageDoctorEditDebug({
+      event: "doctor_selected_session_updated",
+      session: nextSession,
+      replyId,
+      message,
+      interactiveReplyId,
+      pending,
+      extra: {
+        selectedDoctorId,
+        selectedDoctorName: selectedDoctor.name || null,
+        nextState: MANAGE_APPOINTMENT_STATES.WAITING_FOR_DATE_UPDATE,
+      },
     });
     const appointment = await getSelectedAppointment({ tenantId, userPhone, session: nextSession });
     if (!appointment) {

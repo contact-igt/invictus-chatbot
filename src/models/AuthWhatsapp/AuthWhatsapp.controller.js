@@ -23,7 +23,10 @@ import {
   buildAvailableDoctorListAppointmentResponse,
   handleAdvancedAppointmentBooking,
 } from "../AppointmentModel/Advanced_Appointment_Booking.service.js";
-import { handleManageBookedAppointments } from "../AppointmentModel/Manage_Booked_Appointments.service.js";
+import {
+  handleManageBookedAppointments,
+  hasActiveManageAppointmentSession,
+} from "../AppointmentModel/Manage_Booked_Appointments.service.js";
 import {
   cancelAppointmentSession,
   getActiveAppointmentSession,
@@ -1058,7 +1061,13 @@ export const receiveMessage = async (req, res) => {
           ENABLE_APPOINTMENT_BUTTONS,
         );
 
-        if (isDoctorListTemplateRequest({ text, replyId: buttonReplyId })) {
+        const activeManageAppointmentSession =
+          await hasActiveManageAppointmentSession({ tenantId: tenant_id, userPhone: phone })
+            .catch(() => false);
+        if (
+          !activeManageAppointmentSession &&
+          isDoctorListTemplateRequest({ text, replyId: buttonReplyId })
+        ) {
           await expireAdvancedAppointmentSessionIfNeeded({
             tenant_id,
             phone,
@@ -1461,7 +1470,11 @@ export const receiveMessage = async (req, res) => {
                     messageType: pending.type || "text",
                     rawPayload: pending.rawPayload || null,
                   });
+                const queuedActiveManageAppointmentSession =
+                  await hasActiveManageAppointmentSession({ tenantId: tenant_id, userPhone: phone })
+                    .catch(() => false);
                 if (
+                  !queuedActiveManageAppointmentSession &&
                   isDoctorListTemplateRequest({
                     text: pending.text || "",
                     replyId: queuedInteractiveReplyId,
@@ -2189,6 +2202,23 @@ async function handleAppointmentOperationDecision({
     const manageReplyId =
       input.buttonReplyId ||
       (isManageCanonicalReplyId(manageMessage) ? manageMessage : null);
+    try {
+      console.log(
+        "[MANAGE_APPOINTMENT_DISPATCH]",
+        JSON.stringify({
+          phone,
+          messageText: input.messageText,
+          buttonReplyId: input.buttonReplyId || null,
+          manageMessage,
+          manageReplyId,
+          decisionAction: decision.action,
+          decisionSource: decision.source,
+          decisionReason: decision.reason,
+          activeManageSession: Boolean(routingResult?.activeManageSession),
+          activeManageState: routingResult?.activeManageSession?.state || null,
+        }),
+      );
+    } catch (_) {}
     const manageResult = await handleManageBookedAppointments({
       tenantId: tenant_id,
       userPhone: phone,
