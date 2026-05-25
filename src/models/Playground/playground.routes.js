@@ -1,6 +1,7 @@
 import express from "express";
 import {
   playgroundChat,
+  playgroundInbound,
   getPlaygroundKnowledgeSources,
 } from "./playground.controller.js";
 import {
@@ -20,6 +21,14 @@ Router.post(
   authorize({ user_type: "tenant", roles: tenantRoles }),
   requireAiAccess,
   playgroundChat,
+);
+
+Router.post(
+  "/playground/inbound",
+  authenticate,
+  authorize({ user_type: "tenant", roles: tenantRoles }),
+  requireAiAccess,
+  playgroundInbound,
 );
 
 Router.get(
