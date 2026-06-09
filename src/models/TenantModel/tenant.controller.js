@@ -1,0 +1,924 @@
+﻿import db from "../../database/index.js";
+import { tableNames } from "../../database/tableName.js";
+import { generateReadableIdFromLast } from "../../utils/helpers/generateReadableIdFromLast.js";
+import { missingFieldsChecker } from "../../utils/helpers/missingFields.js";
+import { formatPhoneNumber } from "../../utils/helpers/formatPhoneNumber.js";
+import {
+  SUPPORTED_TIMEZONES,
+  DEFAULT_TIMEZONE,
+} from "../../utils/helpers/timezone.js";
+import crypto from "crypto";
+import {
+  createTenantService,
+  deleteTenantService,
+  softDeleteTenantService,
+  findTenantByIdService,
+  getAllTenantService,
+  updateTenantService,
+  updateTenantStatusService,
+  getDeletedTenantListService,
+  restoreTenantService,
+  getTenantInvitationListService,
+  getOnboardedTenantListService,
+  getTenantSettingsService,
+  updateTenantAiSettingsService,
+} from "./tenant.service.js";
+
+import {
+  normalizeMobile,
+  cleanCountryCode,
+} from "../../utils/helpers/normalizeMobile.js";
+
+import { sendTenantInvitationService } from "../TenantInvitationModel/tenantinvitation.service.js";
+import {
+  createTenantUserService, // Retained from original
+  findTenantUserByIdService, // Retained from original
+  softDeleteTenantUserService,
+  softDeleteUsersByTenantIdService,
+  updateTenantUserByIdService,
+  findTenantUserByEmailOrMobileGloballyService,
+  findTenantAdminService,
+  updateUsersStatusByTenantIdService,
+} from "../TenantUserModel/tenantuser.service.js";
+
+import { getComprehensiveWebhookStatusService } from "../WhatsappAccountModel/whatsappAccount.service.js";
+import { encrypt, decrypt, maskApiKey } from "../../utils/encryption.js";
+import { storeSecret, getSecret } from "../TenantSecretsModel/tenantSecrets.service.js";
+import OpenAI from "openai";
+
+const ALLOWED_INDUSTRY_TYPES = ["healthcare", "education", "general"];
+
+const mapIndustryToLegacyType = (industryType = "general") => {
+  if (industryType === "healthcare") return "hospital";
+  if (industryType === "education") return "education";
+  return "organization";
+};
+
+const normalizeOptionalLookupId = (value) => {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  if (typeof value !== "string") return value;
+  const trimmed = value.trim();
+  return trimmed === "" ? null : trimmed;
+};
+
+const validateIndustryIdExists = async (industry_id) => {
+  if (industry_id === undefined || industry_id === null) return;
+
+  const industry = await db.Industries.findOne({
+    where: { industry_id },
+    attributes: ["industry_id"],
+    raw: true,
+  });
+
+  if (!industry) {
+    const error = new Error(`Invalid industry_id: ${industry_id}`);
+    error.statusCode = 400;
+    throw error;
+  }
+};
+
+const validatePlanIdExists = async (plan_id) => {
+  if (plan_id === undefined || plan_id === null) return;
+
+  const plan = await db.Plans.findOne({
+    where: { plan_id },
+    attributes: ["plan_id"],
+    raw: true,
+  });
+
+  if (!plan) {
+    const error = new Error(`Invalid plan_id: ${plan_id}`);
+    error.statusCode = 400;
+    throw error;
+  }
+};
+
+const validateAiModelSelections = async (ai_settings) => {
+  if (!ai_settings) return null;
+
+  const { input_model, output_model } = ai_settings;
+  if (!input_model && !output_model) return null;
+
+  const activeModels = await db.AiPricing.findAll({
+    where: { is_active: true },
+    attributes: ["model"],
+    raw: true,
+  });
+
+  const validModels = new Set(activeModels.map((m) => m.model));
+
+  if (input_model && !validModels.has(input_model)) {
+    return `Invalid input model: ${input_model}. Please select an active model.`;
+  }
+
+  if (output_model && !validModels.has(output_model)) {
+    return `Invalid output model: ${output_model}. Please select an active model.`;
+  }
+
+  return null;
+};
+
+export const createTenantController = async (req, res) => {
+  const loginUSer = req.user;
+
+  try {
+    const {
+      company_name,
+      owner_name,
+      owner_email,
+      owner_country_code,
+      owner_mobile,
+      industry_type,
+      subscriptionStatus,
+      subscription_start_date,
+      subscription_end_date,
+      address,
+      city,
+      country,
+      state,
+      pincode,
+      maxUsers,
+      subscriptionPlan,
+      industry_id,
+      plan_id,
+      profile,
+      ai_settings,
+    } = req.body;
+
+    const requiredFields = {
+      company_name,
+      owner_name,
+      owner_email,
+      owner_country_code,
+      owner_mobile,
+    };
+
+    const missingFields = await missingFieldsChecker(requiredFields);
+    if (missingFields.length > 0) {
+      return res.status(400).json({
+        message: `Missing required field(s): ${missingFields.join(", ")}`,
+      });
+    }
+
+    if (
+      industry_type !== undefined &&
+      !ALLOWED_INDUSTRY_TYPES.includes(industry_type)
+    ) {
+      return res.status(400).json({
+        message:
+          "Invalid industry_type. Allowed values: healthcare, education, general",
+      });
+    }
+
+    const resolvedIndustryType = industry_type || "general";
+    const resolvedLegacyType = mapIndustryToLegacyType(resolvedIndustryType);
+    const normalizedIndustryId = normalizeOptionalLookupId(industry_id);
+    const normalizedPlanId = normalizeOptionalLookupId(plan_id);
+
+    if (
+      normalizedIndustryId !== undefined &&
+      normalizedIndustryId !== null &&
+      typeof normalizedIndustryId !== "string"
+    ) {
+      return res.status(400).json({ message: "industry_id must be a string or null" });
+    }
+
+    if (
+      normalizedPlanId !== undefined &&
+      normalizedPlanId !== null &&
+      typeof normalizedPlanId !== "string"
+    ) {
+      return res.status(400).json({ message: "plan_id must be a string or null" });
+    }
+
+    const tenant_id = await generateReadableIdFromLast(
+      tableNames.TENANTS,
+      "tenant_id",
+      "TT",
+    );
+
+    const cleanedCC = cleanCountryCode(owner_country_code);
+    const normalizedMobile = normalizeMobile(cleanedCC, owner_mobile);
+    const trimmedEmail = owner_email?.trim()?.toLowerCase();
+
+    const aiModelValidationError = await validateAiModelSelections(ai_settings);
+    if (aiModelValidationError) {
+      return res.status(400).json({ message: aiModelValidationError });
+    }
+
+    await validateIndustryIdExists(normalizedIndustryId);
+    await validatePlanIdExists(normalizedPlanId);
+
+    // Check for existing user in Tenants
+    const existingTu = await findTenantUserByEmailOrMobileGloballyService(
+      trimmedEmail,
+      normalizedMobile,
+    );
+
+    if (existingTu) {
+      const field = existingTu.email === trimmedEmail ? "Email" : "Mobile";
+      return res.status(400).json({
+        message: `${field} already exists in Tenant records`,
+      });
+    }
+
+    // Wrap all DB writes in a transaction for atomicity
+    let tenantUserId;
+    await db.sequelize.transaction(async (t) => {
+      await createTenantService(
+        tenant_id,
+        company_name,
+        owner_name,
+        trimmedEmail,
+        cleanedCC,
+        normalizedMobile,
+        resolvedLegacyType,
+        subscriptionStatus || "invited",
+        subscription_start_date || null,
+        subscription_end_date || null,
+        address || null,
+        city || null,
+        country || null,
+        state || null,
+        pincode || null,
+        maxUsers || 10,
+        subscriptionPlan || "basic",
+        profile || null,
+        null, // verify_token
+        (() => {
+          if (!ai_settings) return null;
+          const settings = { ...ai_settings };
+          // Never store the raw key in the JSON column — storeSecret handles it after tenant is created
+          delete settings.openai_api_key;
+          return settings;
+        })(),
+        t, // transaction
+        resolvedIndustryType,
+        normalizedIndustryId,
+        normalizedPlanId,
+      );
+
+      tenantUserId = await generateReadableIdFromLast(
+        tableNames.TENANT_USERS,
+        "tenant_user_id",
+        "TTU",
+      );
+
+      await createTenantUserService(
+        tenantUserId,
+        tenant_id,
+        "Mr", // Default title as Mr
+        owner_name,
+        trimmedEmail,
+        cleanedCC,
+        normalizedMobile,
+        profile || null,
+        "tenant_admin",
+        null, // password_hash — null until invitation is accepted
+        "inactive", // user_status — inactive until invitation is accepted
+        t, // transaction
+      );
+    });
+
+    // Store OpenAI key in tenant_secrets after transaction commits (outside tx — no rollback risk)
+    if (ai_settings?.openai_api_key) {
+      await storeSecret(tenant_id, "openai", ai_settings.openai_api_key);
+    }
+
+    // Send invitation email OUTSIDE the transaction — tenant is already saved,
+    // so a transient SMTP failure won't roll back the entire registration.
+    let emailWarning = null;
+    try {
+      await sendTenantInvitationService(
+        tenant_id,
+        tenantUserId,
+        trimmedEmail,
+        owner_name,
+        company_name,
+        loginUSer?.unique_id,
+      );
+    } catch (emailErr) {
+      console.error(
+        "[TENANT] Invitation email failed (tenant still created):",
+        emailErr.message,
+      );
+      emailWarning =
+        "Tenant created but invitation email failed. You can resend it from the tenant list.";
+    }
+
+    return res.status(200).json({
+      message:
+        emailWarning ||
+        "Tenant created successfully. Invitation email sent to owner.",
+    });
+  } catch (err) {
+    if (err?.statusCode) {
+      return res.status(err.statusCode).json({ message: err.message });
+    }
+
+    if (err.original?.code === "ER_DUP_ENTRY") {
+      return res.status(400).json({
+        message: "Email or mobile already exists",
+      });
+    }
+
+    return res.status(500).json({
+      message: err.message,
+    });
+  }
+};
+
+export const getAllTenantController = async (req, res) => {
+  try {
+    const response = await getAllTenantService();
+    return res.status(200).send({
+      message: "success",
+      data: response,
+    });
+  } catch (err) {
+    res.status(500).send({ error: err.message });
+  }
+};
+
+export const getTenantByIdController = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const response = await findTenantByIdService(id);
+
+    if (!response) {
+      return res.status(400).json({ message: "Tenant details not found" });
+    }
+
+    return res.status(200).send({
+      message: "Tenant details fetched successfully",
+      data: response,
+    });
+  } catch (err) {
+    res.status(500).send({ error: err.message });
+  }
+};
+
+export const updateTenantController = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const {
+      company_name,
+      owner_name,
+      owner_email,
+      owner_country_code,
+      owner_mobile,
+      industry_type,
+      subscriptionStatus,
+      subscription_start_date,
+      subscription_end_date,
+      address,
+      city,
+      country,
+      state,
+      pincode,
+      maxUsers,
+      subscriptionPlan,
+      industry_id,
+      plan_id,
+      profile,
+      ai_settings,
+    } = req.body;
+
+    const tenant = await findTenantByIdService(id);
+
+    if (!tenant) {
+      return res.status(404).json({ message: "Tenant details not found" });
+    }
+
+    if (
+      industry_type !== undefined &&
+      !ALLOWED_INDUSTRY_TYPES.includes(industry_type)
+    ) {
+      return res.status(400).json({
+        message:
+          "Invalid industry_type. Allowed values: healthcare, education, general",
+      });
+    }
+
+    const cleanedCC = owner_country_code
+      ? cleanCountryCode(owner_country_code)
+      : null;
+    const normalizedMobile = owner_mobile
+      ? normalizeMobile(cleanedCC, owner_mobile)
+      : null;
+
+    const trimmedEmail = owner_email?.trim()?.toLowerCase();
+    console.log(
+      `[UPDATE TENANT] ID: ${id}, New Email: ${trimmedEmail}, Old Email: ${tenant.owner_email}`,
+    );
+
+    const aiModelValidationError = await validateAiModelSelections(ai_settings);
+    if (aiModelValidationError) {
+      return res.status(400).json({ message: aiModelValidationError });
+    }
+
+    // Check for duplicate email if it's changing
+    if (trimmedEmail && trimmedEmail !== tenant.owner_email) {
+      const existingUser = await findTenantUserByEmailOrMobileGloballyService(
+        trimmedEmail,
+        null,
+      );
+      if (existingUser) {
+        console.log(
+          `[UPDATE TENANT] Duplicate email detected: ${trimmedEmail}`,
+        );
+        return res
+          .status(400)
+          .json({ message: "Email already in use by another account" });
+      }
+    }
+
+    const resolvedLegacyTypeForUpdate =
+      industry_type !== undefined && industry_type !== null
+        ? mapIndustryToLegacyType(industry_type)
+        : undefined;
+    const normalizedIndustryId = normalizeOptionalLookupId(industry_id);
+    const normalizedPlanId = normalizeOptionalLookupId(plan_id);
+
+    if (
+      normalizedIndustryId !== undefined &&
+      normalizedIndustryId !== null &&
+      typeof normalizedIndustryId !== "string"
+    ) {
+      return res.status(400).json({ message: "industry_id must be a string or null" });
+    }
+
+    if (
+      normalizedPlanId !== undefined &&
+      normalizedPlanId !== null &&
+      typeof normalizedPlanId !== "string"
+    ) {
+      return res.status(400).json({ message: "plan_id must be a string or null" });
+    }
+
+    await validateIndustryIdExists(normalizedIndustryId);
+    await validatePlanIdExists(normalizedPlanId);
+
+    await updateTenantService(
+      company_name,
+      owner_name,
+      trimmedEmail || owner_email,
+      cleanedCC,
+      normalizedMobile,
+      resolvedLegacyTypeForUpdate,
+      subscriptionStatus,
+      subscription_start_date,
+      subscription_end_date,
+      address,
+      city,
+      country,
+      state,
+      pincode,
+      maxUsers,
+      subscriptionPlan,
+      profile,
+      (() => {
+        if (!ai_settings) return ai_settings;
+        const settings = { ...ai_settings };
+        // Never store the raw key in the JSON column — storeSecret handles it below
+        delete settings.openai_api_key;
+        return settings;
+      })(),
+      id,
+      industry_type,
+      normalizedIndustryId,
+      normalizedPlanId,
+    );
+
+    // Store OpenAI key in tenant_secrets if provided via this path
+    if (ai_settings?.openai_api_key) {
+      await storeSecret(id, "openai", ai_settings.openai_api_key);
+    }
+
+    // Sync changes to the primary tenant admin user
+    const tenantAdmin = await findTenantAdminService(id);
+    console.log(
+      `[UPDATE TENANT] Admin Found: ${tenantAdmin ? tenantAdmin.tenant_user_id : "NO"}`,
+    );
+
+    if (tenantAdmin) {
+      await updateTenantUserByIdService(tenantAdmin.tenant_user_id, {
+        username: owner_name,
+        email: trimmedEmail || owner_email,
+        mobile: normalizedMobile,
+        country_code: cleanedCC,
+      });
+    }
+
+    // If email changed and user hasn't registered yet, send a new invitation
+    if (trimmedEmail && trimmedEmail !== tenant.owner_email) {
+      if (tenantAdmin && !tenantAdmin.password_hash) {
+        console.log(
+          `[UPDATE TENANT] Sending new invitation to: ${trimmedEmail}`,
+        );
+        await sendTenantInvitationService(
+          id,
+          tenantAdmin.tenant_user_id,
+          trimmedEmail,
+          owner_name || tenantAdmin.username,
+          company_name || tenant.company_name,
+          req.user?.unique_id,
+        );
+      } else {
+        console.log(
+          `[UPDATE TENANT] Skip invitation (User already has password or no admin found)`,
+        );
+      }
+    }
+
+    return res.status(200).send({
+      message: "Tenant updated successfully",
+    });
+  } catch (err) {
+    if (err?.statusCode) {
+      return res.status(err.statusCode).json({ message: err.message });
+    }
+
+    if (err.original?.code === "ER_DUP_ENTRY") {
+      return res
+        .status(400)
+        .json({ message: "Email or mobile already exists" });
+    }
+
+    return res.status(500).json({
+      message: err.message,
+    });
+  }
+};
+
+export const updateTenantStatusController = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.query;
+
+    if (!status) {
+      return res.status(400).send({
+        message: "Status is required",
+      });
+    }
+
+    if (
+      ![
+        "invited",
+        "active",
+        "inactive",
+        "rejected",
+        "suspended",
+        "trial",
+        "expired",
+        "pending_setup",
+        "grace_period",
+        "maintenance",
+      ].includes(status)
+    ) {
+      return res.status(400).send({
+        message: "Invalid status",
+      });
+    }
+
+    // Wrap in transaction to ensure atomic status sync
+    await db.sequelize.transaction(async (t) => {
+      await updateTenantStatusService(status, id, t);
+
+      // Sync status to the tenant's users
+      let userStatus = "inactive";
+      if (["active", "trial", "grace_period"].includes(status)) {
+        userStatus = "active";
+      }
+      await updateUsersStatusByTenantIdService(id, userStatus, t);
+    });
+
+    return res.status(200).send({
+      message: "Tenant status updated successfully",
+    });
+  } catch (err) {
+    res.status(500).send({ error: err.message });
+  }
+};
+
+export const softDeleteTenantController = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const response = await findTenantByIdService(id);
+
+    if (!response) {
+      return res.status(400).json({ message: "Tenant details not found" });
+    }
+
+    await softDeleteTenantService(id);
+    // softDeleteTenantService already soft-deletes associated users
+
+    return res.status(200).send({
+      message: "Tenant and all associated users removed successfully",
+    });
+  } catch (err) {
+    res.status(500).send({ error: err.message });
+  }
+};
+
+export const getDeletedTenantListController = async (req, res) => {
+  try {
+    const data = await getDeletedTenantListService();
+    return res.status(200).send({
+      message: "Deleted tenants fetched successfully",
+      data,
+    });
+  } catch (err) {
+    res.status(500).send({ error: err.message });
+  }
+};
+
+export const restoreTenantController = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    await restoreTenantService(id);
+    return res.status(200).send({
+      message: "Tenant restored successfully",
+    });
+  } catch (err) {
+    res.status(500).send({ error: err.message });
+  }
+};
+
+export const deleteTenantController = async (req, res) => {
+  try {
+    const { id } = req.params;
+    await deleteTenantService(id);
+    return res.status(200).send({
+      message: "Organization deleted successfully",
+    });
+  } catch (err) {
+    res.status(500).send({ error: err.message });
+  }
+};
+
+export const resendTenantInvitationController = async (req, res) => {
+  const { tenant_user_id } = req.params;
+
+  if (!tenant_user_id) {
+    return res.status(400).send({
+      message: "Tenant user id invalid",
+    });
+  }
+
+  try {
+    const loginUSer = req.user;
+
+    const tenantUser = await findTenantUserByIdService(tenant_user_id);
+    if (!tenantUser) {
+      return res.status(404).send({
+        message: "Tenant user not found",
+      });
+    }
+
+    if (tenantUser.password_hash) {
+      return res.status(400).send({
+        message: "User is already registered and has set their password.",
+      });
+    }
+
+    const tenant = await findTenantByIdService(tenantUser.tenant_id);
+    if (!tenant) {
+      return res.status(404).send({
+        message: "Tenant not found",
+      });
+    }
+
+    await sendTenantInvitationService(
+      tenantUser.tenant_id,
+      tenant_user_id,
+      tenantUser.email,
+      tenantUser.username,
+      tenant.company_name,
+      loginUSer?.unique_id,
+    );
+
+    return res.status(200).send({
+      message: "Invitation resent successfully",
+    });
+  } catch (err) {
+    return res.status(500).send({
+      message: err?.message,
+    });
+  }
+};
+
+export const getTenantWebhookStatusController = async (req, res) => {
+  try {
+    const loginUser = req.user;
+    const { id } = req.params;
+
+    if (!id) {
+      return res.status(400).json({ message: "Tenant ID is required" });
+    }
+
+    // 🔒 Security Check: A tenant user can only check their OWN webhook status
+    if (loginUser.user_type === "tenant" && loginUser.tenant_id !== id) {
+      return res.status(403).json({
+        message:
+          "Access denied: You can only check your own organization's status",
+      });
+    }
+
+    // Use comprehensive status check
+    const status = await getComprehensiveWebhookStatusService(id);
+
+    return res.status(200).json({
+      message: "success",
+      data: status,
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+};
+
+export const getTenantInvitationListController = async (req, res) => {
+  try {
+    const data = await getTenantInvitationListService();
+    return res.status(200).json({
+      message: "success",
+      data: data || [],
+    });
+  } catch (err) {
+    return res.status(500).json({ message: err.message });
+  }
+};
+
+export const getOnboardedTenantListController = async (req, res) => {
+  try {
+    const data = await getOnboardedTenantListService();
+    return res.status(200).json({
+      message: "success",
+      data: data || [],
+    });
+  } catch (err) {
+    console.error("Error in getOnboardedTenantListController:", err);
+    return res.status(500).json({ message: err.message });
+  }
+};
+
+export const getTenantSettingsController = async (req, res) => {
+  try {
+    const tenant_id = req.user.tenant_id;
+    const settings = await getTenantSettingsService(tenant_id);
+    if (!settings) return res.status(404).json({ message: "Tenant not found" });
+
+    // Resolve masked key — prefer tenant_secrets (GCM), fall back to legacy CBC in ai_settings
+    if (settings.ai_settings) {
+      let rawKey = await getSecret(tenant_id, "openai");
+
+      // Legacy fallback: old CBC-encrypted key still in ai_settings JSON
+      if (!rawKey && settings.ai_settings.openai_api_key) {
+        try { rawKey = decrypt(settings.ai_settings.openai_api_key); } catch { /* ignore */ }
+      }
+
+      if (rawKey) {
+        settings.ai_settings.openai_api_key_masked = maskApiKey(rawKey);
+        settings.ai_settings.has_openai_key = true;
+      } else {
+        settings.ai_settings.openai_api_key_masked = "";
+        settings.ai_settings.has_openai_key = false;
+      }
+      // Never send raw or encrypted key to frontend
+      delete settings.ai_settings.openai_api_key;
+    }
+
+    return res.status(200).json({ message: "success", data: settings });
+  } catch (err) {
+    return res.status(500).json({ message: err.message });
+  }
+};
+
+export const updateTenantAiSettingsController = async (req, res) => {
+  try {
+    const tenant_id = req.user.tenant_id;
+    const { ai_settings } = req.body;
+
+    // Validate model selections if provided
+    const aiModelValidationError = await validateAiModelSelections(ai_settings);
+    if (aiModelValidationError) {
+      return res.status(400).json({
+        message: aiModelValidationError,
+      });
+    }
+
+    // Validate timezone if provided
+    if (ai_settings?.timezone) {
+      if (!SUPPORTED_TIMEZONES.includes(ai_settings.timezone)) {
+        return res.status(400).json({
+          message: `Invalid timezone: ${ai_settings.timezone}. Please select a supported timezone.`,
+          supportedTimezones: SUPPORTED_TIMEZONES,
+        });
+      }
+    }
+
+    // Store OpenAI key in tenant_secrets (AES-256-GCM, per-tenant key).
+    // Never persist it in the ai_settings JSON column.
+    if (ai_settings?.openai_api_key) {
+      await storeSecret(tenant_id, "openai", ai_settings.openai_api_key);
+      delete ai_settings.openai_api_key;
+    }
+
+    await updateTenantAiSettingsService(tenant_id, ai_settings);
+
+    // Return refreshed settings with masked key so frontend cache stays consistent
+    const refreshed = await getTenantSettingsService(tenant_id);
+    if (refreshed?.ai_settings) {
+      let rawKey = await getSecret(tenant_id, "openai");
+
+      // Legacy fallback for tenants not yet migrated
+      if (!rawKey && refreshed.ai_settings.openai_api_key) {
+        try { rawKey = decrypt(refreshed.ai_settings.openai_api_key); } catch { /* ignore */ }
+      }
+
+      if (rawKey) {
+        refreshed.ai_settings.openai_api_key_masked = maskApiKey(rawKey);
+        refreshed.ai_settings.has_openai_key = true;
+      } else {
+        refreshed.ai_settings.openai_api_key_masked = "";
+        refreshed.ai_settings.has_openai_key = false;
+      }
+      delete refreshed.ai_settings.openai_api_key;
+    }
+
+    return res
+      .status(200)
+      .json({ message: "Settings updated successfully", data: refreshed });
+  } catch (err) {
+    return res.status(500).json({ message: err.message });
+  }
+};
+
+/**
+ * Validate an OpenAI API key by making a lightweight test call.
+ * Used during organization create/edit before saving.
+ */
+export const validateOpenAIKeyController = async (req, res) => {
+  try {
+    const { openai_api_key } = req.body;
+
+    if (!openai_api_key || !openai_api_key.trim()) {
+      return res.status(400).json({ message: "OpenAI API key is required" });
+    }
+
+    const trimmedKey = openai_api_key.trim();
+
+    // Quick format check
+    if (!trimmedKey.startsWith("sk-")) {
+      return res.status(400).json({
+        message: "Invalid key format. OpenAI keys start with 'sk-'",
+      });
+    }
+
+    // Test the key with a minimal API call
+    const testClient = new OpenAI({ apiKey: trimmedKey });
+    await testClient.models.list();
+
+    return res.status(200).json({
+      message: "OpenAI API key is valid",
+      valid: true,
+    });
+  } catch (err) {
+    const status = err?.status || 500;
+    if (status === 401) {
+      return res.status(400).json({
+        message: "Invalid OpenAI API key. Authentication failed.",
+        valid: false,
+      });
+    }
+    if (status === 429) {
+      return res.status(400).json({
+        message:
+          "OpenAI API key is rate-limited or has exceeded quota. Please check your billing.",
+        valid: false,
+      });
+    }
+    return res.status(400).json({
+      message: `OpenAI API key validation failed: ${err.message}`,
+      valid: false,
+    });
+  }
+};
+
+export const getAvailableTimezonesController = async (req, res) => {
+  try {
+    return res.status(200).json({
+      message: "success",
+      data: {
+        timezones: SUPPORTED_TIMEZONES,
+        default: DEFAULT_TIMEZONE,
+      },
+    });
+  } catch (err) {
+    return res.status(500).json({ message: err.message });
+  }
+};

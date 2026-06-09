@@ -1,0 +1,72 @@
+import express from "express";
+import {
+  getChatByPhone,
+  getChatList,
+  markSeenMessage,
+  sendAdminMessage,
+  sendTemplateMessageController,
+  sendTestMessageController,
+  suggestReplyController,
+} from "./messages.controller.js";
+import {
+  authenticate,
+  authorize,
+} from "../../middlewares/auth/authMiddlewares.js";
+import {
+  requireSufficientBalance,
+  requireAiAccess,
+} from "../../middlewares/billing/billingAccessGuard.js";
+
+const Router = express.Router();
+const tenantRoles = ["tenant_admin", "staff"];
+
+Router.get(
+  "/chats",
+  authenticate,
+  authorize({ user_type: "tenant", roles: tenantRoles }),
+  getChatList,
+);
+Router.get(
+  "/chats/:phone",
+  authenticate,
+  authorize({ user_type: "tenant", roles: tenantRoles }),
+  getChatByPhone,
+);
+Router.post(
+  "/chats/send",
+  authenticate,
+  authorize({ user_type: "tenant", roles: tenantRoles }),
+  requireSufficientBalance,
+  sendAdminMessage,
+);
+Router.post(
+  "/chats/send-template",
+  authenticate,
+  authorize({ user_type: "tenant", roles: tenantRoles }),
+  requireSufficientBalance,
+  sendTemplateMessageController,
+);
+Router.put(
+  "/chats/mark",
+  authenticate,
+  authorize({ user_type: "tenant", roles: tenantRoles }),
+  markSeenMessage,
+);
+Router.post(
+  "/chats/suggest",
+  authenticate,
+  authorize({ user_type: "tenant", roles: tenantRoles }),
+  requireAiAccess,
+  suggestReplyController,
+);
+
+Router.post(
+  "/chats/send-test",
+  authenticate,
+  authorize({ user_type: "tenant", roles: tenantRoles }),
+  requireSufficientBalance,
+  sendTestMessageController,
+);
+
+export default Router;
+

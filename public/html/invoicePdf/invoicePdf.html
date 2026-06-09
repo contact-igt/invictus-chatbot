@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Invoice - {{invoice_number}}</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        color: #222;
+        margin: 0;
+        padding: 0;
+      }
+      .container {
+        max-width: 700px;
+        margin: 0 auto;
+        padding: 32px;
+        background: #fff;
+      }
+      .header {
+        display: flex;
+        align-items: center;
+        border-bottom: 2px solid #eee;
+        padding-bottom: 16px;
+      }
+      .logo {
+        height: 60px;
+        margin-right: 24px;
+      }
+      .company-details {
+        flex: 1;
+      }
+      .company-details h2 {
+        margin: 0 0 4px 0;
+        font-size: 1.5em;
+      }
+      .company-details .meta {
+        font-size: 0.95em;
+        color: #555;
+      }
+      .invoice-meta {
+        text-align: right;
+        font-size: 0.95em;
+      }
+      .section {
+        margin-top: 32px;
+      }
+      .section-title {
+        font-weight: bold;
+        margin-bottom: 8px;
+        font-size: 1.1em;
+      }
+      .bill-to,
+      .payment-details {
+        font-size: 0.98em;
+      }
+      .line-items {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 12px;
+      }
+      .line-items th,
+      .line-items td {
+        border: 1px solid #ddd;
+        padding: 8px;
+      }
+      .line-items th {
+        background: #f7f7f7;
+      }
+      .line-items .desc {
+        width: 45%;
+      }
+      .line-items .period {
+        width: 25%;
+      }
+      .line-items .amt {
+        width: 30%;
+        text-align: right;
+      }
+      .subtotal,
+      .tax-row,
+      .total-row {
+        font-weight: bold;
+      }
+      .total-row td {
+        font-size: 1.1em;
+        border-top: 2px solid #222;
+      }
+      .amount-words {
+        margin: 18px 0 0 0;
+        font-style: italic;
+        color: #444;
+      }
+      .badge {
+        display: inline-block;
+        padding: 4px 12px;
+        border-radius: 12px;
+        font-size: 0.95em;
+        color: #fff;
+      }
+      .badge.paid {
+        background: #27ae60;
+      }
+      .badge.unpaid {
+        background: #f1c40f;
+        color: #222;
+      }
+      .badge.overdue {
+        background: #e74c3c;
+      }
+      .footer {
+        margin-top: 36px;
+        font-size: 0.95em;
+        color: #888;
+        border-top: 1px solid #eee;
+        padding-top: 12px;
+      }
+      .terms {
+        margin-top: 8px;
+        color: #666;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="header">
+        <img class="logo" src="{{company_logo_url}}" alt="Company Logo" />
+        <div class="company-details">
+          <h2>{{company_name}}</h2>
+          <div class="meta">
+            {{company_address}}<br />
+            GSTIN: {{company_gstin}} | CIN: {{company_cin}}
+          </div>
+        </div>
+        <div class="invoice-meta">
+          <div><strong>Invoice #:</strong> {{invoice_number}}</div>
+          <div><strong>Invoice Date:</strong> {{invoice_date}}</div>
+          <div><strong>Due Date:</strong> {{due_date}}</div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">Bill To</div>
+        <div class="bill-to">
+          <strong>{{tenant_name}}</strong><br />
+          {{tenant_address}}<br />
+          GSTIN: {{#if
+          tenant_gstin}}{{tenant_gstin}}{{else}}Unregistered{{/if}}<br />
+          State: {{tenant_state}}
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">Invoice Details</div>
+        <table class="line-items">
+          <thead>
+            <tr>
+              <th class="desc">Description</th>
+              <th class="period">Period</th>
+              <th class="amt">Amount (₹)</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>WhatsApp message charges</td>
+              <td>{{cycle_start}} to {{cycle_end}}</td>
+              <td class="amt">{{total_message_cost_inr}}</td>
+            </tr>
+            <tr>
+              <td>AI model usage charges</td>
+              <td>{{cycle_start}} to {{cycle_end}}</td>
+              <td class="amt">{{total_ai_cost_inr}}</td>
+            </tr>
+            <tr class="subtotal">
+              <td colspan="2" style="text-align: right">Subtotal</td>
+              <td class="amt">{{base_amount}}</td>
+            </tr>
+            {{#if is_intra_state}}
+            <tr class="tax-row">
+              <td colspan="2" style="text-align: right">CGST @ 9%</td>
+              <td class="amt">{{cgst_amount}}</td>
+            </tr>
+            <tr class="tax-row">
+              <td colspan="2" style="text-align: right">SGST @ 9%</td>
+              <td class="amt">{{sgst_amount}}</td>
+            </tr>
+            {{else}}
+            <tr class="tax-row">
+              <td colspan="2" style="text-align: right">IGST @ 18%</td>
+              <td class="amt">{{igst_amount}}</td>
+            </tr>
+            {{/if}}
+            <tr class="total-row">
+              <td colspan="2" style="text-align: right">Total</td>
+              <td class="amt">{{total_amount}}</td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="amount-words">Amount in words: {{amount_in_words}}</div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">Payment Details</div>
+        <div class="payment-details">
+          <div><strong>Payment Method:</strong> {{payment_method}}</div>
+          <div><strong>Payment ID:</strong> {{payment_id}}</div>
+          <div><strong>Payment Date:</strong> {{payment_date}}</div>
+          <div>
+            <span class="badge {{status_class}}">{{status_label}}</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="footer">
+        This is a computer-generated invoice. No signature required.<br />
+        HSN/SAC: 998314 — Software as a Service
+        <div class="terms">
+          Terms: Payment due within 15 days of invoice date.
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

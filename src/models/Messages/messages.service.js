@@ -1,0 +1,337 @@
+import db from "../../database/index.js";
+import { tableNames } from "../../database/tableName.js";
+import { AiService } from "../../utils/ai/coreAi.js";
+import { processResponse } from "../../utils/ai/aiTagHandlers/index.js";
+import { searchKnowledgeChunks } from "../Knowledge/knowledge.search.js";
+
+import { getContactByPhoneAndTenantIdService } from "../ContactsModel/contacts.service.js";
+import { getLeadByContactIdService } from "../LeadsModel/leads.service.js";
+import { getLastAppointmentService } from "../AppointmentModel/appointment.service.js";
+import {
+  getAdminSystemPrompt,
+  getAdminSuggestedReplyPrompt,
+  getAdminLeadSourcePrompt,
+  // getAdminAppointmentHistoryPrompt,
+} from "../../utils/ai/prompts/index.js";
+
+export const createUserMessageService = async (
+  tenant_id,
+  contact_id,
+  phone_number_id,
+  phone,
+  wamid,
+  name,
+  sender,
+  sender_id,
+  message,
+  message_type = "text",
+  media_url = null,
+  media_mime_type = null,
+  status = null,
+  template_name = null,
+  media_filename = null,
+  interactive_payload = null,
+) => {
+  const Query = `INSERT IGNORE INTO ${tableNames?.MESSAGES} (  
+  tenant_id,
+  contact_id,
+  phone_number_id,
+  country_code,
+  phone,
+  wamid,
+  name,
+  sender,
+  sender_id,
+  message,
+  message_type,
+  media_url,
+  media_mime_type,
+  status,
+  template_name,
+  interactive_payload,
+  media_filename )
+   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) `;
+
+  try {
+    let cleanPhone = phone ? phone.toString().replace(/\D/g, "") : "";
+    let cc = "+91"; // fallback
+
+    if (cleanPhone.length > 10) {
+      cc = `+${cleanPhone.slice(0, -10)}`;
+      cleanPhone = cleanPhone.slice(-10);
+    } else if (cleanPhone.length === 10) {
+      // It's already 10 digits, keep default cc or retrieve from contact
+    }
+
+    const values = [
+      tenant_id,
+      contact_id,
+      phone_number_id,
+      cc,
+      cleanPhone,
+      wamid,
+      name,
+      sender,
+      sender_id,
+      message,
+      message_type,
+      media_url,
+      media_mime_type,
+      status,
+      template_name,
+      interactive_payload,
+      media_filename,
+    ];
+
+    const [result] = await db.sequelize.query(Query, { replacements: values });
+    // result is a ResultSetHeader — extract the actual auto-increment ID
+    const insertId = result?.insertId ?? result;
+    return { id: insertId };
+  } catch (err) {
+    throw err;
+  }
+};
+
+export const getChatListService = async (tenant_id, limit = 200) => {
+  const dataQuery = `
+  SELECT
+    m.contact_id,
+    c.phone,
+    c.name,
+    c.is_ai_silenced,
+    m.message,
+    m.message_type,
+    m.created_at AS last_message_time,
+    COALESCE(uc.cnt, 0) AS unread_count
+  FROM messages m
+  INNER JOIN (
+    SELECT
+      contact_id,
+      MAX(created_at) AS last_message_time,
+      MAX(id) AS last_message_id
+    FROM messages
+    WHERE tenant_id = ? AND is_deleted = false
+    GROUP BY contact_id
+  ) lm
+    ON m.contact_id = lm.contact_id
+   AND m.id = lm.last_message_id
+  JOIN contacts c
+    ON c.contact_id = m.contact_id
+   AND c.tenant_id = m.tenant_id
+  LEFT JOIN ${tableNames.LIVECHAT} lc
+    ON lc.contact_id = m.contact_id
+   AND lc.tenant_id = ?
+  LEFT JOIN (
+    SELECT contact_id, COUNT(*) AS cnt
+    FROM ${tableNames.MESSAGES}
+    WHERE tenant_id = ? AND seen = false AND sender = 'user' AND is_deleted = false
+    GROUP BY contact_id
+  ) uc ON uc.contact_id = m.contact_id
+  WHERE m.tenant_id = ?
+    AND lc.contact_id IS NULL
+  ORDER BY m.created_at DESC
+  LIMIT ?
+`;
+
+  try {
+    const [rows] = await db.sequelize.query(dataQuery, {
+      replacements: [tenant_id, tenant_id, tenant_id, tenant_id, limit],
+    });
+
+    return rows;
+  } catch (err) {
+    throw err;
+  }
+};
+
+export const getChatByPhoneService = async (phone, tenant_id) => {
+  // Validate inputs
+  if (!phone || !tenant_id) {
+    throw new Error("Phone number and tenant ID are required");
+  }
+
+  try {
+    const contact = await getContactByPhoneAndTenantIdService(tenant_id, phone);
+
+    let whereClause = "phone = ? AND tenant_id = ?";
+    let replacements = [phone, tenant_id];
+
+    if (contact) {
+      whereClause = "contact_id = ? AND tenant_id = ?";
+      replacements = [contact.contact_id, tenant_id];
+    } else {
+      // Normalize phone to last 10 digits
+      const cleanPhone = phone ? phone.toString().replace(/\D/g, "") : "";
+      const suffix =
+        cleanPhone.length >= 10 ? cleanPhone.slice(-10) : cleanPhone;
+      replacements = [suffix, tenant_id];
+    }
+
+    const Query = `
+    SELECT id, contact_id, sender, sender_id, message, message_type, interactive_payload, media_url, media_mime_type, media_filename, seen, status, wamid, created_at
+    FROM ${tableNames?.MESSAGES}
+    WHERE ${whereClause} AND is_deleted = false
+    ORDER BY created_at ASC
+    LIMIT 500
+  `;
+    const [result] = await db.sequelize.query(Query, {
+      replacements: replacements,
+    });
+    return result;
+  } catch (err) {
+    throw err;
+  }
+};
+
+export const markSeenMessageService = async (tenant_id, phone) => {
+  try {
+    const contact = await getContactByPhoneAndTenantIdService(tenant_id, phone);
+
+    let whereClause = "phone = ?";
+    let replacements = [phone, tenant_id];
+
+    if (contact) {
+      whereClause = "contact_id = ?";
+      replacements = [contact.contact_id, tenant_id];
+    } else {
+      // Normalize phone to last 10 digits
+      const cleanPhone = phone ? phone.toString().replace(/\D/g, "") : "";
+      const suffix =
+        cleanPhone.length >= 10 ? cleanPhone.slice(-10) : cleanPhone;
+      replacements = [suffix, tenant_id];
+    }
+
+    const Query = `UPDATE ${tableNames?.MESSAGES} SET seen = true WHERE ${whereClause} AND tenant_id = ? AND seen = false AND sender = 'user'`;
+    const [result] = await db.sequelize.query(Query, {
+      replacements: replacements,
+    });
+    return result;
+  } catch (err) {
+    throw err;
+  }
+};
+
+export const suggestReplyService = async (tenant_id, phone) => {
+  try {
+    let leadSourcePrompt = "";
+    let appointmentHistoryPrompt = "";
+    let contact_id = null;
+
+    let contact = null;
+    try {
+      contact = await getContactByPhoneAndTenantIdService(tenant_id, phone);
+      if (contact) {
+        contact_id = contact.contact_id;
+
+        // 1. Lead Source Detection
+        const lead = await getLeadByContactIdService(tenant_id, contact_id);
+        if (lead && lead.source === "none") {
+          leadSourcePrompt = getAdminLeadSourcePrompt();
+        }
+      }
+    } catch (err) {
+      console.error(
+        "[APPOINTMENT-HISTORY] Error in suggestReply initial lookup:",
+        err.message,
+      );
+    }
+
+    const ADMIN_SYSTEM_PROMPT = getAdminSystemPrompt(
+      leadSourcePrompt,
+      appointmentHistoryPrompt,
+    );
+
+    let msgWhere = "phone = ? AND tenant_id = ?";
+    let msgReplacements = [phone, tenant_id];
+
+    if (contact_id) {
+      msgWhere = "contact_id = ? AND tenant_id = ?";
+      msgReplacements = [contact_id, tenant_id];
+    }
+
+    const [messages] = await db.sequelize.query(
+      `
+    SELECT sender, message, created_at
+    FROM ${tableNames.MESSAGES}
+    WHERE ${msgWhere}
+    ORDER BY created_at DESC
+    LIMIT 30
+    `,
+      { replacements: msgReplacements },
+    );
+
+    // Reverse to get chronological order and format nicely
+    const recentMessages = messages.reverse();
+    const chatHistory = recentMessages
+      .map((m) => {
+        const senderLabel =
+          m.sender === "user"
+            ? "Customer"
+            : m.sender === "bot"
+              ? "AI"
+              : "Admin";
+        return `${senderLabel}: ${m.message}`;
+      })
+      .join("\n");
+
+    const [lastMsg] = await db.sequelize.query(
+      `
+    SELECT message
+    FROM ${tableNames.MESSAGES}
+    WHERE ${msgWhere}
+    AND sender = 'user'
+    ORDER BY created_at DESC
+    LIMIT 1
+    `,
+      { replacements: msgReplacements },
+    );
+
+    if (!lastMsg.length) {
+      return "No recent customer message found.";
+    }
+
+    const lastUserMessage = lastMsg[0].message;
+
+    /* 3️⃣ Knowledge base search (Uses Smart AI Retrieval internally) */
+    const { chunks } = await searchKnowledgeChunks(tenant_id, lastUserMessage);
+
+    const knowledgeText =
+      chunks && chunks.length > 0
+        ? chunks.join("\n\n")
+        : "No relevant knowledge found.";
+
+    /* 4️⃣ AI prompt */
+    const prompt = getAdminSuggestedReplyPrompt({
+      adminSystemPrompt: ADMIN_SYSTEM_PROMPT,
+      chatHistory,
+      lastUserMessage,
+      knowledgeText,
+    });
+
+    const rawReply = await AiService(
+      "system",
+      prompt,
+      tenant_id,
+      "smart_reply",
+    );
+
+    
+
+    // Step 1: Process tags (Self-Tagging) and extract metadata
+    const processed = await processResponse(rawReply, {
+      tenant_id,
+      userMessage: lastUserMessage,
+      contact_id,
+      phone,
+      name: contact?.name,
+    });
+
+    const cleanReply = processed.message;
+
+    
+
+    return cleanReply;
+  } catch (err) {
+    throw err;
+  }
+};

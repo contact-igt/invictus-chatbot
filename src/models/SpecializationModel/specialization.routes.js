@@ -1,0 +1,104 @@
+import express from "express";
+import {
+    createSpecializationController,
+    getAllSpecializationsController,
+    getSpecializationByIdController,
+    updateSpecializationController,
+    toggleActiveStatusController,
+} from "./specialization.controller.js";
+import {
+    softDeleteSpecializationController,
+    hardDeleteSpecializationController,
+    restoreSpecializationController,
+    getDeletedSpecializationsController,
+} from "./specialization.lifecycle.js";
+import { authenticate, authorize } from "../../middlewares/auth/authMiddlewares.js";
+import { checkFeatureAccess } from "../../middlewares/feature/checkFeatureAccess.js";
+
+const Router = express.Router();
+const tenantRoles = ["tenant_admin", "staff"];
+const managerRoles = ["tenant_admin", "staff"];
+
+// List all specializations (all roles can view)
+Router.get(
+    "/specializations",
+    authenticate,
+    authorize({ user_type: "tenant", roles: tenantRoles }),
+    checkFeatureAccess("specialization"),
+    getAllSpecializationsController,
+);
+
+// Get deleted specializations (admin + staff)
+Router.get(
+    "/specializations/deleted",
+    authenticate,
+    authorize({ user_type: "tenant", roles: managerRoles }),
+    checkFeatureAccess("specialization"),
+    getDeletedSpecializationsController,
+);
+
+// Restore specialization (admin only)
+Router.patch(
+    "/specialization/:id/restore",
+    authenticate,
+    authorize({ user_type: "tenant", roles: ["tenant_admin"] }),
+    checkFeatureAccess("specialization"),
+    restoreSpecializationController,
+);
+
+// Permanent delete specialization (admin only)
+Router.delete(
+    "/specialization/:id/permanent",
+    authenticate,
+    authorize({ user_type: "tenant", roles: ["tenant_admin"] }),
+    checkFeatureAccess("specialization"),
+    hardDeleteSpecializationController,
+);
+
+// Get specialization by ID
+Router.get(
+    "/specialization/:id",
+    authenticate,
+    authorize({ user_type: "tenant", roles: tenantRoles }),
+    checkFeatureAccess("specialization"),
+    getSpecializationByIdController,
+);
+
+// Create specialization (admin + staff)
+Router.post(
+    "/specialization",
+    authenticate,
+    authorize({ user_type: "tenant", roles: managerRoles }),
+    checkFeatureAccess("specialization"),
+    createSpecializationController,
+);
+
+// Update specialization (admin + staff)
+Router.put(
+    "/specialization/:id",
+    authenticate,
+    authorize({ user_type: "tenant", roles: managerRoles }),
+    checkFeatureAccess("specialization"),
+    updateSpecializationController,
+);
+
+// Toggle active status (admin + staff)
+Router.patch(
+    "/specialization/:id/status",
+    authenticate,
+    authorize({ user_type: "tenant", roles: managerRoles }),
+    checkFeatureAccess("specialization"),
+    toggleActiveStatusController,
+);
+
+// Delete specialization (soft — admin only)
+Router.delete(
+    "/specialization/:id",
+    authenticate,
+    authorize({ user_type: "tenant", roles: ["tenant_admin"] }),
+    checkFeatureAccess("specialization"),
+    softDeleteSpecializationController,
+);
+
+export default Router;
+

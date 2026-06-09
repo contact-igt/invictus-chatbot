@@ -1,0 +1,199 @@
+import express from "express";
+import {
+  createTenantController,
+  deleteTenantController,
+  softDeleteTenantController,
+  getAllTenantController,
+  getTenantByIdController,
+  updateTenantController,
+  resendTenantInvitationController,
+  updateTenantStatusController,
+  getTenantWebhookStatusController,
+  getDeletedTenantListController,
+  restoreTenantController,
+  getTenantInvitationListController,
+  getOnboardedTenantListController,
+  getTenantSettingsController,
+  updateTenantAiSettingsController,
+  validateOpenAIKeyController,
+  getAvailableTimezonesController
+} from "./tenant.controller.js";
+import {
+  authenticate,
+  authorize,
+} from "../../middlewares/auth/authMiddlewares.js";
+
+const Router = express.Router();
+
+Router.get(
+  "/invitations",
+  authenticate,
+  authorize({
+    user_type: "management",
+    roles: ["platform_admin", "super_admin"],
+  }),
+  getTenantInvitationListController,
+);
+
+Router.get(
+  "/onboarded",
+  authenticate,
+  authorize({
+    user_type: "management",
+    roles: ["platform_admin", "super_admin"],
+  }),
+  getOnboardedTenantListController,
+);
+
+Router.get(
+  "/deleted-list",
+  authenticate,
+  authorize({
+    user_type: "management",
+    roles: ["platform_admin", "super_admin"],
+  }),
+  getDeletedTenantListController,
+);
+
+Router.post(
+  "/",
+  authenticate,
+  authorize({
+    user_type: "management",
+    roles: ["platform_admin", "super_admin"],
+  }),
+  createTenantController,
+);
+
+Router.post(
+  "/validate-openai-key",
+  authenticate,
+  authorize({
+    user_type: "management",
+    roles: ["platform_admin", "super_admin"],
+  }),
+  validateOpenAIKeyController,
+);
+
+Router.get(
+  "/list",
+  authenticate,
+  authorize({
+    user_type: "management",
+    roles: ["platform_admin", "super_admin"],
+  }),
+  getAllTenantController,
+);
+
+Router.put(
+  "/:id/status",
+  authenticate,
+  authorize({
+    user_type: "management",
+    roles: ["platform_admin", "super_admin"],
+  }),
+  updateTenantStatusController,
+);
+
+Router.delete(
+  "/:id/soft",
+  authenticate,
+  authorize({
+    user_type: "management",
+    roles: ["platform_admin", "super_admin"],
+  }),
+  softDeleteTenantController,
+);
+
+Router.post(
+  "/:id/restore",
+  authenticate,
+  authorize({
+    user_type: "management",
+    roles: ["platform_admin", "super_admin"],
+  }),
+  restoreTenantController,
+);
+
+Router.delete(
+  "/:id/permanent",
+  authenticate,
+  authorize({
+    user_type: "management",
+    roles: ["super_admin"],
+  }),
+  deleteTenantController,
+);
+
+Router.post(
+  "/:tenant_user_id/resend-invite",
+  authenticate,
+  authorize({
+    user_type: "management",
+    roles: ["platform_admin", "super_admin"],
+  }),
+  resendTenantInvitationController,
+);
+
+Router.get(
+  "/:id/webhook-status",
+  authenticate,
+  authorize({
+    user_type: "tenant",
+    roles: ["tenant_admin" , "staff"],
+  }),
+  getTenantWebhookStatusController,
+);
+
+Router.get(
+  "/settings/general",
+  authenticate,
+  authorize({
+    user_type: "tenant",
+    roles: ["tenant_admin", "staff" , ],
+  }),
+  getTenantSettingsController,
+);
+
+Router.patch(
+  "/settings/ai",
+  authenticate,
+  authorize({
+    user_type: "tenant",
+    roles: ["tenant_admin"],
+  }),
+  updateTenantAiSettingsController,
+);
+
+// Get available timezones for configuration
+Router.get(
+  "/settings/timezones",
+  authenticate,
+  authorize({
+    user_type: "tenant",
+    roles: ["tenant_admin", "staff" , ],
+  }),
+  getAvailableTimezonesController,
+);
+
+Router.get(
+  "/:id",
+  authenticate,
+  authorize({
+    user_type: "management",
+    roles: ["platform_admin", "super_admin"],
+  }),
+  getTenantByIdController,
+);
+
+Router.put(
+  "/:id",
+  authenticate,
+  authorize({
+    user_type: "management",
+    roles: ["platform_admin", "super_admin"],
+  }),
+  updateTenantController,
+);
+
+export default Router;

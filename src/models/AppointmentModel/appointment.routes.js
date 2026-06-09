@@ -1,0 +1,208 @@
+import express from "express";
+import * as AppointmentController from "./appointment.controller.js";
+import {
+  softDeleteAppointmentController,
+  hardDeleteAppointmentController,
+  restoreAppointmentController,
+  getDeletedAppointmentsController,
+} from "./appointment.lifecycle.js";
+import {
+  authenticate,
+  authorize,
+} from "../../middlewares/auth/authMiddlewares.js";
+import { checkFeatureAccess } from "../../middlewares/feature/checkFeatureAccess.js";
+
+const router = express.Router();
+const tenantRoles = ["tenant_admin", "staff"];
+
+const tenantAuth = [
+  authenticate,
+  authorize({ user_type: "tenant", roles: tenantRoles }),
+];
+
+router.post(
+  "/appointment",
+  ...tenantAuth,
+  checkFeatureAccess("appointments"),
+  AppointmentController.createAppointment,
+);
+router.get(
+  "/appointment",
+  ...tenantAuth,
+  checkFeatureAccess("appointments"),
+  AppointmentController.getAllAppointments,
+);
+router.get(
+  "/appointment/contact/:contact_id",
+  ...tenantAuth,
+  checkFeatureAccess("appointments"),
+  AppointmentController.getContactAppointments,
+);
+router.patch(
+  "/appointment/status/:appointment_id",
+  ...tenantAuth,
+  checkFeatureAccess("appointments"),
+  AppointmentController.updateStatus,
+);
+router.post(
+  "/appointment-outcome",
+  ...tenantAuth,
+  checkFeatureAccess("appointments"),
+  AppointmentController.createAppointmentOutcome,
+);
+router.post(
+  "/appointment/complete-with-outcome",
+  ...tenantAuth,
+  checkFeatureAccess("appointments"),
+  AppointmentController.completeWithOutcome,
+);
+router.post(
+  "/complete-with-outcome",
+  ...tenantAuth,
+  checkFeatureAccess("appointments"),
+  AppointmentController.completeWithOutcome,
+);
+router.post(
+  "/appointment/noshow-with-action",
+  ...tenantAuth,
+  checkFeatureAccess("appointments"),
+  AppointmentController.noShowWithAction,
+);
+router.post(
+  "/noshow-with-action",
+  ...tenantAuth,
+  checkFeatureAccess("appointments"),
+  AppointmentController.noShowWithAction,
+);
+router.get(
+  "/appointment/availability",
+  ...tenantAuth,
+  checkFeatureAccess("appointments"),
+  AppointmentController.checkAvailability,
+);
+router.get(
+  "/appointment/slots",
+  ...tenantAuth,
+  checkFeatureAccess("appointments"),
+  AppointmentController.getAvailableSlots,
+);
+router.put(
+  "/appointment/:appointment_id",
+  ...tenantAuth,
+  checkFeatureAccess("appointments"),
+  AppointmentController.updateAppointment,
+);
+router.get(
+  "/appointment/:appointment_id/reminders",
+  ...tenantAuth,
+  checkFeatureAccess("appointments"),
+  AppointmentController.getAppointmentReminders,
+);
+router.get(
+  "/reminders",
+  ...tenantAuth,
+  checkFeatureAccess("appointments"),
+  AppointmentController.getAppointmentRemindersListController,
+);
+router.get(
+  "/reminders/:id",
+  ...tenantAuth,
+  checkFeatureAccess("appointments"),
+  AppointmentController.getAppointmentReminderDetailController,
+);
+router.put(
+  "/appointment/:appointment_id/reminders",
+  ...tenantAuth,
+  checkFeatureAccess("appointments"),
+  AppointmentController.updateAppointmentReminders,
+);
+router.delete(
+  "/appointment/:appointment_id",
+  ...tenantAuth,
+  checkFeatureAccess("appointments"),
+  AppointmentController.deleteAppointment,
+);
+router.delete(
+  "/appointment/:appointment_id/soft",
+  ...tenantAuth,
+  checkFeatureAccess("appointments"),
+  softDeleteAppointmentController,
+);
+
+router.delete(
+  "/appointment/:appointment_id/permanent",
+  authenticate,
+  authorize({ user_type: "tenant", roles: ["tenant_admin"] }),
+  checkFeatureAccess("appointments"),
+  hardDeleteAppointmentController,
+);
+
+router.post(
+  "/appointment/:appointment_id/restore",
+  authenticate,
+  authorize({ user_type: "tenant", roles: ["tenant_admin"] }),
+  checkFeatureAccess("appointments"),
+  restoreAppointmentController,
+);
+
+router.get(
+  "/appointments/deleted/list",
+  ...tenantAuth,
+  checkFeatureAccess("appointments"),
+  getDeletedAppointmentsController,
+);
+
+// ── Appointment Reminder Rules ────────────────────────────────────────────
+router.get(
+  "/appointment-reminder-rules",
+  ...tenantAuth,
+  checkFeatureAccess("appointments"),
+  AppointmentController.getReminderRules,
+);
+router.put(
+  "/appointment-reminder-rules",
+  ...tenantAuth,
+  checkFeatureAccess("appointments"),
+  AppointmentController.upsertReminderRules,
+);
+
+// ── Follow-up Hub ──────────────────────────────────────────────────────────
+router.get(
+  "/followup-hub",
+  ...tenantAuth,
+  checkFeatureAccess("appointments"),
+  AppointmentController.getFollowUpHub,
+);
+router.get(
+  "/followup-hub/pending-count",
+  ...tenantAuth,
+  checkFeatureAccess("appointments"),
+  AppointmentController.getPendingFollowUpCount,
+);
+router.get(
+  "/followup-hub/:id",
+  ...tenantAuth,
+  checkFeatureAccess("appointments"),
+  AppointmentController.getFollowUpHubDetail,
+);
+router.patch(
+  "/followup-hub/:id/retry",
+  ...tenantAuth,
+  checkFeatureAccess("appointments"),
+  AppointmentController.retryFollowUp,
+);
+router.patch(
+  "/followup-hub/:id/reschedule",
+  ...tenantAuth,
+  checkFeatureAccess("appointments"),
+  AppointmentController.rescheduleFollowUp,
+);
+router.post(
+  "/followup-hub/:id/send-now",
+  ...tenantAuth,
+  checkFeatureAccess("appointments"),
+  AppointmentController.sendNowFollowUp,
+);
+
+export default router;
+

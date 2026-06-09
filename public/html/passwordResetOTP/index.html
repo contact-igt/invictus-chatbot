@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <title>Password Reset OTP</title>
+    <style>
+        body {
+            background: radial-gradient(circle at top left, #0b1f3a, #020617);
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 40px 0;
+            color: #ffffff;
+        }
+
+        .card {
+            max-width: 520px;
+            margin: auto;
+            background: #0b1220;
+            border-radius: 14px;
+            padding: 32px;
+            box-shadow: 0 0 40px rgba(0, 0, 0, 0.6);
+            text-align: center;
+        }
+
+        .logo {
+            font-size: 26px;
+            font-weight: 700;
+            color: #10b981;
+            margin-bottom: 8px;
+        }
+
+        .subtitle {
+            font-size: 13px;
+            color: #94a3b8;
+            margin-bottom: 24px;
+        }
+
+        h2 {
+            color: #34d399;
+            margin-bottom: 12px;
+        }
+
+        p {
+            color: #cbd5e1;
+            font-size: 15px;
+            line-height: 1.6;
+        }
+
+        .otp-box {
+            margin: 28px 0;
+            background: #020617;
+            border-radius: 10px;
+            padding: 24px;
+        }
+
+        .otp-code {
+            font-size: 36px;
+            font-weight: 700;
+            color: #10b981;
+            letter-spacing: 8px;
+            margin: 12px 0;
+        }
+
+        .expiry {
+            margin-top: 20px;
+            font-size: 13px;
+            color: #94a3b8;
+        }
+
+        .footer {
+            margin-top: 28px;
+            font-size: 12px;
+            color: #64748b;
+        }
+
+        .security {
+            margin-top: 20px;
+            font-size: 12px;
+            color: #f87171;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="card">
+        <div class="logo">WhatsNexus</div>
+        <div class="subtitle">AI Receptionist Hub</div>
+
+        <h2>Password Reset Request</h2>
+
+        <p>
+            Hello <strong>{{email}}</strong>,<br /><br />
+            We received a request to reset your password. Use the OTP below to proceed:
+        </p>
+
+        <div class="otp-box">
+            <div class="otp-code">{{otp}}</div>
+        </div>
+
+        <p class="expiry">
+            This code will expire in <strong>10 minutes</strong>.
+        </p>
+
+        <p class="security">
+            If you didn't request this, please ignore this email or contact support if you're concerned about account
+            security.
+        </p>
+
+        <div class="footer">
+            © 2026 WhatsNexus · Powered by Invictus Global Tech
+        </div>
+    </div>
+</body>
+
+</html>

@@ -1,0 +1,937 @@
+import bcrypt from "bcrypt";
+import {
+  generateAccessToken,
+  generateRefreshToken,
+} from "../../middlewares/auth/authMiddlewares.js";
+import { generateReadableIdFromLast } from "../../utils/helpers/generateReadableIdFromLast.js";
+import { missingFieldsChecker } from "../../utils/helpers/missingFields.js";
+import {
+  updateManagementService,
+  softDeleteManagementService,
+  deleteManagmentByIdService,
+  updateManagementPasswordService,
+  findManagementByEmailService,
+  findManagementByEmailOrMobileService,
+  registerManagementService,
+  loginManagementService,
+  getAllManagementAdminService,
+  getAllManagementService,
+  getManagementByIdService,
+  getDeletedManagementListService,
+  restoreManagementService,
+  getPricingRulesService,
+  createPricingRuleService,
+  updatePricingRuleService,
+  deletePricingRuleService,
+  getAiPricingRulesService,
+  createAiPricingRuleService,
+  updateAiPricingRuleService,
+  deleteAiPricingRuleService,
+} from "./management.service.js";
+import db from "../../database/index.js";
+import { tableNames } from "../../database/tableName.js";
+import { generatePassword } from "../../utils/helpers/generatePassword.js";
+import { getTemplate } from "../../utils/email/templateLoader.js";
+import { sendEmail } from "../../utils/email/emailService.js";
+import {
+  normalizeMobile,
+  cleanCountryCode,
+} from "../../utils/helpers/normalizeMobile.js";
+import {
+  generateOTPService,
+  verifyOTPService,
+  checkOTPVerificationService,
+} from "../OtpVerificationModel/otpverification.service.js";
+import { DEFAULT_USD_TO_INR } from "../../config/billing.config.js";
+import {
+  getUserPreferencesService,
+  upsertUserPreferencesService,
+} from "../UserPreferencesModel/userPreferences.service.js";
+
+export const registerManagementController = async (req, res) => {
+  try {
+    const { title, username, email, country_code, mobile, role } = req.body;
+
+    const requiredFields = { username, email, country_code, mobile, role };
+    const missing = await missingFieldsChecker(requiredFields);
+
+    if (missing.length) {
+      return res.status(400).send({
+        message: `Missing fields: ${missing.join(", ")}`,
+      });
+    }
+
+    if (!["platform_admin", "super_admin"].includes(role)) {
+      return res.status(403).send({
+        message: "Invalid management role",
+      });
+    }
+
+    const trimmedEmail = email?.trim()?.toLowerCase();
+    const normalizedMobile = normalizeMobile(country_code, mobile);
+    const cleanedCC = country_code ? cleanCountryCode(country_code) : null;
+
+    const existingMg = await findManagementByEmailOrMobileService(
+      trimmedEmail,
+      normalizedMobile,
+    );
+
+    if (existingMg) {
+      const field = existingMg.email === trimmedEmail ? "Email" : "Mobile";
+      return res.status(400).send({
+        message: `${field} already exists in Management records`,
+      });
+    }
+
+    const management_id = await generateReadableIdFromLast(
+      tableNames.MANAGEMENT,
+      "management_id",
+      "MG",
+    );
+
+    const usePassword = await generatePassword();
+    const cleanPassword = usePassword?.password?.trim();
+    const hashedPassword = await bcrypt.hash(cleanPassword, 10);
+
+    await registerManagementService(
+      management_id,
+      title || null,
+      username,
+      trimmedEmail,
+      cleanedCC,
+      normalizedMobile || null,
+      hashedPassword,
+      role,
+    );
+
+    const template = getTemplate("managementInvite");
+
+    const emailHtml = template({
+      admin_name: username,
+      admin_role: role,
+      admin_email: trimmedEmail,
+      admin_password: cleanPassword,
+    });
+
+    await sendEmail({
+      to: email,
+      subject: `You're invited to manage WhatsNexus`,
+      html: emailHtml,
+    });
+
+    return res.status(200).send({
+      message: "Management user created successfully",
+    });
+  } catch (err) {
+    if (err.original?.code === "ER_DUP_ENTRY") {
+      return res.status(400).send({
+        message: "This email or mobile number is already registered.",
+      });
+    }
+
+    return res
+      .status(500)
+      .send({ message: "An internal server error occurred." });
+  }
+};
+
+export const loginManagementController = async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    if (!email || !password) {
+      return res.status(400).send({
+        message: "Email and password are required",
+      });
+    }
+
+    const trimmedEmail = email?.trim()?.toLowerCase();
+    const trimmedPassword = password?.trim();
+
+    const user = await loginManagementService(trimmedEmail);
+
+    if (!user) {
+      return res.status(401).send({
+        message: "Invalid email or password",
+      });
+    }
+
+    if (user.status !== "active") {
+      return res.status(403).send({
+        message: "Your account is inactive. Please contact administrator.",
+      });
+    }
+
+    const isMatch = await bcrypt.compare(trimmedPassword, user.password);
+
+    if (!isMatch) {
+      return res.status(401).send({
+        message: "Invalid email or password",
+      });
+    }
+
+    const tokenPayload = {
+      id: user.id,
+      unique_id: user.management_id,
+      user_type: "management",
+      tenant_id: null,
+      role: user.role,
+    };
+
+    const userDetails = { ...user, user_type: "management" };
+    delete userDetails.password;
+
+    const userPrefs = await getUserPreferencesService(
+      user.management_id,
+      "management",
+    );
+    userDetails.preferences = { theme: userPrefs?.theme || "light" };
+
+    return res.status(200).send({
+      message: "Login successful",
+      user: userDetails,
+      tokens: {
+        accessToken: generateAccessToken(tokenPayload),
+        refreshToken: generateRefreshToken(tokenPayload),
+      },
+    });
+  } catch (err) {
+    return res.status(500).send({ message: err?.message });
+  }
+};
+
+export const getManagementController = async (req, res) => {
+  try {
+    if (
+      req.user.user_type === "management" &&
+      req.user.role === "platform_admin"
+    ) {
+      const data = await getAllManagementAdminService(req.user.role);
+      return res.status(200).send({
+        message: "success",
+        data,
+      });
+    } else {
+      const data = await getAllManagementService();
+
+      return res.status(200).send({
+        message: "success",
+        data,
+      });
+    }
+  } catch (err) {
+    return res.status(500).send({ message: err.message });
+  }
+};
+
+export const getAllManagementController = async (req, res) => {
+  try {
+    const response = await getAllManagementService();
+
+    return res.status(200).send({
+      message: "Management users fetched successfully",
+      data: response.users,
+    });
+  } catch (err) {
+    return res.status(500).send({
+      message: "An internal server error occurred.",
+    });
+  }
+};
+
+export const getManagementByIdController = async (req, res) => {
+  try {
+    const data = await getManagementByIdService(req.params.id);
+
+    return res.status(200).send({
+      message: "Management user fetched successfully",
+      data,
+    });
+  } catch (err) {
+    return res
+      .status(500)
+      .send({ message: "An internal server error occurred." });
+  }
+};
+
+export const getLoggedManagementController = async (req, res) => {
+  try {
+    const { unique_id } = req.user;
+
+    if (!unique_id) {
+      return res.status(400).send({
+        message: "Management ID not found in session",
+      });
+    }
+
+    const data = await getManagementByIdService(unique_id);
+
+    if (!data) {
+      return res.status(404).send({
+        message: "Management user not found",
+      });
+    }
+
+    const userDetails = { ...data, user_type: "management" };
+    delete userDetails.password;
+
+    const userPrefs = await getUserPreferencesService(unique_id, "management");
+    userDetails.preferences = { theme: userPrefs?.theme || "light" };
+
+    return res.status(200).send({
+      message: "Logged-in management profile fetched successfully",
+      data: userDetails,
+    });
+  } catch (err) {
+    return res.status(500).send({ message: err.message });
+  }
+};
+
+export const getLoggedManagementPreferencesController = async (req, res) => {
+  try {
+    const { unique_id } = req.user;
+
+    if (!unique_id) {
+      return res.status(400).send({
+        message: "Management ID not found in session",
+      });
+    }
+
+    const userPrefs = await getUserPreferencesService(unique_id, "management");
+
+    return res.status(200).send({
+      message: "Management preferences fetched successfully",
+      data: {
+        theme: userPrefs?.theme || "light",
+      },
+    });
+  } catch (err) {
+    return res.status(500).send({ message: err.message });
+  }
+};
+
+export const updateLoggedManagementPreferencesController = async (req, res) => {
+  try {
+    const { unique_id } = req.user;
+    const { preferences } = req.body;
+
+    if (!unique_id) {
+      return res.status(400).send({
+        message: "Management ID not found in session",
+      });
+    }
+
+    if (!preferences || typeof preferences !== "object") {
+      return res.status(400).send({
+        message: "Preferences payload is required",
+      });
+    }
+
+    await upsertUserPreferencesService(
+      unique_id,
+      null,
+      preferences,
+      "management",
+    );
+
+    const updatedPrefs = await getUserPreferencesService(unique_id, "management");
+
+    return res.status(200).send({
+      message: "Management preferences updated successfully",
+      data: {
+        theme: updatedPrefs?.theme || "light",
+      },
+    });
+  } catch (err) {
+    return res.status(500).send({ message: err.message });
+  }
+};
+
+export const updateManagementController = async (req, res) => {
+  try {
+    const loggedInUser = req.user;
+    const targetUserId = req.params.id;
+
+    const { title, username, country_code, mobile, profile, preferences } =
+      req.body;
+
+    if (loggedInUser.role === "platform_admin") {
+      if (targetUserId !== loggedInUser.unique_id) {
+        return res.status(403).send({
+          message: "You can update only your own profile",
+        });
+      }
+
+      if (req.body.role || req.body.status) {
+        return res.status(403).send({
+          message: "You do not have permission to change role or status",
+        });
+      }
+    }
+
+    // Prevent super_admin from changing another super_admin's role or status
+    if (
+      loggedInUser.role === "super_admin" &&
+      targetUserId !== loggedInUser.unique_id
+    ) {
+      if (req.body.role || req.body.status) {
+        const targetUser = await getManagementByIdService(targetUserId);
+        if (targetUser && targetUser.role === "super_admin") {
+          return res.status(403).send({
+            message: "Cannot change role or status of another super admin",
+          });
+        }
+      }
+    }
+
+    if (preferences && targetUserId !== loggedInUser.unique_id) {
+      return res.status(403).send({
+        message: "You can update preferences only for your own account",
+      });
+    }
+
+    const cleanedCC = country_code ? cleanCountryCode(country_code) : null;
+    const hasProfileUpdates = Boolean(
+      title ||
+        username ||
+        country_code ||
+        mobile ||
+        profile ||
+        (loggedInUser.role === "super_admin" && req.body.role) ||
+        (loggedInUser.role === "super_admin" && req.body.status),
+    );
+
+    if (hasProfileUpdates) {
+      await updateManagementService(
+        targetUserId,
+        title,
+        username,
+        cleanedCC,
+        mobile ? normalizeMobile(cleanedCC, mobile) : null,
+        profile,
+        loggedInUser.role === "super_admin" && req.body.role
+          ? req.body.role
+          : null,
+        loggedInUser.role === "super_admin" && req.body.status
+          ? req.body.status
+          : null,
+      );
+    }
+
+    if (preferences && typeof preferences === "object") {
+      await upsertUserPreferencesService(
+        targetUserId,
+        null,
+        preferences,
+        "management",
+      );
+    }
+
+    const updatedUser = await getManagementByIdService(targetUserId);
+    if (updatedUser) {
+      delete updatedUser.password;
+      const updatedPrefs = await getUserPreferencesService(
+        targetUserId,
+        "management",
+      );
+      updatedUser.preferences = { theme: updatedPrefs?.theme || "light" };
+    }
+
+    return res.status(200).send({
+      message: "Management profile updated successfully",
+      data: updatedUser ? { ...updatedUser, user_type: "management" } : null,
+    });
+  } catch (err) {
+    if (err.original?.code === "ER_DUP_ENTRY") {
+      return res.status(400).send({
+        message: "Email or mobile already exists",
+      });
+    }
+
+    return res.status(500).send({ message: err.message });
+  }
+};
+
+export const softDeleteManagementController = async (req, res) => {
+  const management_id = req.params.id;
+
+  if (!management_id) {
+    return res.status(400).send({
+      message: "Management id invalid",
+    });
+  }
+
+  // Prevent self-deletion
+  if (management_id === req.user.unique_id) {
+    return res.status(403).send({
+      message: "You cannot delete your own account",
+    });
+  }
+
+  try {
+    await softDeleteManagementService(management_id);
+
+    return res.status(200).send({
+      message: "Deleted management successfully",
+    });
+  } catch (err) {
+    return res.status(500).send({ message: err.message });
+  }
+};
+
+export const getDeletedManagementListController = async (req, res) => {
+  try {
+    const data = await getDeletedManagementListService();
+    return res.status(200).send({
+      message: "Deleted management users fetched successfully",
+      data,
+    });
+  } catch (err) {
+    return res.status(500).send({ message: err.message });
+  }
+};
+
+export const restoreManagementController = async (req, res) => {
+  const management_id = req.params.id;
+
+  if (!management_id) {
+    return res.status(400).send({
+      message: "Management id invalid",
+    });
+  }
+
+  try {
+    await restoreManagementService(management_id);
+
+    return res.status(200).send({
+      message: "Management user restored successfully",
+    });
+  } catch (err) {
+    return res.status(500).send({ message: err.message });
+  }
+};
+
+export const deleteManagmentByIdController = async (req, res) => {
+  const management_id = req.params.id;
+
+  if (!management_id) {
+    return res.status(400).send({
+      message: "Management id invalid",
+    });
+  }
+
+  try {
+    await deleteManagmentByIdService(management_id);
+
+    return res.status(200).send({
+      message: "Permenantly deleted management successfully",
+    });
+  } catch (err) {
+    return res.status(500).send({ message: err.message });
+  }
+};
+
+export const forgotManagementPasswordController = async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) {
+      return res.status(400).send({ message: "Email is required" });
+    }
+
+    const trimmedEmail = email?.trim()?.toLowerCase();
+    const user = await loginManagementService(trimmedEmail);
+    if (!user) {
+      return res.status(400).send({
+        message: "Invalid email",
+      });
+    }
+
+    await generateOTPService(trimmedEmail, "management");
+
+    return res.status(200).send({
+      message: "OTP sent to your email",
+    });
+  } catch (err) {
+    return res.status(500).send({ message: err.message });
+  }
+};
+
+export const verifyManagementOTPController = async (req, res) => {
+  try {
+    const { email, otp } = req.body;
+    if (!email || !otp) {
+      return res.status(400).send({ message: "Email and OTP are required" });
+    }
+
+    const trimmedEmail = email?.trim()?.toLowerCase();
+    const verification = await verifyOTPService(
+      trimmedEmail,
+      otp,
+      "management",
+    );
+
+    if (!verification.valid) {
+      return res.status(400).send({ message: verification.message });
+    }
+
+    return res.status(200).send({
+      message: "OTP verified successfully",
+    });
+  } catch (err) {
+    return res.status(500).send({ message: err.message });
+  }
+};
+
+export const resetManagementPasswordController = async (req, res) => {
+  try {
+    const { email, new_password } = req.body;
+    if (!email || !new_password) {
+      return res
+        .status(400)
+        .send({ message: "Email and new password are required" });
+    }
+
+    const trimmedEmail = email?.trim()?.toLowerCase();
+    const trimmedPassword = new_password?.trim();
+
+    const isVerified = await checkOTPVerificationService(
+      trimmedEmail,
+      "management",
+    );
+    if (!isVerified) {
+      return res.status(400).send({
+        message: "Please verify OTP first or OTP session expired",
+      });
+    }
+
+    const user = await loginManagementService(trimmedEmail);
+    if (!user) {
+      return res.status(404).send({ message: "User not found" });
+    }
+
+    const hashedPassword = await bcrypt.hash(trimmedPassword, 10);
+    await updateManagementPasswordService(user.management_id, hashedPassword);
+
+    return res.status(200).send({
+      message: "Password reset successfully. Please login with new password.",
+    });
+  } catch (err) {
+    return res.status(500).send({ message: err.message });
+  }
+};
+
+// ─── Pricing Table CRUD Controllers ─────────────────────────────
+
+export const getPricingRulesController = async (req, res) => {
+  try {
+    const rules = await getPricingRulesService();
+    return res.status(200).json({ success: true, data: rules });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+export const createPricingRuleController = async (req, res) => {
+  try {
+    const { category, country, rate, markup_percent } = req.body;
+    if (!category || !country || rate === undefined) {
+      return res.status(400).json({
+        success: false,
+        message: "category, country, and rate are required",
+      });
+    }
+
+    const validCategories = [
+      "marketing",
+      "utility",
+      "authentication",
+      "service",
+    ];
+    if (!validCategories.includes(category)) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid category. Must be one of: ${validCategories.join(", ")}`,
+      });
+    }
+
+    const parsedRate = parseFloat(rate);
+    if (isNaN(parsedRate) || parsedRate < 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Rate must be a non-negative number",
+      });
+    }
+
+    // Service category can be 0 (free), others must be > 0
+    if (category !== "service" && parsedRate === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Rate must be greater than zero for non-service categories",
+      });
+    }
+
+    const parsedMarkup = parseFloat(markup_percent || 0);
+    if (isNaN(parsedMarkup) || parsedMarkup < 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Markup percentage must be a non-negative number",
+      });
+    }
+
+    if (!country.trim()) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Country code cannot be empty" });
+    }
+
+    await createPricingRuleService(
+      category,
+      country.trim(),
+      parsedRate,
+      parsedMarkup,
+    );
+    return res
+      .status(201)
+      .json({ success: true, message: "Pricing rule created" });
+  } catch (err) {
+    return res.status(400).json({ success: false, message: err.message });
+  }
+};
+
+export const updatePricingRuleController = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { rate, markup_percent } = req.body;
+
+    if (rate !== undefined && rate !== null) {
+      const parsedRate = parseFloat(rate);
+      if (isNaN(parsedRate) || parsedRate < 0) {
+        return res.status(400).json({
+          success: false,
+          message: "Rate must be a non-negative number",
+        });
+      }
+    }
+
+    if (markup_percent !== undefined && markup_percent !== null) {
+      const parsedMarkup = parseFloat(markup_percent);
+      if (isNaN(parsedMarkup) || parsedMarkup < 0) {
+        return res.status(400).json({
+          success: false,
+          message: "Markup percentage must be a non-negative number",
+        });
+      }
+    }
+
+    await updatePricingRuleService(id, rate, markup_percent);
+    return res
+      .status(200)
+      .json({ success: true, message: "Pricing rule updated" });
+  } catch (err) {
+    return res.status(400).json({ success: false, message: err.message });
+  }
+};
+
+export const deletePricingRuleController = async (req, res) => {
+  try {
+    const { id } = req.params;
+    await deletePricingRuleService(id);
+    return res
+      .status(200)
+      .json({ success: true, message: "Pricing rule deleted" });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// ─── AI Model Pricing Controllers ─────────────────────────────
+
+export const getAiPricingRulesController = async (req, res) => {
+  try {
+    const rules = await getAiPricingRulesService();
+    return res.status(200).json({ success: true, data: rules });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+export const createAiPricingRuleController = async (req, res) => {
+  try {
+    const {
+      model,
+      input_rate,
+      output_rate,
+      markup_percent,
+      usd_to_inr_rate,
+      description,
+      recommended_for,
+      category,
+    } = req.body;
+
+    if (!model || input_rate === undefined || output_rate === undefined) {
+      return res.status(400).json({
+        success: false,
+        message: "model, input_rate, and output_rate are required",
+      });
+    }
+
+    const trimmedModel = model.trim().toLowerCase();
+    if (!trimmedModel) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Model name cannot be empty" });
+    }
+
+    const parsedInputRate = parseFloat(input_rate);
+    const parsedOutputRate = parseFloat(output_rate);
+    if (isNaN(parsedInputRate) || parsedInputRate <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Input rate must be greater than zero",
+      });
+    }
+    if (isNaN(parsedOutputRate) || parsedOutputRate <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Output rate must be greater than zero",
+      });
+    }
+
+    const parsedMarkup = parseFloat(markup_percent || 0);
+    if (isNaN(parsedMarkup) || parsedMarkup < 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Markup must be a non-negative number",
+      });
+    }
+
+    const parsedExchangeRate = parseFloat(
+      usd_to_inr_rate || DEFAULT_USD_TO_INR,
+    );
+    if (isNaN(parsedExchangeRate) || parsedExchangeRate <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Exchange rate must be a positive number",
+      });
+    }
+
+    const VALID_RECOMMENDED = ["input", "output", "both"];
+    const VALID_CATEGORY = ["premium", "mid-tier", "budget", "reasoning"];
+    const finalRecommendedFor = VALID_RECOMMENDED.includes(recommended_for)
+      ? recommended_for
+      : "both";
+    const finalCategory = VALID_CATEGORY.includes(category)
+      ? category
+      : "mid-tier";
+
+    const rule = await createAiPricingRuleService(
+      trimmedModel,
+      parsedInputRate,
+      parsedOutputRate,
+      parsedMarkup,
+      parsedExchangeRate,
+      description || null,
+      finalRecommendedFor,
+      finalCategory,
+    );
+    return res
+      .status(201)
+      .json({ success: true, message: "AI pricing rule created", data: rule });
+  } catch (err) {
+    return res.status(400).json({ success: false, message: err.message });
+  }
+};
+
+export const updateAiPricingRuleController = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const {
+      input_rate,
+      output_rate,
+      markup_percent,
+      usd_to_inr_rate,
+      is_active,
+      description,
+      recommended_for,
+      category,
+    } = req.body;
+
+    if (input_rate !== undefined) {
+      const parsed = parseFloat(input_rate);
+      if (isNaN(parsed) || parsed < 0) {
+        return res.status(400).json({
+          success: false,
+          message: "Input rate must be a non-negative number",
+        });
+      }
+    }
+    if (output_rate !== undefined) {
+      const parsed = parseFloat(output_rate);
+      if (isNaN(parsed) || parsed < 0) {
+        return res.status(400).json({
+          success: false,
+          message: "Output rate must be a non-negative number",
+        });
+      }
+    }
+    if (markup_percent !== undefined) {
+      const parsed = parseFloat(markup_percent);
+      if (isNaN(parsed) || parsed < 0) {
+        return res.status(400).json({
+          success: false,
+          message: "Markup must be a non-negative number",
+        });
+      }
+    }
+    if (usd_to_inr_rate !== undefined) {
+      const parsed = parseFloat(usd_to_inr_rate);
+      if (isNaN(parsed) || parsed <= 0) {
+        return res.status(400).json({
+          success: false,
+          message: "Exchange rate must be a positive number",
+        });
+      }
+    }
+
+    const VALID_RECOMMENDED = ["input", "output", "both"];
+    const VALID_CATEGORY = ["premium", "mid-tier", "budget", "reasoning"];
+
+    const rule = await updateAiPricingRuleService(id, {
+      input_rate: input_rate !== undefined ? parseFloat(input_rate) : undefined,
+      output_rate:
+        output_rate !== undefined ? parseFloat(output_rate) : undefined,
+      markup_percent:
+        markup_percent !== undefined ? parseFloat(markup_percent) : undefined,
+      usd_to_inr_rate:
+        usd_to_inr_rate !== undefined ? parseFloat(usd_to_inr_rate) : undefined,
+      is_active,
+      description: description !== undefined ? description : undefined,
+      recommended_for:
+        recommended_for !== undefined &&
+        VALID_RECOMMENDED.includes(recommended_for)
+          ? recommended_for
+          : undefined,
+      category:
+        category !== undefined && VALID_CATEGORY.includes(category)
+          ? category
+          : undefined,
+    });
+    return res
+      .status(200)
+      .json({ success: true, message: "AI pricing rule updated", data: rule });
+  } catch (err) {
+    return res.status(400).json({ success: false, message: err.message });
+  }
+};
+
+export const deleteAiPricingRuleController = async (req, res) => {
+  try {
+    const { id } = req.params;
+    await deleteAiPricingRuleService(id);
+    return res
+      .status(200)
+      .json({ success: true, message: "AI pricing rule deleted" });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};

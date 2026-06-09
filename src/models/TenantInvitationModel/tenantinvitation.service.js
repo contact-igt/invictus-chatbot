@@ -1,0 +1,272 @@
+import db from "../../database/index.js";
+import { tableNames } from "../../database/tableName.js";
+import crypto from "crypto";
+import { getTemplate } from "../../utils/email/templateLoader.js";
+import { generateInviteToken } from "../../middlewares/auth/authMiddlewares.js";
+import { generateReadableIdFromLast } from "../../utils/helpers/generateReadableIdFromLast.js";
+import { sendEmail } from "../../utils/email/emailService.js";
+
+export const createTenantInvitationService = async (
+  invitation_id,
+  tenant_id,
+  tenant_user_id,
+  email,
+  token_hash,
+  invited_by,
+) => {
+  try {
+    const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000);
+
+    const query = `
+    INSERT INTO ${tableNames.TENANT_INVITATIONS} (
+      invitation_id,
+      tenant_id,
+      tenant_user_id,
+      email,
+      token_hash,
+      expires_at,
+      invited_at,
+      invited_by
+    )
+    VALUES (?, ?, ?, ?, ?, ?, NOW(), ?)
+  `;
+
+    const values = [
+      invitation_id,
+      tenant_id,
+      tenant_user_id,
+      email,
+      token_hash,
+      expiresAt,
+      invited_by,
+    ];
+
+    const [result] = await db.sequelize.query(query, {
+      replacements: values,
+    });
+
+    return result;
+  } catch (err) {
+    throw err;
+  }
+};
+
+export const getInvitationByTokenHashService = async (token_hash) => {
+  const query = `
+    SELECT *
+    FROM ${tableNames.TENANT_INVITATIONS}
+    WHERE token_hash = ?
+    LIMIT 1
+  `;
+
+  try {
+    const [rows] = await db.sequelize.query(query, {
+      replacements: [token_hash],
+    });
+
+    return rows[0];
+  } catch (err) {
+    throw err;
+  }
+};
+
+export const updateInvitationStatusService = async (invitation_id, status) => {
+  try {
+    const query = `
+    UPDATE ${tableNames.TENANT_INVITATIONS}
+    SET status = ?, updated_at = NOW()
+    WHERE invitation_id = ?
+  `;
+
+    const [result] = await db.sequelize.query(query, {
+      replacements: [status, invitation_id],
+    });
+
+    return result;
+  } catch (err) {
+    throw err;
+  }
+};
+
+/**
+ * Atomically transition invitation status — prevents race conditions.
+ * Returns affected row count. If 0, another request already transitioned it.
+ */
+export const atomicUpdateInvitationStatusService = async (
+  invitation_id,
+  fromStatus,
+  toStatus,
+) => {
+  try {
+    const query = `
+    UPDATE ${tableNames.TENANT_INVITATIONS}
+    SET status = ?, updated_at = NOW()
+    WHERE invitation_id = ? AND status = ?
+  `;
+
+    const [, affectedRows] = await db.sequelize.query(query, {
+      replacements: [toStatus, invitation_id, fromStatus],
+    });
+
+    return affectedRows;
+  } catch (err) {
+    throw err;
+  }
+};
+
+export const revokePreviousInvitationsService = async (tenant_user_id) => {
+  const query = `
+    UPDATE ${tableNames.TENANT_INVITATIONS}
+    SET status = 'revoked', updated_at = NOW()
+    WHERE tenant_user_id = ? AND status IN ('pending', 'accepted')
+  `;
+
+  try {
+    const [result] = await db.sequelize.query(query, {
+      replacements: [tenant_user_id],
+    });
+    return result;
+  } catch (err) {
+    throw err;
+  }
+};
+
+export const getLastTenantInvitationService = async (tenant_user_id) => {
+  const Query = `SELECT * FROM ${tableNames?.TENANT_INVITATIONS} WHERE tenant_user_id = ? ORDER BY created_at DESC LIMIT 1`;
+
+  try {
+    const values = [tenant_user_id];
+
+    const [result] = await db.sequelize.query(Query, { replacements: values });
+    return result[0];
+  } catch (err) {
+    throw err;
+  }
+};
+
+export const sendTenantInvitationService = async (
+  tenant_id,
+  tenant_user_id,
+  email,
+  name,
+  company_name,
+  invited_by,
+) => {
+  try {
+    const invitation_id = await generateReadableIdFromLast(
+      tableNames.TENANT_INVITATIONS,
+      "invitation_id",
+      "INV",
+    );
+
+    // Revoke any previous pending/accepted invites for this user
+    await revokePreviousInvitationsService(tenant_user_id);
+
+    const inviteToken = generateInviteToken({
+      tenant_id,
+      tenant_user_id,
+      email,
+    });
+
+    const tokenHash = crypto
+      .createHash("sha256")
+      .update(inviteToken)
+      .digest("hex");
+
+    await createTenantInvitationService(
+      invitation_id,
+      tenant_id,
+      tenant_user_id,
+      email,
+      tokenHash,
+      invited_by,
+    );
+
+    const inviteUrl = `${process.env.FRONTEND_URL}/account/activate?token=${inviteToken}`;
+
+    const template = getTemplate("tenantInvite");
+
+    const emailHtml = template({
+      name,
+      company_name,
+      invite_url: inviteUrl,
+      expiry_hours: 48,
+    });
+
+    await sendEmail({
+      to: email,
+      subject: `You're invited to manage ${company_name} on WhatsNexus`,
+      html: emailHtml,
+    });
+
+    return { invitation_id, inviteToken };
+  } catch (err) {
+    throw err;
+  }
+};
+export const sendTenantPasswordSetSuccessEmailService = async (
+  email,
+  name,
+  company_name,
+  tenant_id,
+  verify_token = null,
+) => {
+  try {
+    const loginUrl = `${process.env.FRONTEND_URL}/login`;
+    const webhookUrl = `${process.env.BACKEND_URL}/api/whatsapp/webhook/${tenant_id}`;
+    const metaVerifyToken = verify_token || process.env.META_VERIFY_TOKEN;
+    
+    const template = getTemplate("passwordSetSuccess");
+
+    const emailHtml = template({
+      name,
+      company_name,
+      login_url: loginUrl,
+      webhook_url: webhookUrl,
+      meta_verify_token: metaVerifyToken,
+    });
+
+    await sendEmail({
+      to: email,
+      subject: `Welcome to WhatsNexus - ${company_name} Setup Complete`,
+      html: emailHtml,
+    });
+
+    return true;
+  } catch (err) {
+    throw err;
+  }
+};
+
+export const sendTenantUserWelcomeEmailService = async (
+  email,
+  name,
+  company_name,
+  password,
+  role,
+) => {
+  try {
+    const loginUrl = `${process.env.FRONTEND_URL}/login`;
+
+    const template = getTemplate("tenantUserWelcome");
+
+    const emailHtml = template({
+      name,
+      company_name,
+      login_url: loginUrl,
+      email,
+      password,
+      role,
+    });
+
+    await sendEmail({
+      to: email,
+      subject: `Welcome to ${company_name} on WhatsNexus`,
+      html: emailHtml,
+    });
+
+    return true;
+  } catch (err) {
+    throw err;
+  }
+};
