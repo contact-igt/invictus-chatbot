@@ -21,4 +21,37 @@ const indexExists = async () => {
 
 const up = async () => {
   if (await indexExists()) {
-    
+    console.log(`[MIGRATION] ${INDEX} already exists on ${TABLE}.`);
+    return;
+  }
+  await db.sequelize.query(
+    `ALTER TABLE ${TABLE} ADD UNIQUE KEY ${INDEX} (message_id)`,
+  );
+  console.log(`[MIGRATION] Added ${INDEX} on ${TABLE}(message_id).`);
+};
+
+const down = async () => {
+  if (!(await indexExists())) {
+    console.log(`[MIGRATION] ${INDEX} does not exist on ${TABLE}.`);
+    return;
+  }
+  await db.sequelize.query(`ALTER TABLE ${TABLE} DROP INDEX ${INDEX}`);
+  console.log(`[MIGRATION] Dropped ${INDEX} from ${TABLE}.`);
+};
+
+const run = async () => {
+  const direction = process.argv[2] === "down" ? "down" : "up";
+  console.log(`[MIGRATION] Running ${direction.toUpperCase()} processed message unique index...`);
+  try {
+    if (direction === "down") await down();
+    else await up();
+    console.log("[MIGRATION] Done.");
+  } catch (err) {
+    console.error("[MIGRATION] FAILED:", err.message);
+    process.exit(1);
+  } finally {
+    await db.sequelize.close();
+  }
+};
+
+run();

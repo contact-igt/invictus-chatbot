@@ -23,4 +23,38 @@ export const execute = async (payload, context) => {
     const detectedSource = payload.trim().toLowerCase();
 
     if (!VALID_SOURCES.includes(detectedSource)) {
-        
+        console.log(`[LEAD_SOURCE] Invalid source "${detectedSource}", skipping.`);
+        return;
+    }
+
+    try {
+        // Only update if current source is "none"
+        const lead = await getLeadByContactIdService(tenant_id, contact_id);
+
+        if (!lead) {
+            console.log("[LEAD_SOURCE] No lead found for contact, skipping.");
+            return;
+        }
+
+        if (lead.source !== "none") {
+            console.log(`[LEAD_SOURCE] Lead already has source "${lead.source}", skipping.`);
+            return;
+        }
+
+        await updateLeadStatusService(
+            tenant_id,
+            lead.lead_id,
+            null,       // status
+            null,       // heat_state
+            null,       // lead_stage
+            null,       // assigned_to
+            null,       // priority
+            detectedSource, // source
+            null        // internal_notes
+        );
+
+        console.log(`[LEAD_SOURCE] Updated lead ${lead.lead_id} source to "${detectedSource}"`);
+    } catch (error) {
+        console.error("[LEAD_SOURCE] Error updating lead source:", error.message);
+    }
+};

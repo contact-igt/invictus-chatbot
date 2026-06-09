@@ -25,4 +25,51 @@ export const generateTextEmbedding = async (text, tenant_id = null) => {
     throw new Error(`[EMBEDDING] API returned empty/invalid embedding vector for input: "${input.substring(0, 60)}"`);
   }
 
-  
+  console.log(`[EMBEDDING] Generated embedding: vector length ${embedding.length}`);
+  return embedding;
+};
+
+export const parseEmbedding = (rawEmbedding) => {
+  if (!rawEmbedding) return null;
+
+  let values = rawEmbedding;
+  if (typeof rawEmbedding === "string") {
+    try {
+      values = JSON.parse(rawEmbedding);
+    } catch (err) {
+      return null;
+    }
+  }
+
+  if (!Array.isArray(values) || values.length === 0) return null;
+
+  const parsed = values.map((value) => Number(value));
+  if (parsed.some((value) => Number.isNaN(value))) return null;
+
+  return parsed;
+};
+
+export const cosineSimilarity = (vectorA, vectorB) => {
+  if (!Array.isArray(vectorA) || !Array.isArray(vectorB)) return 0;
+  if (!vectorA.length || !vectorB.length) return 0;
+  if (vectorA.length !== vectorB.length) return 0;
+
+  let dot = 0;
+  let normA = 0;
+  let normB = 0;
+
+  for (let i = 0; i < vectorA.length; i += 1) {
+    const a = Number(vectorA[i]);
+    const b = Number(vectorB[i]);
+
+    if (Number.isNaN(a) || Number.isNaN(b)) return 0;
+
+    dot += a * b;
+    normA += a * a;
+    normB += b * b;
+  }
+
+  if (normA === 0 || normB === 0) return 0;
+
+  return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+};

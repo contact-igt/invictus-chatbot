@@ -114,4 +114,53 @@ export const syncFaqKnowledgeChunks = async (
       },
     );
     synced += 1;
-    
+    console.log(
+      `[FAQ-SYNC] Row ${row.id}: embedding OK (${embedding.length}d)`,
+    );
+  }
+
+  console.log(
+    `[FAQ-SYNC] tenant=${tenant_id} synced ${synced}/${rows.length} chunks`,
+  );
+};
+
+export const syncFaqKnowledgeChunksIfStale = async (
+  tenant_id,
+  source_id,
+  transaction = null,
+) => {
+  if (!tenant_id || !source_id) return;
+
+  const [[faqMeta]] = await db.sequelize.query(
+    `SELECT COUNT(*) AS active_faq_count,
+            MAX(COALESCE(updated_at, created_at)) AS latest_faq_update
+     FROM ${tableNames.FAQ_KNOWLEDGE_SOURCE}
+     WHERE tenant_id = ? AND source_id = ? AND is_active = true`,
+    { replacements: [tenant_id, source_id], transaction },
+  );
+
+  const [[chunkMeta]] = await db.sequelize.query(
+    `SELECT COUNT(*) AS chunk_count,
+            MAX(updated_at) AS latest_chunk_update
+     FROM ${tableNames.KNOWLEDGECHUNKS}
+     WHERE tenant_id = ? AND source_id = ?`,
+    { replacements: [tenant_id, source_id], transaction },
+  );
+
+  const activeFaqCount = Number(faqMeta?.active_faq_count || 0);
+  const chunkCount = Number(chunkMeta?.chunk_count || 0);
+
+  const latestFaqUpdate = faqMeta?.latest_faq_update
+    ? new Date(faqMeta.latest_faq_update).getTime()
+    : 0;
+  const latestChunkUpdate = chunkMeta?.latest_chunk_update
+    ? new Date(chunkMeta.latest_chunk_update).getTime()
+    : 0;
+
+  const isStale =
+    activeFaqCount !== chunkCount || latestChunkUpdate < latestFaqUpdate;
+
+  if (isStale) {
+    await syncFaqKnowledgeChunks(tenant_id, source_id, transaction);
+  }
+};

@@ -75,4 +75,95 @@ export const invalidateDomainSummary = async (tenantId) => {
       { replacements: [JSON.stringify(settings), tenantId] },
     );
 
-    
+    console.log(`[DOMAIN-CONTEXT] Cache invalidated for tenant ${tenantId}`);
+  } catch (err) {
+    console.error("[DOMAIN-CONTEXT] invalidateDomainSummary failed:", err.message);
+  }
+};
+
+// ──────────────────────────────────────────────────────────────────────────
+// Private helpers
+// ──────────────────────────────────────────────────────────────────────────
+
+const _readCachedSummary = async (tenantId) => {
+  const [rows] = await db.sequelize.query(
+    `SELECT ai_settings FROM ${tableNames.TENANTS} WHERE tenant_id = ? LIMIT 1`,
+    { replacements: [tenantId] },
+  );
+  if (!rows.length) return null;
+
+  let settings = {};
+  try {
+    settings =
+      typeof rows[0].ai_settings === "string"
+        ? JSON.parse(rows[0].ai_settings)
+        : rows[0].ai_settings || {};
+  } catch (_) {}
+
+  return settings.domain_summary || null;
+};
+
+const _buildSummary = async (tenantId) => {
+  // Tenant identity
+  const [tenantRows] = await db.sequelize.query(
+    `SELECT company_name, type FROM ${tableNames.TENANTS} WHERE tenant_id = ? LIMIT 1`,
+    { replacements: [tenantId] },
+  );
+
+  const companyName = tenantRows[0]?.company_name || "this business";
+  const tenantType = tenantRows[0]?.type || "organization";
+
+  // Active business instructions (first 500 chars)
+  const [promptRows] = await db.sequelize.query(
+    `SELECT prompt FROM ${tableNames.AIPROMPT}
+     WHERE tenant_id = ? AND is_active = true AND is_deleted = false
+     ORDER BY created_at DESC LIMIT 1`,
+    { replacements: [tenantId] },
+  );
+  const promptSnippet = promptRows[0]?.prompt?.substring(0, 500)?.trim() || "";
+
+  // Top 5 active knowledge source titles (what topics the business has documented)
+  const [sourceRows] = await db.sequelize.query(
+    `SELECT title FROM ${tableNames.KNOWLEDGESOURCE}
+     WHERE tenant_id = ? AND status = 'active' AND is_deleted = false
+     ORDER BY created_at DESC LIMIT 5`,
+    { replacements: [tenantId] },
+  );
+  const topicList = sourceRows.map((r) => r.title).join(", ");
+
+  // Build compact summary
+  const parts = [
+    `${companyName} is a ${tenantType}.`,
+  ];
+  if (topicList) {
+    parts.push(`Topics documented: ${topicList}.`);
+  }
+  if (promptSnippet) {
+    parts.push(`Business context: ${promptSnippet}`);
+  }
+
+  return parts.join(" ");
+};
+
+const _writeCachedSummary = async (tenantId, summary) => {
+  const [rows] = await db.sequelize.query(
+    `SELECT ai_settings FROM ${tableNames.TENANTS} WHERE tenant_id = ? LIMIT 1`,
+    { replacements: [tenantId] },
+  );
+  if (!rows.length) return;
+
+  let settings = {};
+  try {
+    settings =
+      typeof rows[0].ai_settings === "string"
+        ? JSON.parse(rows[0].ai_settings)
+        : rows[0].ai_settings || {};
+  } catch (_) {}
+
+  settings.domain_summary = summary;
+
+  await db.sequelize.query(
+    `UPDATE ${tableNames.TENANTS} SET ai_settings = ? WHERE tenant_id = ?`,
+    { replacements: [JSON.stringify(settings), tenantId] },
+  );
+};

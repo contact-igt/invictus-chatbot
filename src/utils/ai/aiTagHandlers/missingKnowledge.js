@@ -73,7 +73,7 @@ export const execute = async (tagPayload, context, cleanMessage) => {
   const message_db_id = context?.message_db_id || null; // Local database message ID
 
   if (!tenantId || !userMessage) {
-    
+    console.log("[MISSING-KNOWLEDGE] Skipping — missing tenant_id or userMessage");
     return;
   }
 
@@ -101,7 +101,95 @@ export const execute = async (tagPayload, context, cleanMessage) => {
 
     // Strict product rule: every missing-knowledge question should enter FAQ review.
     if (classification.category !== "valid_faq") {
-      
+      console.log(
+        `[FAQ-PIPELINE] Non-valid category (${classification.category}) — still queuing per strict policy`,
+      );
+    }
+
+    // Sanitize category to valid DB ENUM value
+    const safeCategory = sanitizeCategory(classification.category);
+
+    // ── Step 2: Semantic dedupe — merge similar FAQs ─────────────────────
+    const normalizedQ = classification.normalized_question || topic || userMessage.substring(0, 500);
+    faqTrace("[MISSING-KNOWLEDGE] Step 2 — generating embedding for incoming question", { normalizedQ: String(normalizedQ || "").substring(0, 80) });
+
+    let questionEmbedding = null;
+    try {
+      questionEmbedding = await generateTextEmbedding(userMessage, tenantId);
+      faqTrace("[MISSING-KNOWLEDGE] Embedding generated", { vectorLength: questionEmbedding?.length ?? 0 });
+    } catch (embErr) {
+      // Embedding failed — log as real error, do NOT silently skip to text-dedupe.
+      // Without an embedding we cannot do semantic matching, so fall through to new-card creation.
+      console.error(`[MISSING-KNOWLEDGE] ✗ Embedding generation FAILED:`, embErr.message);
+      faqTrace("[MISSING-KNOWLEDGE] ✗ Embedding FAILED — will create new card (no vector to compare)", { error: embErr.message });
+    }
+
+    // Guard: if embedding is null/empty, we CANNOT do semantic dedup
+    if (questionEmbedding && (!Array.isArray(questionEmbedding) || questionEmbedding.length === 0)) {
+      console.error(`[MISSING-KNOWLEDGE] ✗ Embedding returned non-null but invalid — treating as missing`);
+      questionEmbedding = null;
+    }
+
+    if (questionEmbedding) {
+      faqTrace("[MISSING-KNOWLEDGE] Running semantic similarity search", { vectorLength: questionEmbedding.length });
+
+      let dedupeResult;
+      try {
+        dedupeResult = await findSemanticDuplicateFaq(tenantId, questionEmbedding);
+      } catch (dedupeErr) {
+        console.error(`[MISSING-KNOWLEDGE] ✗ Semantic dedupe FAILED:`, dedupeErr.message);
+        faqTrace("[MISSING-KNOWLEDGE] ✗ Semantic dedupe threw error — will create new card", { error: dedupeErr.message });
+        dedupeResult = { match: null };
+      }
+
+      const { match } = dedupeResult;
+
+      if (match) {
+        // ═══ MATCH FOUND: same FAQ, increment count, do NOT create new card ═══
+        faqTrace("[MISSING-KNOWLEDGE] ✓ Semantic match — incrementing count", {
+          existingId: match.id,
+          similarity: match.similarity,
+          currentCount: match.ask_count,
+          question: match.question.substring(0, 80),
+        });
+
+        const variantQuestion = userMessage.substring(0, 500);
+        const variantSimilarity = Math.round(match.similarity * 100) / 100;
+        const variantMergedAt = new Date().toISOString();
+
+        // Safety: convert empty strings to null for wamid/phone
+        const safeWamid = messageId && messageId.trim() !== '' ? messageId : null;
+        const safePhone = phone && phone.trim() !== '' ? phone : null;
+
+        if (!safeWamid) {
+          console.warn('[FAQ Dedup] Merging duplicate without wamid:', {
+            question: userMessage.substring(0, 50),
+            match_id: match.id,
+            phone: safePhone || 'unknown'
+          });
+        }
+
+        faqTrace("[MISSING-KNOWLEDGE] Incrementing count for FAQ id", { id: match.id, newCount: match.ask_count + 1 });
+
+        const [, updateMeta] = await db.sequelize.query(
+          `UPDATE ${tableNames.FAQ_REVIEWS}
+           SET ask_count = ask_count + 1,
+               similar_questions = JSON_ARRAY_APPEND(
+                 COALESCE(similar_questions, JSON_ARRAY()),
+                 '$',
+                 JSON_OBJECT('question', ?, 'similarity', ?, 'merged_at', ?, 'wamid', ?, 'phone', ?)
+               ),
+               updated_at = NOW()
+           WHERE id = ? AND tenant_id = ?`,
+          { replacements: [variantQuestion, variantSimilarity, variantMergedAt, safeWamid, safePhone, match.id, tenantId] },
+        );
+
+        // Verify the update actually worked
+        const affectedRows = Number(updateMeta?.affectedRows ?? updateMeta ?? 0);
+        if (affectedRows === 0) {
+          const errMsg = `[MISSING-KNOWLEDGE] ✗ COUNT UPDATE FAILED — 0 rows affected for FAQ id ${match.id}, tenant ${tenantId}`;
+          console.error(errMsg);
+          faqTrace(errMsg, { id: match.id, tenantId });
           throw new Error(errMsg);
         }
 

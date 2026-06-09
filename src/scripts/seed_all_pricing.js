@@ -510,7 +510,7 @@ const AI_MODEL_PRICING = [
 // ============================================================
 
 const seedMetaTemplatePricing = async () => {
-  
+  console.log("\nðŸ“¦ Seeding Meta WhatsApp Template Pricing...\n");
   let added = 0;
   let skipped = 0;
 
@@ -522,4 +522,118 @@ const seedMetaTemplatePricing = async () => {
 
       if (!existing) {
         await db.PricingTable.create(rule);
-        
+        console.log(
+          `  âœ… Added: ${rule.category.padEnd(14)} | ${rule.country.padEnd(6)} | $${rule.rate.toFixed(4)}`,
+        );
+        added++;
+      } else {
+        // Update existing record to ensure markup is 10%
+        await existing.update({ rate: rule.rate, markup_percent: 10 });
+        console.log(
+          `  ðŸ”„ Updated: ${rule.category.padEnd(14)} | ${rule.country.padEnd(6)} | $${rule.rate.toFixed(4)}`,
+        );
+        skipped++;
+      }
+    } catch (error) {
+      console.error(
+        `  âŒ Error: ${rule.category} / ${rule.country}:`,
+        error.message,
+      );
+    }
+  }
+
+  console.log(
+    `\n  ðŸ“Š Meta Pricing Summary: ${added} added, ${skipped} updated`,
+  );
+};
+
+const seedAiModelPricing = async () => {
+  console.log("\nðŸ¤– Seeding AI Model Pricing...\n");
+  let added = 0;
+  let skipped = 0;
+
+  for (const model of AI_MODEL_PRICING) {
+    try {
+      const existing = await db.AiPricing.findOne({
+        where: { model: model.model },
+      });
+
+      if (!existing) {
+        await db.AiPricing.create(model);
+        console.log(
+          `  âœ… Added: ${model.model.padEnd(20)} | ${model.category.padEnd(9)} | Input: $${model.input_rate.toFixed(2)}/M | Output: $${model.output_rate.toFixed(2)}/M`,
+        );
+        added++;
+      } else {
+        // Update existing record to ensure markup is 10% and rates are current
+        await existing.update({
+          description: model.description,
+          recommended_for: model.recommended_for,
+          category: model.category,
+          input_rate: model.input_rate,
+          output_rate: model.output_rate,
+          markup_percent: DEFAULT_MARKUP_PERCENT,
+          usd_to_inr_rate: model.usd_to_inr_rate,
+          is_active: model.is_active,
+        });
+        console.log(
+          `  ðŸ”„ Updated: ${model.model.padEnd(20)} | ${model.category.padEnd(9)} | Input: $${model.input_rate.toFixed(2)}/M | Output: $${model.output_rate.toFixed(2)}/M`,
+        );
+        skipped++;
+      }
+    } catch (error) {
+      console.error(`  âŒ Error: ${model.model}:`, error.message);
+    }
+  }
+
+  console.log(`\n  ðŸ“Š AI Model Summary: ${added} added, ${skipped} updated`);
+};
+
+// ============================================================
+// MAIN EXECUTION
+// ============================================================
+
+const seedAllPricing = async () => {
+  console.log(
+    "â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•",
+  );
+  console.log("       MASTER PRICING SEED SCRIPT - 10% PLATFORM MARKUP");
+  console.log(
+    "â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•",
+  );
+
+  try {
+    console.log("\nðŸ”Œ Connecting to database...");
+    await db.sequelize.authenticate();
+    console.log("âœ… Database connected successfully!\n");
+
+    // Seed Meta Template Pricing
+    await seedMetaTemplatePricing();
+
+    // Seed AI Model Pricing
+    await seedAiModelPricing();
+
+    console.log(
+      "\nâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•",
+    );
+    console.log("       âœ… ALL PRICING DATA SEEDED SUCCESSFULLY!");
+    console.log(
+      "â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•",
+    );
+    console.log("\nðŸ“ Notes:");
+    console.log(
+      "   \u2022 All markup_percent values are set to 10 (10% platform markup)",
+    );
+    console.log("   â€¢ Super Admin can adjust markup via dashboard later");
+    console.log("   • USD to INR rate is set to 93.0 for AI models");
+    console.log("\n");
+
+    process.exit(0);
+  } catch (error) {
+    console.error("\nâŒ SEED FAILED:", error);
+    process.exit(1);
+  }
+};
+
+// Run the seed
+seedAllPricing();

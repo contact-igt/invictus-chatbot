@@ -113,4 +113,53 @@ export const processResponse = async (fullResponse, context) => {
   if (tagDetected && handlers[tagDetected]?.execute) {
     // Tag detected — handler will be executed separately by the caller
     // to ensure correct message ordering
-    
+    console.log(`[TAG-PROCESSOR] Detected tag: ${tagDetected}`);
+  }
+
+  return {
+    message: cleanMessage,
+    tagDetected,
+    tagPayload,
+  };
+};
+
+// Execute a tag handler — call this AFTER sending the AI reply to the user
+export const executeTagHandler = async (
+  tagDetected,
+  tagPayload,
+  context,
+  cleanMessage,
+) => {
+  if (!tagDetected) {
+    console.log("[TAG-HANDLER] No tag detected");
+    return;
+  }
+
+  if (!handlers[tagDetected]) {
+    console.error(`[TAG-HANDLER] Unknown tag: ${tagDetected}`);
+    return;
+  }
+
+  if (!handlers[tagDetected]?.execute) {
+    console.error(
+      `[TAG-HANDLER] Handler for ${tagDetected} has no execute method`,
+    );
+    return;
+  }
+
+  console.log(
+    `[TAG-HANDLER] Executing ${tagDetected} with payload: ${tagPayload?.substring(0, 200)}`,
+  );
+  console.log(`[TAG-HANDLER] Context:`, JSON.stringify(context));
+
+  try {
+    await handlers[tagDetected].execute(tagPayload, context, cleanMessage);
+    console.log(`[TAG-HANDLER] ${tagDetected} completed successfully`);
+  } catch (err) {
+    console.error(
+      `[TAG-HANDLER] Error executing ${tagDetected}:`,
+      err.message,
+      err.stack,
+    );
+  }
+};

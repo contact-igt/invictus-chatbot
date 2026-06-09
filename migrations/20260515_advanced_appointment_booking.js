@@ -88,4 +88,22 @@ const DOWN = `
 const run = async () => {
   const direction = process.argv[2] === "down" ? "down" : "up";
   const sql = direction === "down" ? DOWN : UP;
-  
+  console.log(`[MIGRATION] Running ${direction.toUpperCase()} advanced appointment booking...`);
+  try {
+    for (const statement of sql
+      .split(";")
+      .map((s) => s.trim())
+      .filter(Boolean)) {
+      await db.sequelize.query(statement);
+      console.log(`[MIGRATION] OK: ${statement.substring(0, 90)}...`);
+    }
+    console.log("[MIGRATION] Done.");
+  } catch (err) {
+    console.error("[MIGRATION] FAILED:", err.message);
+    process.exit(1);
+  } finally {
+    await db.sequelize.close();
+  }
+};
+
+run();

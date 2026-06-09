@@ -76,7 +76,32 @@ const hydrateMissingEmbeddings = async (rows, tenant_id) => {
         replacements: [JSON.stringify(generated), row.chunk_id, tenant_id],
       },
     );
-    
+    console.log(
+      `[KNOWLEDGE-BACKFILL] chunk ${row.chunk_id}: embedding backfilled OK (${generated.length}d)`,
+    );
+  }
+
+  return rows;
+};
+
+const fetchActiveCandidateChunks = async (tenant_id) => {
+  const baseQuery = `
+    SELECT kc.id AS chunk_id, kc.chunk_text, kc.embedding,
+           ks.id AS source_id, ks.title AS source_title, ks.type AS source_type
+    FROM ${tableNames.KNOWLEDGECHUNKS} kc
+    INNER JOIN ${tableNames.KNOWLEDGESOURCE} ks
+      ON ks.id = kc.source_id
+    WHERE ks.status = 'active'
+      AND ks.is_deleted = false
+      AND kc.is_deleted = false
+      AND ks.tenant_id = ?
+    LIMIT ?
+  `;
+
+  try {
+    const [rows] = await db.sequelize.query(baseQuery, {
+      replacements: [tenant_id, MAX_CANDIDATE_CHUNKS],
+    });
     return rows;
   } catch (queryErr) {
     console.error("[KNOWLEDGE-SEARCH] Primary semantic query failed:", queryErr.message);

@@ -69,4 +69,3 @@ Router.post(
 );
 
 export default Router;
-

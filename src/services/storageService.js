@@ -105,10 +105,10 @@ export async function deletePreviewFromStorage(previewUrl) {
         Key: fileKey,
       }),
     );
+
+    console.log(`Deleted from R2: ${fileKey}`);
+  } catch (error) {
+    // Non-blocking
+    console.error("R2 delete failed:", error.message);
   }
-  catch (error) {
-    console.error("R2 deletion failed:", error.message);
-    // Non-blocking: the file will eventually be cleaned up by lifecycle rules.
-  }
-    
-  
+}
