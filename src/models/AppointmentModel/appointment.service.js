@@ -1290,6 +1290,108 @@ export const sendNowFollowUpService = async (
   }
 };
 
+export const buildFollowUpTemplateComponentsService = async ({
+  template_id,
+  appointment_id,
+  header_media_url = null,
+  header_file_name = null,
+}) => {
+  const components = [];
+  const varCount = await db.WhatsappTemplateVariables.count({
+    where: { template_id },
+  });
+
+  if (header_media_url) {
+    components.push({
+      type: "header",
+      parameters: [
+        {
+          type: header_file_name ? "document" : "image",
+          [header_file_name ? "document" : "image"]: header_file_name
+            ? { link: header_media_url, filename: header_file_name }
+            : { link: header_media_url },
+        },
+      ],
+    });
+  }
+
+  if (varCount > 0) {
+    const appointment = await db.Appointments.findOne({
+      where: { appointment_id },
+      attributes: [
+        "patient_name",
+        "appointment_date",
+        "appointment_time",
+        "doctor_id",
+      ],
+    });
+
+    if (appointment) {
+      let doctorName = "";
+      if (appointment.doctor_id) {
+        const doctor = await db.Doctors.findOne({
+          where: { doctor_id: appointment.doctor_id },
+          attributes: ["name"],
+        });
+        doctorName = doctor?.name || "";
+      }
+
+      const values = [
+        appointment.patient_name || "",
+        appointment.appointment_date || "",
+        appointment.appointment_time || "",
+        doctorName,
+      ];
+      components.push({
+        type: "body",
+        parameters: values
+          .slice(0, varCount)
+          .map((value) => ({ type: "text", text: String(value) })),
+      });
+    }
+  }
+
+  return components;
+};
+
+export const persistFollowUpSentMessageService = async ({
+  tenant_id,
+  scheduledMessage,
+  template,
+  components = [],
+  meta_message_id = null,
+  phone_number_id = null,
+}) => {
+  const renderedMessage = await renderTemplateContent(
+    scheduledMessage.template_id,
+    components,
+  ).catch(() => template?.template_name || "Template message");
+
+  if (meta_message_id) {
+    await db.Messages.create({
+      tenant_id,
+      contact_id: scheduledMessage.contact_id,
+      phone_number_id,
+      phone: scheduledMessage.to_phone,
+      wamid: meta_message_id,
+      name: null,
+      sender: "bot",
+      sender_id: null,
+      message: renderedMessage,
+      message_type: "template",
+      status: "sent",
+      template_name: template?.template_name || null,
+    });
+  }
+
+  await scheduledMessage.update({
+    status: "sent",
+    sent_at: new Date(),
+    meta_message_id,
+    error_log: null,
+  });
+};
+
 export const getPendingFollowUpCountService = async (tenant_id) => {
   const count = await db.ScheduledMessages.count({
     where: {

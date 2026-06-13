@@ -12,6 +12,12 @@ import {
 import { generateReadableIdFromLast } from "../../utils/helpers/generateReadableIdFromLast.js";
 import { classifyIntent } from "../../utils/ai/intentClassifier.js";
 import { getTenantSettingsService } from "../TenantModel/tenant.service.js";
+import {
+  getDeletedLeads,
+  hardDeleteLead,
+  restoreLead,
+  softDeleteLead,
+} from "./leads.lifecycle.js";
 
 const SCORE_MIN = 0;
 const SCORE_MAX = 100;
@@ -1219,6 +1225,136 @@ export const getLeadListService = async (tenant_id) => {
     console.error("Error in getLeadListService:", err.message);
     throw err;
   }
+};
+
+export const getLeadSummaryService = async (tenant_id, lead_id) => {
+  const lead = await getLeadByLeadIdService(tenant_id, lead_id);
+  if (!lead) {
+    throw new Error("Lead not found");
+  }
+
+  return {
+    lead_id: lead.lead_id,
+    contact_id: lead.contact_id,
+    ai_summary: lead.ai_summary || null,
+    summary_status: lead.summary_status || "new",
+    ai_summary_created_at: lead.ai_summary_created_at || null,
+    last_messages: lead.last_messages || [],
+  };
+};
+
+export const getBulkLeadSummaryService = async (tenant_id, lead_ids = []) => {
+  const summaries = [];
+
+  for (const lead_id of lead_ids) {
+    try {
+      summaries.push(await getLeadSummaryService(tenant_id, lead_id));
+    } catch (err) {
+      summaries.push({
+        lead_id,
+        error: err.message || "Failed to fetch lead summary",
+      });
+    }
+  }
+
+  return summaries;
+};
+
+export const updateLeadStatusService = async (
+  tenant_id,
+  lead_id,
+  status,
+  heat_state,
+  lead_stage,
+  assigned_to,
+  priority,
+  source,
+  internal_notes,
+) => {
+  const updatePayload = {};
+  const assignIfPresent = (key, value) => {
+    if (value !== undefined && value !== null) {
+      updatePayload[key] = value;
+    }
+  };
+
+  assignIfPresent("status", status);
+  assignIfPresent("heat_state", heat_state);
+  assignIfPresent("lead_stage", lead_stage);
+  assignIfPresent("assigned_to", assigned_to);
+  assignIfPresent("priority", priority);
+  assignIfPresent("source", source);
+  assignIfPresent("internal_notes", internal_notes);
+
+  if (!Object.keys(updatePayload).length) {
+    return { affectedRows: 0 };
+  }
+
+  const [affectedRows] = await db.Leads.update(updatePayload, {
+    where: { tenant_id, lead_id, is_deleted: false },
+  });
+
+  return { affectedRows };
+};
+
+export const deleteLeadService = async (tenant_id, lead_id) => {
+  await softDeleteLead(lead_id, tenant_id);
+  return { success: true };
+};
+
+export const restoreLeadService = async (lead_id, tenant_id) => {
+  const data = await restoreLead(lead_id, tenant_id);
+  return { message: "Lead restored", data };
+};
+
+export const permanentDeleteLeadService = async (tenant_id, lead_id) => {
+  await hardDeleteLead(lead_id, tenant_id);
+  return { success: true };
+};
+
+export const getDeletedLeadListService = async (
+  tenant_id,
+  page = 1,
+  limit = 20,
+) => {
+  return getDeletedLeads(tenant_id, Number(page) || 1, Number(limit) || 20);
+};
+
+export const bulkUpdateLeadsService = async (
+  tenant_id,
+  lead_ids = [],
+  updates = {},
+) => {
+  const allowedFields = [
+    "status",
+    "heat_state",
+    "lead_stage",
+    "assigned_to",
+    "priority",
+    "source",
+    "internal_notes",
+  ];
+  const updatePayload = {};
+
+  for (const field of allowedFields) {
+    if (updates[field] !== undefined) {
+      updatePayload[field] = updates[field];
+    }
+  }
+
+  if (!Object.keys(updatePayload).length) {
+    return { affectedRows: 0 };
+  }
+
+  const [affectedRows] = await db.Leads.update(updatePayload, {
+    where: {
+      tenant_id,
+      lead_id: { [db.Sequelize.Op.in]: lead_ids },
+      is_deleted: false,
+    },
+  });
+
+  return { affectedRows };
 };
 
 export const updateLeadService = async (

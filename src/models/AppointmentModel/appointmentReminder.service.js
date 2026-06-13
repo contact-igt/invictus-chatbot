@@ -256,4 +256,170 @@ export const scheduleAppointmentRemindersService = async ({
   transaction = null, // optional transaction for atomic operations
 }) => {
   if (reminder_mode === "none") {
-    
+    await db.ScheduledMessages.destroy({
+      where: {
+        tenant_id,
+        appointment_id,
+        send_type: "appointment_reminder",
+        status: "pending",
+      },
+      transaction,
+    });
+    return { scheduled: 0, skipped: true, reason: "reminder_mode_none" };
+  }
+
+  const rawCode = (country_code || "91").toString().replace(/^\+/, "");
+  const rawNumber = (contact_number || "").toString().replace(/\D/g, "");
+  const toPhone = `${rawCode}${rawNumber}`;
+
+  if (!tenant_id || !appointment_id || !contact_id || !rawNumber) {
+    throw new Error("Cannot schedule reminders: missing appointment contact details.");
+  }
+
+  const dateStr = normalizeDateStr(appointment_date);
+  const time24h = amPmTo24h(appointment_time);
+  const now = new Date();
+
+  await db.ScheduledMessages.destroy({
+    where: {
+      tenant_id,
+      appointment_id,
+      send_type: "appointment_reminder",
+      status: "pending",
+    },
+    transaction,
+  });
+
+  let rows = [];
+
+  if (reminder_mode === "custom") {
+    validateCustomRemindersForAppointment(
+      custom_reminders,
+      appointment_date,
+      appointment_time,
+    );
+
+    rows = custom_reminders.map((reminder) => ({
+      tenant_id,
+      contact_id,
+      appointment_id,
+      template_id: reminder.template_id,
+      to_phone: toPhone,
+      header_media_url: reminder.header_media_url || null,
+      header_file_name: reminder.header_file_name || null,
+      send_type: "appointment_reminder",
+      scheduled_at: new Date(
+        `${reminder.scheduled_date}T${reminder.scheduled_time}:00+05:30`,
+      ),
+      status: "pending",
+    }));
+  } else {
+    const rules = await db.AppointmentReminderRules.findAll({
+      where: { tenant_id, is_active: true },
+      order: [
+        ["sort_order", "ASC"],
+        ["id", "ASC"],
+      ],
+      transaction,
+    });
+
+    rows = rules
+      .map((rule) => {
+        const scheduledAt = computeScheduledAtFromRule(rule, dateStr, time24h);
+        return {
+          tenant_id,
+          contact_id,
+          appointment_id,
+          template_id: rule.template_id,
+          to_phone: toPhone,
+          header_media_url: rule.header_media_url || null,
+          header_file_name: rule.header_file_name || null,
+          send_type: "appointment_reminder",
+          scheduled_at: scheduledAt,
+          status: "pending",
+          _ruleDesc: ruleDesc(rule),
+        };
+      })
+      .filter((row) => {
+        if (row.scheduled_at <= now) {
+          console.warn(
+            `[REMINDER] Skipping past reminder for appointment=${appointment_id}: ${row._ruleDesc}`,
+          );
+          return false;
+        }
+        return true;
+      })
+      .map(({ _ruleDesc, ...row }) => row);
+  }
+
+  if (!rows.length) {
+    return { scheduled: 0, skipped: true, reason: "no_future_reminders" };
+  }
+
+  await db.ScheduledMessages.bulkCreate(rows, { transaction });
+  return { scheduled: rows.length, skipped: false };
+};
+
+export const getReminderRulesService = async (tenant_id) => {
+  return db.AppointmentReminderRules.findAll({
+    where: { tenant_id },
+    order: [
+      ["sort_order", "ASC"],
+      ["id", "ASC"],
+    ],
+  });
+};
+
+export const upsertReminderRulesService = async (tenant_id, rules) => {
+  validateReminderRulesPayload(rules);
+
+  return db.sequelize.transaction(async (transaction) => {
+    await db.AppointmentReminderRules.destroy({
+      where: { tenant_id },
+      transaction,
+    });
+
+    if (!rules.length) {
+      return [];
+    }
+
+    const payload = rules.map((rule, index) => ({
+      tenant_id,
+      rule_name: String(rule.rule_name).trim(),
+      rule_type: rule.rule_type || null,
+      days_before:
+        rule.days_before === undefined || rule.days_before === null
+          ? null
+          : Number(rule.days_before),
+      send_time: rule.send_time || null,
+      hours_before:
+        rule.hours_before === undefined || rule.hours_before === null
+          ? null
+          : Number(rule.hours_before),
+      minutes_before:
+        rule.minutes_before === undefined || rule.minutes_before === null
+          ? null
+          : Number(rule.minutes_before),
+      offset_minutes:
+        rule.offset_minutes === undefined || rule.offset_minutes === null
+          ? null
+          : Number(rule.offset_minutes),
+      template_id: String(rule.template_id).trim(),
+      header_media_url: rule.header_media_url || null,
+      header_file_name: rule.header_file_name || null,
+      sort_order:
+        rule.sort_order === undefined || rule.sort_order === null
+          ? index
+          : Number(rule.sort_order),
+      is_active:
+        rule.is_active === undefined || rule.is_active === null
+          ? true
+          : Boolean(rule.is_active),
+    }));
+
+    return db.AppointmentReminderRules.bulkCreate(payload, {
+      transaction,
+      returning: true,
+    });
+  });
+};

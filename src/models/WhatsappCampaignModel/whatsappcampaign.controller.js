@@ -257,3 +257,141 @@ export const createCampaignController = async (req, res) => {
     });
   }
 };
+
+export const getCampaignListController = async (req, res) => {
+  try {
+    const result = await getCampaignListService(req.user.tenant_id, req.query);
+    return res.status(200).json({ success: true, data: result });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+export const getCampaignByIdController = async (req, res) => {
+  try {
+    const campaign = await getCampaignByIdService(
+      req.params.campaign_id,
+      req.user.tenant_id,
+      req.query,
+    );
+    if (!campaign) {
+      return res.status(404).json({ success: false, message: "Campaign not found" });
+    }
+    return res.status(200).json({ success: true, data: campaign });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+export const exportCampaignRecipientsCsvController = async (req, res) => {
+  try {
+    const result = await exportCampaignRecipientsCsvService(
+      req.params.campaign_id,
+      req.user.tenant_id,
+      req.query?.recipient_status,
+    );
+    res.setHeader("Content-Type", "text/csv");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="${result.fileName}"`,
+    );
+    return res.status(200).send(result.csv);
+  } catch (err) {
+    const status = err.message === "Campaign not found" ? 404 : 500;
+    return res.status(status).json({ success: false, message: err.message });
+  }
+};
+
+export const triggerCampaignExecutionController = async (req, res) => {
+  try {
+    const batchSize = Number(req.body?.batch_size || req.query?.batch_size || 15);
+    const result = await executeCampaignBatchService(
+      req.params.campaign_id,
+      req.user.tenant_id,
+      batchSize,
+    );
+    return res.status(200).json({ success: true, data: result });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+export const updateCampaignStatusController = async (req, res) => {
+  try {
+    const status = req.body?.status || req.query?.status;
+    if (!status) {
+      return res.status(400).json({ success: false, message: "status is required" });
+    }
+    const result = await updateCampaignStatusService(
+      req.user.tenant_id,
+      req.params.campaign_id,
+      status,
+    );
+    return res.status(200).json({ success: true, data: result });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+export const campaignEventWebhookController = async (req, res) => {
+  try {
+    const result = await recordCampaignEventService(req.body || {});
+    return res.status(200).json({ success: true, data: result });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+export const getCampaignStatsController = async (req, res) => {
+  try {
+    const result = await getCampaignStatsService(
+      req.user.tenant_id,
+      req.params.campaign_id,
+    );
+    return res.status(200).json({ success: true, data: result });
+  } catch (err) {
+    const status = err.message === "Campaign not found" ? 404 : 500;
+    return res.status(status).json({ success: false, message: err.message });
+  }
+};
+
+export const uploadCampaignMediaController = async (req, res) => {
+  try {
+    const file = req.files?.file || req.file;
+    if (!file) {
+      return res.status(400).json({ success: false, message: "file is required" });
+    }
+
+    const account = await getWhatsappAccountByTenantService(req.user.tenant_id);
+    const accessToken = account?.access_token;
+    const appId = account?.app_id || process.env.META_APP_ID;
+    if (!accessToken || !appId) {
+      return res.status(400).json({
+        success: false,
+        message: "WhatsApp access token or Meta app id is missing",
+      });
+    }
+
+    const media = await uploadMediaService(
+      file,
+      req.user.tenant_id,
+      req.user.unique_id || "system",
+      accessToken,
+      appId,
+      { folder: "campaigns" },
+    );
+
+    return res.status(201).json({ success: true, data: media });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+export const getCampaignDiagnosticsController = async (_req, res) => {
+  try {
+    const result = await getCampaignDiagnosticsService();
+    return res.status(200).json({ success: true, data: result });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};

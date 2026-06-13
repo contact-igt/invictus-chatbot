@@ -28,6 +28,12 @@ import {
 import { addCampaignUsageService } from "../GalleryModel/gallery.service.js";
 import { logger } from "../../utils/logger.js";
 import { recordCampaignDiagnosticEvent } from "../../utils/campaignDiagnosticsEvents.js";
+import {
+  getDeletedCampaigns,
+  hardDeleteCampaign,
+  restoreCampaign,
+  softDeleteCampaign,
+} from "./whatsappcampaign.lifecycle.js";
 
 // In-memory lock to prevent concurrent batch executions for the same campaign
 const runningCampaigns = new Set();
@@ -787,4 +793,164 @@ export const executeCampaignBatchService = async (
   throw new Error(
     "executeCampaignBatchService is not implemented in this build. Please restore the function body.",
   );
+};
+
+export const resolveRecipientCount = async (
+  tenant_id,
+  audience_type,
+  audience_data,
+) => {
+  if (Array.isArray(audience_data)) {
+    return audience_data.length;
+  }
+
+  if (audience_type === "group" && audience_data) {
+    const groupId =
+      typeof audience_data === "object"
+        ? audience_data.group_id || audience_data.id
+        : audience_data;
+
+    if (!groupId) {
+      return 0;
+    }
+
+    return db.ContactGroupMembers.count({
+      where: { tenant_id, group_id: groupId },
+    });
+  }
+
+  return 0;
+};
+
+export const softDeleteCampaignService = async (tenant_id, campaign_id) => {
+  await softDeleteCampaign(campaign_id, tenant_id);
+  return { success: true };
+};
+
+export const permanentDeleteCampaignService = async (
+  tenant_id,
+  campaign_id,
+) => {
+  await hardDeleteCampaign(campaign_id, tenant_id);
+  return { success: true };
+};
+
+export const getDeletedCampaignListService = async (
+  tenant_id,
+  page = 1,
+  limit = 20,
+) => {
+  return getDeletedCampaigns(tenant_id, Number(page) || 1, Number(limit) || 20);
+};
+
+export const restoreCampaignService = async (campaign_id, tenant_id) => {
+  const data = await restoreCampaign(campaign_id, tenant_id);
+  return { message: "Campaign restored", data };
+};
+
+export const updateCampaignStatusService = async (
+  tenant_id,
+  campaign_id,
+  status,
+) => {
+  const [affectedRows] = await db.WhatsappCampaigns.update(
+    { status },
+    { where: { tenant_id, campaign_id, is_deleted: false } },
+  );
+  return { affectedRows };
+};
+
+export const recordCampaignEventService = async ({
+  campaign_id,
+  recipient_id = null,
+  event_type = "event",
+}) => {
+  if (!db.CampaignEvents || !recipient_id) {
+    return null;
+  }
+
+  return db.CampaignEvents.create({
+    campaign_id,
+    recipient_id,
+    event_type: ["open", "click"].includes(event_type) ? event_type : "open",
+  });
+};
+
+export const getCampaignStatsService = async (tenant_id, campaign_id) => {
+  const campaign = await db.WhatsappCampaigns.findOne({
+    where: { tenant_id, campaign_id, is_deleted: false },
+    raw: true,
+  });
+
+  if (!campaign) {
+    throw new Error("Campaign not found");
+  }
+
+  const recipients = await db.WhatsappCampaignRecipients.findAll({
+    where: { campaign_id, is_deleted: false },
+    attributes: [
+      "status",
+      [db.sequelize.fn("COUNT", db.sequelize.col("id")), "count"],
+    ],
+    group: ["status"],
+    raw: true,
+  });
+
+  const byStatus = recipients.reduce((acc, row) => {
+    acc[row.status] = Number(row.count) || 0;
+    return acc;
+  }, {});
+
+  return {
+    campaign_id,
+    status: campaign.status,
+    total_audience: campaign.total_audience,
+    delivered_count: campaign.delivered_count,
+    read_count: campaign.read_count,
+    replied_count: campaign.replied_count,
+    recipients: byStatus,
+  };
+};
+
+export const startCampaignSchedulerService = () => {
+  cron.schedule("* * * * *", async () => {
+    try {
+      if (!isCampaignQueueAvailable()) {
+        return;
+      }
+
+      const dueCampaigns = await db.WhatsappCampaigns.findAll({
+        where: {
+          status: "scheduled",
+          is_deleted: false,
+          scheduled_at: { [db.Sequelize.Op.lte]: new Date() },
+        },
+        attributes: ["campaign_id", "tenant_id"],
+        limit: 50,
+        raw: true,
+      });
+
+      if (!dueCampaigns.length) {
+        return;
+      }
+
+      const dispatchQueue = getCampaignDispatchQueue();
+      for (const campaign of dueCampaigns) {
+        await dispatchQueue.add(
+          "campaign-dispatch",
+          {
+            campaign_id: campaign.campaign_id,
+            tenant_id: campaign.tenant_id,
+            after_id: 0,
+          },
+          {
+            jobId: `dispatch:${campaign.campaign_id}:0`,
+            removeOnComplete: true,
+          },
+        );
+      }
+    } catch (err) {
+      logger.error(`[CAMPAIGN-SCHEDULER] Failed: ${err.message}`);
+    }
+  });
 };

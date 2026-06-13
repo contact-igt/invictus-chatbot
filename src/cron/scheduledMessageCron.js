@@ -104,6 +104,14 @@ export const runScheduledMessageCron = async () => {
         header_media_url: msg.header_media_url || null,
         header_file_name: msg.header_file_name || null,
       });
+
+      const sendResult = await sendWhatsAppTemplate(
+        msg.tenant_id,
+        toPhone,
+        template.template_name,
+        template.language,
+        components,
+      );
       
       await persistFollowUpSentMessageService({
         tenant_id: msg.tenant_id,
