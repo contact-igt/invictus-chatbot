@@ -56,6 +56,10 @@ import {
 } from "./appointmentStateLog.service.js";
 import { isAppointmentQuitRequest } from "./appointmentRoutingGuard.service.js";
 import { buildStaleBookingManagePromptPayload } from "./manageAppointmentTemplates.service.js";
+import { buildAvailabilityUnavailableMessageForTenant } from "./appointmentAvailabilityContact.service.js";
+
+const DEFAULT_REASON_PROMPT =
+  "Please select our services for visit from the list, or type reason for Visit.";
 
 export const APPOINTMENT_STATES = {
   COLLECT_NAME: "COLLECT_NAME",
@@ -311,6 +315,25 @@ const cancelSessionAndRespond = async (context, message = "Appointment booking c
   });
 };
 
+const expireBookingSessionAndRespond = async (context, message, reason) => {
+  const fromState = context.session.current_step;
+  await releaseLockedSlots(context.session.session_id);
+  const session = await expireAppointmentSession(context.session);
+  context.session = session;
+  await logTransition(context, fromState, null);
+  emitAppointmentEvent(context.tenantId, "appointment_expired", session, {
+    previousState: fromState,
+    reason,
+    expiredAt: new Date(),
+  });
+  return makeResult({
+    payload: buildTextPayload(context.userPhone, message),
+    session,
+    event: "appointment_expired",
+    extra: { expiredBookingSession: true, reason },
+  });
+};
+
 const getAvailableDoctors = async (tenantId) => {
   const doctors = await getDoctorListService(tenantId);
   return (doctors || []).filter((doctor) => doctor.status === "available");
@@ -323,7 +346,13 @@ export const buildAvailableDoctorListAppointmentResponse = async ({
   const doctors = await getAvailableDoctors(tenantId);
   if (!doctors.length) {
     return makeResult({
-      payload: buildTextPayload(userPhone, "No doctors are available right now. Please try again later."),
+      payload: buildTextPayload(
+        userPhone,
+        await buildAvailabilityUnavailableMessageForTenant({
+          tenantId,
+          type: "doctors",
+        }),
+      ),
       session: null,
     });
   }
@@ -634,7 +663,7 @@ const updateReasonInvalidAttempts = async (session, attempts) => {
   return draft;
 };
 
-const sendReasonPrompt = async (context, bodyText = "Please select our services for visit from the list, or type reason for Visit.") => {
+const sendReasonPrompt = async (context, bodyText = DEFAULT_REASON_PROMPT) => {
   const services = await getAvailableReasonServices(context.tenantId);
   if (services.length) {
     return makeStatePromptResult({
@@ -644,11 +673,14 @@ const sendReasonPrompt = async (context, bodyText = "Please select our services 
     });
   }
 
-  return makeStatePromptResult({
+  return expireBookingSessionAndRespond(
     context,
-    state: APPOINTMENT_STATES.COLLECT_REASON,
-    payload: buildTextPayload(context.userPhone, bodyText),
-  });
+    await buildAvailabilityUnavailableMessageForTenant({
+      tenantId: context.tenantId,
+      type: "services",
+    }),
+    "no_services_available",
+  );
 };
 
 const handleInvalidManualReason = async (context, reasonCode) => {
@@ -1231,10 +1263,14 @@ const sendStatePrompt = async (context, state = context.session.current_step) =>
       await context.session.reload();
     }
     if (!doctors.length) {
-      return makeResult({
-        payload: buildTextPayload(context.userPhone, "No doctors are available right now. Please try again later."),
-        session: context.session,
-      });
+      return expireBookingSessionAndRespond(
+        context,
+        await buildAvailabilityUnavailableMessageForTenant({
+          tenantId: context.tenantId,
+          type: "doctors",
+        }),
+        "no_doctors_available",
+      );
     }
     return makeStatePromptResult({
       context,

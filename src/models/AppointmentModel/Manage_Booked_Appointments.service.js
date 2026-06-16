@@ -66,6 +66,7 @@ import {
   hasProcessedAppointmentMessage,
   logAppointmentStateTransition,
 } from "./appointmentStateLog.service.js";
+import { buildAvailabilityUnavailableMessageForTenant } from "./appointmentAvailabilityContact.service.js";
 
 const makeResult = ({ payload = null, payloads = null, session = null, message = null, ...rest } = {}) => ({
   payload,
@@ -80,6 +81,36 @@ const makeResult = ({ payload = null, payloads = null, session = null, message =
     "Appointment management updated.",
   ...rest,
 });
+
+const expireManageAvailabilitySessionAndRespond = async ({
+  tenantId,
+  userPhone,
+  session,
+  type,
+  reason,
+}) => {
+  const previousState = session?.state || null;
+  await releaseLockedSlots(session.session_id);
+  const expiredSession = await expireManageAppointmentSession(session);
+  await logAppointmentStateTransition({
+    tenantId,
+    userPhone,
+    sessionId: expiredSession?.session_id || session?.session_id || null,
+    fromState: previousState,
+    toState: null,
+    message: reason,
+  });
+  return makeResult({
+    payload: buildManageTextPayload(
+      userPhone,
+      await buildAvailabilityUnavailableMessageForTenant({ tenantId, type }),
+    ),
+    session: expiredSession,
+    expired: true,
+    event: "manage_session_expired",
+    reason,
+  });
+};
 
 const emitManageEvent = (tenantId, event, session, extra = {}) => {
   try {
@@ -519,9 +550,12 @@ const startReasonEditSelection = async ({ tenantId, userPhone, session, editFiel
   });
 
   if (!services.length) {
-    return makeResult({
-      payload: buildManageTextPayload(userPhone, "Please type the updated reason for visit."),
+    return expireManageAvailabilitySessionAndRespond({
+      tenantId,
+      userPhone,
       session: nextSession,
+      type: "services",
+      reason: "no_services_available",
     });
   }
 
@@ -545,9 +579,12 @@ const startDoctorEditSelection = async ({
   });
   const doctors = await getManageDoctorsForService({ tenantId, serviceId });
   if (!doctors.length) {
-    return makeResult({
-      payload: buildManageTextPayload(userPhone, "No doctors are available for this service right now."),
+    return expireManageAvailabilitySessionAndRespond({
+      tenantId,
+      userPhone,
       session,
+      type: "doctors",
+      reason: "no_doctors_available",
     });
   }
 
@@ -593,10 +630,12 @@ const startDoctorEditServiceSelection = async ({ tenantId, userPhone, session })
   });
 
   if (!services.length) {
-    return startDoctorEditSelection({
+    return expireManageAvailabilitySessionAndRespond({
       tenantId,
       userPhone,
       session: nextSession,
+      type: "services",
+      reason: "no_services_available",
     });
   }
 

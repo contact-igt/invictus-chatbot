@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import db from "../src/database/index.js";
 import {
   APPOINTMENT_OPERATION_ACTIONS,
   APPOINTMENT_OPERATION_ROUTES,
@@ -37,11 +38,16 @@ import {
   getEditResetForTarget,
   getInSessionBookingOverrideType,
   getNextIncompleteAppointmentState,
+  handleAdvancedAppointmentBooking,
   isReplyValidForBookingState,
 } from "../src/models/AppointmentModel/Advanced_Appointment_Booking.service.js";
-import { SESSION_TTL_MS } from "../src/models/AppointmentModel/appointmentSession.service.js";
+import {
+  ADVANCED_SESSION_STATUS,
+  SESSION_TTL_MS,
+} from "../src/models/AppointmentModel/appointmentSession.service.js";
 import {
   buildManageEditRowsForAppointment,
+  handleManageBookedAppointments,
   resolveManageDateReplyIdFromText,
   resolveManageDoctorReplyIdFromText,
   resolveManageEditFieldReplyIdFromText,
@@ -51,7 +57,28 @@ import {
   isManageEditFieldAllowed,
   isManageScheduleEditPending,
 } from "../src/models/AppointmentModel/Manage_Booked_Appointments.service.js";
-import { MANAGE_APPOINTMENT_SESSION_TTL_MS } from "../src/models/AppointmentModel/manageAppointmentSession.service.js";
+import {
+  MANAGE_APPOINTMENT_SESSION_STATUS,
+  MANAGE_APPOINTMENT_SESSION_TTL_MS,
+  MANAGE_APPOINTMENT_STATES,
+} from "../src/models/AppointmentModel/manageAppointmentSession.service.js";
+import {
+  buildAvailabilityUnavailableMessage,
+  buildAvailabilityUnavailableMessageForTenant,
+  extractAvailabilityContactNumbers,
+  setAvailabilityContactSearchForTest,
+} from "../src/models/AppointmentModel/appointmentAvailabilityContact.service.js";
+
+const withAvailabilityContactSearch = async (searchFn, callback) => {
+  setAvailabilityContactSearchForTest(searchFn);
+  try {
+    return await callback();
+  } finally {
+    setAvailabilityContactSearchForTest(null);
+  }
+};
+
+const noAvailabilityContactSearch = async () => ({ chunks: [], sources: [] });
 
 const decisionFor = (messageText, overrides = {}) =>
   resolveAppointmentOperationDecision({
@@ -65,6 +92,204 @@ const decisionFor = (messageText, overrides = {}) =>
     activeBookingSession: overrides.activeBookingSession || null,
     activeManageSession: overrides.activeManageSession || null,
   });
+
+const makeFakeBookingSession = ({
+  currentStep,
+  draft = {},
+  sessionId = "AS_TEST",
+  expiresAt = new Date(Date.now() + SESSION_TTL_MS),
+} = {}) => ({
+  session_id: sessionId,
+  tenant_id: "TENANT1",
+  contact_id: "CONTACT1",
+  user_phone: "919999999999",
+  flow_type: "book",
+  current_step: currentStep,
+  last_valid_state: currentStep,
+  draft_json: draft,
+  status: ADVANCED_SESSION_STATUS.IN_PROGRESS,
+  expires_at: expiresAt,
+  updateCalls: [],
+  async update(patch) {
+    this.updateCalls.push(patch);
+    Object.assign(this, patch);
+    return this;
+  },
+  async reload() {
+    return this;
+  },
+});
+
+const makeFakeManageSession = ({
+  state = MANAGE_APPOINTMENT_STATES.EDIT_MENU,
+  sessionId = "MS_TEST",
+  expiresAt = new Date(Date.now() + MANAGE_APPOINTMENT_SESSION_TTL_MS),
+  selectedAppointmentId = "AP001",
+  appointmentIds = ["AP001"],
+  pendingEditField = null,
+  pendingEditValue = null,
+} = {}) => ({
+  session_id: sessionId,
+  tenant_id: "TENANT1",
+  contact_id: "CONTACT1",
+  user_phone: "919999999999",
+  state,
+  selected_appointment_id: selectedAppointmentId,
+  appointment_ids: appointmentIds,
+  pending_edit_field: pendingEditField,
+  pending_edit_value: pendingEditValue,
+  status: MANAGE_APPOINTMENT_SESSION_STATUS.ACTIVE,
+  expires_at: expiresAt,
+  updateCalls: [],
+  async update(patch) {
+    this.updateCalls.push(patch);
+    Object.assign(this, patch);
+    return this;
+  },
+  async reload() {
+    return this;
+  },
+});
+
+const withAdvancedBookingDbStubs = async (
+  {
+    session,
+    specializationRows = [],
+    doctorRows = [],
+  },
+  callback,
+) => {
+  const originals = {
+    findOne: db.BookingSessions.findOne,
+    create: db.BookingSessions.create,
+    query: db.sequelize.query,
+    slotUpdate: db.AppointmentSlots.update,
+    logFindOne: db.AppointmentStateLogs.findOne,
+    logCreate: db.AppointmentStateLogs.create,
+  };
+  const slotReleaseCalls = [];
+  const stateLogRows = [];
+  const createCalls = [];
+
+  db.BookingSessions.findOne = async () =>
+    session.status === ADVANCED_SESSION_STATUS.IN_PROGRESS ? session : null;
+  db.BookingSessions.create = async (values) => {
+    createCalls.push(values);
+    throw new Error("Booking session should not be created in this test");
+  };
+  db.sequelize.query = async (sql) => {
+    const normalizedSql = String(sql).toLowerCase();
+    if (normalizedSql.includes("from specializations")) {
+      return [specializationRows];
+    }
+    if (normalizedSql.includes("from doctors")) {
+      return [doctorRows];
+    }
+    throw new Error(`Unexpected test query: ${String(sql).slice(0, 120)}`);
+  };
+  db.AppointmentSlots.update = async (values, options) => {
+    slotReleaseCalls.push({ values, options });
+    return [1];
+  };
+  db.AppointmentStateLogs.findOne = async () => null;
+  db.AppointmentStateLogs.create = async (row) => {
+    stateLogRows.push(row);
+    return row;
+  };
+
+  try {
+    return await callback({ slotReleaseCalls, stateLogRows, createCalls });
+  } finally {
+    db.BookingSessions.findOne = originals.findOne;
+    db.BookingSessions.create = originals.create;
+    db.sequelize.query = originals.query;
+    db.AppointmentSlots.update = originals.slotUpdate;
+    db.AppointmentStateLogs.findOne = originals.logFindOne;
+    db.AppointmentStateLogs.create = originals.logCreate;
+  }
+};
+
+const withManageSessionDbStubs = async (
+  {
+    session,
+    specializationRows = [],
+    doctorRows = [],
+    appointment = {
+      appointment_id: "AP001",
+      tenant_id: "TENANT1",
+      status: "Pending",
+      is_deleted: false,
+      patient_name: "Naveen",
+      email: "naveen@example.com",
+      country_code: "+91",
+      contact_number: "9999999999",
+      doctor_id: "DOC001",
+      appointment_date: "2026-05-30",
+      appointment_time: "09:00 AM",
+    },
+  },
+  callback,
+) => {
+  const originals = {
+    findOne: db.ManageAppointmentSessions.findOne,
+    create: db.ManageAppointmentSessions.create,
+    appointmentFindOne: db.Appointments.findOne,
+    query: db.sequelize.query,
+    slotUpdate: db.AppointmentSlots.update,
+    logFindOne: db.AppointmentStateLogs.findOne,
+    logCreate: db.AppointmentStateLogs.create,
+  };
+  const slotReleaseCalls = [];
+  const createCalls = [];
+  const stateLogRows = [];
+
+  db.ManageAppointmentSessions.findOne = async () =>
+    session.status === MANAGE_APPOINTMENT_SESSION_STATUS.ACTIVE
+      ? session
+      : null;
+  db.ManageAppointmentSessions.create = async (values) => {
+    createCalls.push(values);
+    throw new Error("Manage appointment session should not be created in this test");
+  };
+  db.Appointments.findOne = async () => appointment;
+  db.AppointmentSlots.update = async (values, options) => {
+    slotReleaseCalls.push({ values, options });
+    return [1];
+  };
+  db.AppointmentStateLogs.findOne = async () => null;
+  db.AppointmentStateLogs.create = async (row) => {
+    stateLogRows.push(row);
+    return row;
+  };
+  db.sequelize.query = async (sql) => {
+    const normalizedSql = String(sql).toLowerCase();
+    if (normalizedSql.includes("from specializations")) {
+      return [specializationRows];
+    }
+    if (normalizedSql.includes("from doctors")) {
+      return [doctorRows];
+    }
+    if (
+      normalizedSql.includes("from doctor_specializations") ||
+      normalizedSql.includes("from doctor_availability")
+    ) {
+      return [[]];
+    }
+    throw new Error(`Unexpected test query: ${String(sql).slice(0, 120)}`);
+  };
+
+  try {
+    return await callback({ slotReleaseCalls, createCalls, stateLogRows });
+  } finally {
+    db.ManageAppointmentSessions.findOne = originals.findOne;
+    db.ManageAppointmentSessions.create = originals.create;
+    db.Appointments.findOne = originals.appointmentFindOne;
+    db.sequelize.query = originals.query;
+    db.AppointmentSlots.update = originals.slotUpdate;
+    db.AppointmentStateLogs.findOne = originals.logFindOne;
+    db.AppointmentStateLogs.create = originals.logCreate;
+  }
+};
 
 test("booking phrases route to booking state machine", () => {
   for (const phrase of [
@@ -158,6 +383,223 @@ test("booking always requires email collected inside current session", () => {
 test("booking and manage appointment sessions expire after five minutes", () => {
   assert.equal(SESSION_TTL_MS, 5 * 60 * 1000);
   assert.equal(MANAGE_APPOINTMENT_SESSION_TTL_MS, 5 * 60 * 1000);
+});
+
+test("availability contact helper extracts and formats knowledge contact numbers", () => {
+  const numbers = extractAvailabilityContactNumbers([
+    "Reception contact number: +91 90101 23456. Alternate mobile 91-63012-34567.",
+    "Duplicate phone: 9010123456. Token 2026 should not be treated as contact.",
+  ]);
+
+  assert.deepEqual(numbers, ["91 9010123456", "91 6301234567"]);
+  assert.equal(
+    buildAvailabilityUnavailableMessage({
+      type: "services",
+      contacts: numbers,
+    }),
+    "Sorry, no services are available right now! Please try again later or contact us 91 9010123456 or 91 6301234567. Thank you.",
+  );
+  assert.equal(
+    buildAvailabilityUnavailableMessage({ type: "doctors", contacts: [] }),
+    "Sorry, no doctors are available right now! Please try again later. Thank you.",
+  );
+});
+
+test("availability contact helper ignores invalid numbers and duplicates", () => {
+  const numbers = extractAvailabilityContactNumbers([
+    "Year 2026, token 12345, repeated 91 90101 23456 and +91 9010123456.",
+  ]);
+
+  assert.deepEqual(numbers, ["91 9010123456"]);
+});
+
+test("availability contact helper falls back cleanly when knowledge search fails", async () => {
+  await withAvailabilityContactSearch(
+    async () => {
+      throw new Error("knowledge unavailable");
+    },
+    async () => {
+      assert.equal(
+        await buildAvailabilityUnavailableMessageForTenant({
+          tenantId: "TENANT1",
+          type: "services",
+        }),
+        "Sorry, no services are available right now! Please try again later. Thank you.",
+      );
+    },
+  );
+});
+
+test("advanced booking expires and releases ownership when no services are configured", async () => {
+  const session = makeFakeBookingSession({
+    currentStep: APPOINTMENT_STATES.COLLECT_EMAIL,
+    draft: { name: "Naveen" },
+  });
+
+  await withAvailabilityContactSearch(noAvailabilityContactSearch, async () =>
+    withAdvancedBookingDbStubs(
+      { session, specializationRows: [] },
+      async ({ slotReleaseCalls, stateLogRows }) => {
+        const result = await handleAdvancedAppointmentBooking({
+          tenantId: "TENANT1",
+          userPhone: "919999999999",
+          contact: { contact_id: "CONTACT1", name: "Naveen" },
+          message: "naveen@example.com",
+          interactiveReplyId: null,
+          whatsappMessageId: "wamid-no-services",
+        });
+
+        assert.equal(
+          result.payload.text.body,
+          "Sorry, no services are available right now! Please try again later. Thank you.",
+        );
+        assert.equal(result.event, "appointment_expired");
+        assert.equal(result.expiredBookingSession, true);
+        assert.equal(result.reason, "no_services_available");
+        assert.equal(session.status, ADVANCED_SESSION_STATUS.EXPIRED);
+        assert.equal(session.current_step, null);
+        assert.equal(slotReleaseCalls.length, 1);
+        assert.equal(
+          slotReleaseCalls[0].options.where.locked_by_session_id,
+          session.session_id,
+        );
+        assert.equal(stateLogRows.at(-1).from_state, APPOINTMENT_STATES.COLLECT_REASON);
+        assert.equal(stateLogRows.at(-1).to_state, null);
+      },
+    ),
+  );
+
+  const followUpDecision = decisionFor("what are your opening hours?");
+  assert.equal(followUpDecision.shouldHandle, false);
+});
+
+test("advanced booking expires and releases ownership when no doctors are available", async () => {
+  const session = makeFakeBookingSession({
+    currentStep: APPOINTMENT_STATES.COLLECT_REASON,
+    draft: {
+      name: "Naveen",
+      email: "naveen@example.com",
+      emailCollectedInSession: true,
+    },
+  });
+
+  await withAvailabilityContactSearch(noAvailabilityContactSearch, async () =>
+    withAdvancedBookingDbStubs(
+      {
+        session,
+        specializationRows: [
+          {
+            specialization_id: "SPEC001",
+            name: "Retina",
+            description: "Retina care",
+          },
+        ],
+        doctorRows: [],
+      },
+      async ({ slotReleaseCalls, stateLogRows }) => {
+        const result = await handleAdvancedAppointmentBooking({
+          tenantId: "TENANT1",
+          userPhone: "919999999999",
+          contact: { contact_id: "CONTACT1", name: "Naveen" },
+          message: "Retina",
+          interactiveReplyId: "reason_SPEC001",
+          whatsappMessageId: "wamid-no-doctors",
+        });
+
+        assert.equal(
+          result.payload.text.body,
+          "Sorry, no doctors are available right now! Please try again later. Thank you.",
+        );
+        assert.equal(result.event, "appointment_expired");
+        assert.equal(result.expiredBookingSession, true);
+        assert.equal(result.reason, "no_doctors_available");
+        assert.equal(session.status, ADVANCED_SESSION_STATUS.EXPIRED);
+        assert.equal(session.current_step, null);
+        assert.equal(slotReleaseCalls.length, 1);
+        assert.equal(
+          slotReleaseCalls[0].options.where.locked_by_session_id,
+          session.session_id,
+        );
+        assert.equal(stateLogRows.at(-1).from_state, APPOINTMENT_STATES.SELECT_DOCTOR);
+        assert.equal(stateLogRows.at(-1).to_state, null);
+      },
+    ),
+  );
+
+  const followUpDecision = decisionFor("what are your opening hours?");
+  assert.equal(followUpDecision.shouldHandle, false);
+});
+
+test("advanced booking no-availability messages append knowledge contact details", async () => {
+  const contactSearch = async () => ({
+    chunks: [
+      "For appointments contact reception at +91 90101 23456 or mobile 91 63012 34567.",
+    ],
+    sources: [],
+  });
+  const serviceSession = makeFakeBookingSession({
+    currentStep: APPOINTMENT_STATES.COLLECT_EMAIL,
+    draft: { name: "Naveen" },
+    sessionId: "AS_CONTACT_SERVICE",
+  });
+  const doctorSession = makeFakeBookingSession({
+    currentStep: APPOINTMENT_STATES.COLLECT_REASON,
+    draft: {
+      name: "Naveen",
+      email: "naveen@example.com",
+      emailCollectedInSession: true,
+    },
+    sessionId: "AS_CONTACT_DOCTOR",
+  });
+
+  await withAvailabilityContactSearch(contactSearch, async () => {
+    await withAdvancedBookingDbStubs(
+      { session: serviceSession, specializationRows: [] },
+      async () => {
+        const result = await handleAdvancedAppointmentBooking({
+          tenantId: "TENANT1",
+          userPhone: "919999999999",
+          contact: { contact_id: "CONTACT1", name: "Naveen" },
+          message: "naveen@example.com",
+          whatsappMessageId: "wamid-contact-no-services",
+        });
+
+        assert.equal(
+          result.payload.text.body,
+          "Sorry, no services are available right now! Please try again later or contact us 91 9010123456 or 91 6301234567. Thank you.",
+        );
+      },
+    );
+
+    await withAdvancedBookingDbStubs(
+      {
+        session: doctorSession,
+        specializationRows: [
+          {
+            specialization_id: "SPEC001",
+            name: "Retina",
+            description: "Retina care",
+          },
+        ],
+        doctorRows: [],
+      },
+      async () => {
+        const result = await handleAdvancedAppointmentBooking({
+          tenantId: "TENANT1",
+          userPhone: "919999999999",
+          contact: { contact_id: "CONTACT1", name: "Naveen" },
+          message: "Retina",
+          interactiveReplyId: "reason_SPEC001",
+          whatsappMessageId: "wamid-contact-no-doctors",
+        });
+
+        assert.equal(
+          result.payload.text.body,
+          "Sorry, no doctors are available right now! Please try again later or contact us 91 9010123456 or 91 6301234567. Thank you.",
+        );
+      },
+    );
+  });
 });
 
 test("booking simple edit fields enter edit input state without clearing existing draft", () => {
@@ -267,6 +709,166 @@ test("expired booking and manage sessions use restart-specific templates", () =>
     manage.interactive.action.sections[0].rows.map((row) => row.id),
     ["view_my_appointments", "manage_appt_book_new", "manage_appt_main_menu"],
   );
+});
+
+test("expired booking session is terminal until explicit booking intent", async () => {
+  const session = makeFakeBookingSession({
+    currentStep: APPOINTMENT_STATES.SELECT_TIME,
+    expiresAt: new Date(Date.now() - 1000),
+  });
+
+  await withAdvancedBookingDbStubs(
+    { session },
+    async ({ slotReleaseCalls, stateLogRows, createCalls }) => {
+      const result = await handleAdvancedAppointmentBooking({
+        tenantId: "TENANT1",
+        userPhone: "919999999999",
+        contact: { contact_id: "CONTACT1", name: "Naveen" },
+        message: "10:00 AM",
+        interactiveReplyId: "slot_10-00-AM",
+        whatsappMessageId: "wamid-expired-booking",
+      });
+
+      assert.equal(result.event, "booking_session_expired");
+      assert.equal(result.payload.interactive.body.text.includes("booking session has expired"), true);
+      assert.equal(session.status, ADVANCED_SESSION_STATUS.EXPIRED);
+      assert.equal(session.current_step, null);
+      assert.equal(createCalls.length, 0);
+      assert.equal(slotReleaseCalls.length, 1);
+      assert.equal(
+        slotReleaseCalls[0].options.where.locked_by_session_id,
+        session.session_id,
+      );
+      assert.equal(stateLogRows.at(-1).to_state, "BOOKING_SESSION_EXPIRED");
+    },
+  );
+
+  const generalFollowUp = decisionFor("what are your opening hours?");
+  assert.equal(generalFollowUp.shouldHandle, false);
+  assert.equal(generalFollowUp.route, APPOINTMENT_OPERATION_ROUTES.GENERAL_QUESTION);
+
+  const explicitBooking = decisionFor("book appointment");
+  assert.equal(explicitBooking.shouldHandle, true);
+  assert.equal(explicitBooking.route, APPOINTMENT_OPERATION_ROUTES.BOOK_APPOINTMENT);
+});
+
+test("expired manage session is terminal until explicit manage intent", async () => {
+  const session = makeFakeManageSession({
+    state: MANAGE_APPOINTMENT_STATES.EDIT_MENU,
+    expiresAt: new Date(Date.now() - 1000),
+  });
+
+  await withManageSessionDbStubs(
+    { session },
+    async ({ slotReleaseCalls, createCalls }) => {
+      const result = await handleManageBookedAppointments({
+        tenantId: "TENANT1",
+        userPhone: "919999999999",
+        contact: { contact_id: "CONTACT1", name: "Naveen" },
+        message: "doctor",
+        interactiveReplyId: null,
+      });
+
+      assert.equal(result.event, "manage_session_expired");
+      assert.equal(result.payload.interactive.body.text.includes("Manage Appointment session has expired"), true);
+      assert.equal(session.status, MANAGE_APPOINTMENT_SESSION_STATUS.EXPIRED);
+      assert.equal(createCalls.length, 0);
+      assert.equal(slotReleaseCalls.length, 1);
+      assert.equal(
+        slotReleaseCalls[0].options.where.locked_by_session_id,
+        session.session_id,
+      );
+    },
+  );
+
+  const generalFollowUp = decisionFor("what are your opening hours?");
+  assert.equal(generalFollowUp.shouldHandle, false);
+  assert.equal(generalFollowUp.route, APPOINTMENT_OPERATION_ROUTES.GENERAL_QUESTION);
+
+  const explicitManage = decisionFor("show my appointment");
+  assert.equal(explicitManage.shouldHandle, true);
+  assert.equal(explicitManage.route, APPOINTMENT_OPERATION_ROUTES.MANAGE_APPOINTMENT);
+});
+
+test("manage service selection no-services expires with dynamic contact message", async () => {
+  const session = makeFakeManageSession({
+    state: MANAGE_APPOINTMENT_STATES.EDIT_MENU,
+  });
+  const contactSearch = async () => ({
+    chunks: ["Call appointment desk at 91 90101 23456."],
+    sources: [],
+  });
+
+  await withAvailabilityContactSearch(contactSearch, async () =>
+    withManageSessionDbStubs(
+      { session, specializationRows: [] },
+      async ({ slotReleaseCalls, stateLogRows }) => {
+        const result = await handleManageBookedAppointments({
+          tenantId: "TENANT1",
+          userPhone: "919999999999",
+          contact: { contact_id: "CONTACT1", name: "Naveen" },
+          message: "Service",
+          interactiveReplyId: "manage_appt_edit_service",
+        });
+
+        assert.equal(
+          result.payload.text.body,
+          "Sorry, no services are available right now! Please try again later or contact us 91 9010123456. Thank you.",
+        );
+        assert.equal(result.event, "manage_session_expired");
+        assert.equal(result.reason, "no_services_available");
+        assert.equal(session.status, MANAGE_APPOINTMENT_SESSION_STATUS.EXPIRED);
+        assert.equal(slotReleaseCalls.length, 1);
+        assert.equal(stateLogRows.at(-1).to_state, null);
+      },
+    ),
+  );
+
+  const followUpDecision = decisionFor("what are your opening hours?");
+  assert.equal(followUpDecision.shouldHandle, false);
+});
+
+test("manage doctor selection no-doctors expires with dynamic contact message", async () => {
+  const session = makeFakeManageSession({
+    state: MANAGE_APPOINTMENT_STATES.WAITING_FOR_DOCTOR_UPDATE,
+    pendingEditField: "doctor",
+    pendingEditValue: {
+      mode: "MANAGE_APPOINTMENT",
+      action: "EDIT_APPOINTMENT",
+      appointmentId: "AP001",
+      editField: "doctor",
+    },
+  });
+  const contactSearch = async () => ({
+    chunks: ["Reception phone +91 63012 34567."],
+    sources: [],
+  });
+
+  await withAvailabilityContactSearch(contactSearch, async () =>
+    withManageSessionDbStubs(
+      { session, doctorRows: [] },
+      async ({ slotReleaseCalls }) => {
+        const result = await handleManageBookedAppointments({
+          tenantId: "TENANT1",
+          userPhone: "919999999999",
+          contact: { contact_id: "CONTACT1", name: "Naveen" },
+          message: "doctor",
+        });
+
+        assert.equal(
+          result.payload.text.body,
+          "Sorry, no doctors are available right now! Please try again later or contact us 91 6301234567. Thank you.",
+        );
+        assert.equal(result.event, "manage_session_expired");
+        assert.equal(result.reason, "no_doctors_available");
+        assert.equal(session.status, MANAGE_APPOINTMENT_SESSION_STATUS.EXPIRED);
+        assert.equal(slotReleaseCalls.length, 1);
+      },
+    ),
+  );
+
+  const followUpDecision = decisionFor("what are your opening hours?");
+  assert.equal(followUpDecision.shouldHandle, false);
 });
 
 test("active booking session keeps user replies inside booking flow", () => {
@@ -739,6 +1341,53 @@ test("classifier appointment intents are blocked from normal AI in classifier mo
   assert.equal(manage.route, APPOINTMENT_OPERATION_ROUTES.MANAGE_APPOINTMENT);
   assert.equal(manage.source, APPOINTMENT_OPERATION_SOURCES.CLASSIFIER_INTENT);
   assert.equal(isAppointmentOperationDecisionEnabled(manage, "classifier"), true);
+});
+
+test("higher-priority appointment routes win over classifier intent", () => {
+  const classifierResult = {
+    intent: "APPOINTMENT_ACTION",
+    requires: { knowledge: true, doctors: true, appointments: true },
+  };
+
+  const deterministic = decisionFor("book appointment", { classifierResult });
+  assert.equal(deterministic.route, APPOINTMENT_OPERATION_ROUTES.BOOK_APPOINTMENT);
+  assert.equal(
+    deterministic.source,
+    APPOINTMENT_OPERATION_SOURCES.DETERMINISTIC_PHRASE,
+  );
+
+  const activeBooking = decisionFor("what are your timings", {
+    classifierResult,
+    activeBookingSession: {
+      session_id: "AS0001",
+      current_step: APPOINTMENT_STATES.COLLECT_NAME,
+    },
+  });
+  assert.equal(activeBooking.route, APPOINTMENT_OPERATION_ROUTES.BOOK_APPOINTMENT);
+  assert.equal(activeBooking.source, APPOINTMENT_OPERATION_SOURCES.ACTIVE_SESSION);
+
+  const activeManage = decisionFor("what are your timings", {
+    classifierResult,
+    activeManageSession: {
+      session_id: "MS0001",
+      state: "EDIT_MENU",
+    },
+  });
+  assert.equal(activeManage.route, APPOINTMENT_OPERATION_ROUTES.MANAGE_APPOINTMENT);
+  assert.equal(activeManage.source, APPOINTMENT_OPERATION_SOURCES.ACTIVE_SESSION);
+});
+
+test("general classifier intent falls through to normal AI route", () => {
+  const decision = decisionFor("what are your timings", {
+    classifierResult: {
+      intent: "GENERAL_QUESTION",
+      requires: { knowledge: true, doctors: false, appointments: false },
+    },
+  });
+
+  assert.equal(decision.shouldHandle, false);
+  assert.equal(decision.route, APPOINTMENT_OPERATION_ROUTES.GENERAL_QUESTION);
+  assert.equal(decision.source, APPOINTMENT_OPERATION_SOURCES.GENERAL);
 });
 
 test("shadow mode computes but does not enable handling", () => {

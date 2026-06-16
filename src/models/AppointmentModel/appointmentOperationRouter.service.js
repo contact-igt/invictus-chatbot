@@ -816,6 +816,34 @@ const normalizeMeaningClassifierDecision = (raw = {}) => {
   });
 };
 
+const normalizeClassifierIntentDecision = (raw = {}) => {
+  if (raw?.intent === "APPOINTMENT_ACTION") {
+    return makeDecision({
+      shouldHandle: true,
+      route: APPOINTMENT_OPERATION_ROUTES.BOOK_APPOINTMENT,
+      action: APPOINTMENT_OPERATION_ACTIONS.BOOK,
+      source: APPOINTMENT_OPERATION_SOURCES.CLASSIFIER_INTENT,
+      confidence: 0.78,
+      reason: "Intent classifier detected appointment booking action.",
+      entities: {},
+    });
+  }
+
+  if (raw?.intent === "MANAGE_APPOINTMENTS_ACTION") {
+    return makeDecision({
+      shouldHandle: true,
+      route: APPOINTMENT_OPERATION_ROUTES.MANAGE_APPOINTMENT,
+      action: APPOINTMENT_OPERATION_ACTIONS.UNKNOWN,
+      source: APPOINTMENT_OPERATION_SOURCES.CLASSIFIER_INTENT,
+      confidence: 0.78,
+      reason: "Intent classifier detected manage appointment action.",
+      entities: {},
+    });
+  }
+
+  return makeDecision();
+};
+
 const runAiHelper = async ({ message, tenantId, previousBotContext }) => {
   const prompt = `Classify this WhatsApp message for appointment routing only. Do not write a customer reply.
 
@@ -870,6 +898,7 @@ export const resolveAppointmentOperationDecision = ({
   normalizedMessage,
   previousBotContext = PREVIOUS_BOT_CONTEXTS.NONE,
   meaningClassifierResult = null,
+  classifierResult = null,
   activeBookingSession = null,
   activeManageSession = null,
 } = {}) => {
@@ -986,6 +1015,11 @@ export const resolveAppointmentOperationDecision = ({
     if (meaningDecision.shouldHandle) return meaningDecision;
   }
 
+  if (classifierResult) {
+    const classifierDecision = normalizeClassifierIntentDecision(classifierResult);
+    if (classifierDecision.shouldHandle) return classifierDecision;
+  }
+
   return makeDecision();
 };
 
@@ -1085,6 +1119,16 @@ export const routeAppointmentOperation = async ({
           previousContextResult.chatHistory || [],
           tenantId,
         ).catch(() => null);
+  }
+
+  if (!decision.shouldHandle && resolvedClassifier) {
+    decision = resolveAppointmentOperationDecision({
+      normalizedMessage: input,
+      previousBotContext: previousContextResult.previousBotContext,
+      classifierResult: resolvedClassifier,
+      activeManageSession: validActiveManageSession,
+      activeBookingSession: validActiveBookingSession,
+    });
   }
 
   if (
