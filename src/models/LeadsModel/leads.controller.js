@@ -1,8 +1,4 @@
 import {
-  getContactByContactIdAndTenantIdService,
-  getContactByIdAndTenantIdService,
-} from "../ContactsModel/contacts.service.js";
-import {
   deleteLeadService,
   permanentDeleteLeadService,
   getLeadListService,
@@ -82,13 +78,14 @@ export const getLeadSummaryController = async (req, res) => {
     if (!lead) {
       return res.status(404).send({ message: "Lead not found" });
     }
-    const contactDetails = await getContactByContactIdAndTenantIdService(
-      lead.contact_id,
-      tenant_id,
-    );
 
-    const { mode, date, start_date, end_date, force } = req.query;
-    
+    const response = await getLeadSummaryService(tenant_id, lead_id, {
+      mode: req.query.mode,
+      date: req.query.date,
+      start_date: req.query.start_date,
+      end_date: req.query.end_date,
+      force: req.query.force,
+    });
 
     return res.status(200).send({
       message: "success",
@@ -118,7 +115,11 @@ export const getBulkLeadSummaryController = async (req, res) => {
   }
 
   try {
-    
+    const response = await getBulkLeadSummaryService(tenant_id, lead_ids);
+    return res.status(200).send({
+      message: "success",
+      data: response,
+    });
   } catch (err) {
     return res.status(500).send({
       message: err?.message,

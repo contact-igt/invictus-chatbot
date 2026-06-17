@@ -1227,19 +1227,123 @@ export const getLeadListService = async (tenant_id) => {
   }
 };
 
-export const getLeadSummaryService = async (tenant_id, lead_id) => {
+// Fetches messages for a contact, optionally filtered to a date range.
+// Timeframe queries use a higher LIMIT so no activity within the window is lost.
+const getMessagesForSummary = async (
+  tenant_id,
+  contact_id,
+  { dateFrom = null, dateTo = null } = {},
+) => {
+  let whereClause = "tenant_id = ? AND contact_id = ?";
+  const replacements = [tenant_id, contact_id];
+
+  if (dateFrom) {
+    whereClause += " AND created_at >= ?";
+    replacements.push(`${dateFrom} 00:00:00`);
+  }
+  if (dateTo) {
+    whereClause += " AND created_at <= ?";
+    replacements.push(`${dateTo} 23:59:59`);
+  }
+
+  const limitClause = dateFrom ? "LIMIT 200" : "LIMIT 50";
+
+  const [rows] = await db.sequelize.query(
+    `SELECT sender, message, message_type, media_filename, created_at
+     FROM ${tableNames.MESSAGES}
+     WHERE ${whereClause}
+     ORDER BY created_at ASC
+     ${limitClause}`,
+    { replacements },
+  );
+
+  return rows;
+};
+
+export const getLeadSummaryService = async (
+  tenant_id,
+  lead_id,
+  options = {},
+) => {
+  const { mode, date, start_date, end_date, force } = options;
+
   const lead = await getLeadByLeadIdService(tenant_id, lead_id);
   if (!lead) {
     throw new Error("Lead not found");
   }
 
+  const isTimeframe =
+    mode === "timeframe" && (date || (start_date && end_date));
+  const forceRefresh = force === true || force === "true" || force === "1";
+
+  // Default mode — return cached summary if present and refresh not requested
+  if (!isTimeframe && !forceRefresh && lead.ai_summary) {
+    return {
+      lead_id: lead.lead_id,
+      contact_id: lead.contact_id,
+      ai_summary: lead.ai_summary,
+      summary_status: lead.summary_status || "old",
+      ai_summary_created_at: lead.ai_summary_created_at || null,
+      from_cache: true,
+    };
+  }
+
+  const dateFrom = isTimeframe ? start_date || date : null;
+  const dateTo = isTimeframe ? end_date || date : null;
+
+  const messages = await getMessagesForSummary(tenant_id, lead.contact_id, {
+    dateFrom,
+    dateTo,
+  });
+
+  // No messages found — respond gracefully without touching the DB
+  if (!messages.length) {
+    return {
+      lead_id: lead.lead_id,
+      contact_id: lead.contact_id,
+      ai_summary: isTimeframe
+        ? "No conversation activity found in the selected date range."
+        : lead.ai_summary || null,
+      summary_status: isTimeframe
+        ? "timeframe"
+        : lead.summary_status || "new",
+      ai_summary_created_at: lead.ai_summary_created_at || null,
+    };
+  }
+
+  // Format messages for the AI prompt
+  const chatHistory = buildChatHistory(messages);
+  const memoryText = chatHistory
+    .map((m) => `[${m.role === "user" ? "Customer" : "Agent"}]: ${m.content}`)
+    .join("\n");
+
+  const instruction = getLeadSummaryModeInstruction(
+    isTimeframe ? "timeframe" : mode || "default",
+    dateFrom,
+    dateTo,
+  );
+  const prompt = getLeadSummarizePrompt(instruction, memoryText);
+
+  const aiSummary = await AiService("system", prompt, tenant_id, "lead_summary");
+
+  // Persist default / force-refresh summaries; timeframe summaries are ephemeral
+  if (!isTimeframe) {
+    await db.Leads.update(
+      {
+        ai_summary: aiSummary,
+        summary_status: "old",
+        ai_summary_created_at: new Date(),
+      },
+      { where: { tenant_id, lead_id, is_deleted: false } },
+    );
+  }
+
   return {
     lead_id: lead.lead_id,
     contact_id: lead.contact_id,
-    ai_summary: lead.ai_summary || null,
-    summary_status: lead.summary_status || "new",
-    ai_summary_created_at: lead.ai_summary_created_at || null,
-    last_messages: lead.last_messages || [],
+    ai_summary: aiSummary,
+    summary_status: isTimeframe ? "timeframe" : "old",
+    ai_summary_created_at: isTimeframe ? null : new Date(),
   };
 };
 
