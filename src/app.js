@@ -35,6 +35,7 @@ import BillingRouter from "./models/BillingModel/billing.routes.js";
 import WhatsappOtpRouter from "./models/OtpVerificationModel/otpverification.routes.js";
 import PaymentRouter from "./models/PaymentModel/payment.routes.js";
 import SuperAdminDashboardRouter from "./models/SuperAdminDashboardModel/superAdminDashboard.routes.js";
+import ApiRequestLogRouter from "./models/ApiRequestLogModel/apiRequestLog.routes.js";
 import {
   runBillingCycleCron,
   runAutoRechargeCron,
@@ -54,20 +55,24 @@ import { initCampaignQueues } from "./queues/campaignQueue.js";
 import {
   startCampaignDispatchWorker,
   getDispatchWorkerStatus,
+  closeDispatchWorker,
 } from "./workers/campaignDispatchWorker.js";
 import {
   startCampaignSendWorker,
   getSendWorkerStatus,
+  closeSendWorker,
 } from "./workers/campaignSendWorker.js";
 import { validateRazorpayConfig } from "./models/PaymentModel/payment.service.js";
 import { logger } from "./utils/logger.js";
 import { authenticate, authorize } from "./middlewares/auth/authMiddlewares.js";
 import { getCampaignDiagnosticsController } from "./models/WhatsappCampaignModel/whatsappcampaign.controller.js";
+import { apiRequestLogger } from "./middlewares/apiRequestLogger/index.js";
 import cron from "node-cron";
 import { tableNames } from "./database/tableName.js";
 import { runHardDeleteCron } from "./utils/lifecycle/hardDeleteCron.js";
 import { runMissingMessageBillingReconciliationCron } from "./cron/reconciliationCron.js";
 import { runScheduledMessageCron } from "./cron/scheduledMessageCron.js";
+import { initBillingReconciliationCron } from "./cron/billingReconciliationCron.js"; // B-2: Orphaned reservation reconciliation
 import { cleanupExpiredSessions } from "./models/AppointmentModel/appointmentConversation.service.js";
 import { expireAdvancedAppointmentSessions } from "./models/AppointmentModel/Advanced_Appointment_Booking.service.js";
 import { expireManageAppointmentSessions } from "./models/AppointmentModel/Manage_Booked_Appointments.service.js";
@@ -91,12 +96,10 @@ const corsOptions = {
 // Explicit preflight handler — must come before app.use(cors()) so OPTIONS
 // requests are short-circuited at the highest priority, before any router
 // or auth middleware can intercept them.
-app.options("*", cors(corsOptions));
-
 app.use(cors(corsOptions));
 
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: "10mb" })); // 25 MB — covers document uploads (largest allowed type)
+app.use(express.urlencoded({ extended: true, limit: "10mb" })); // 25 MB — covers document uploads (largest allowed type)
 
 app.use(
   fileUpload({
@@ -110,8 +113,16 @@ app.use((req, res, next) => {
   next();
 });
 
+app.use(apiRequestLogger);
+app.options("*", cors(corsOptions));
+
 app.use("/api/management", ModuleAccessManagementRouter);
-app.use("/api/management", SuperAdminDashboardRouter, ManagementRouter);
+app.use(
+  "/api/management",
+  SuperAdminDashboardRouter,
+  ApiRequestLogRouter,
+  ManagementRouter,
+);
 app.use("/api/management", TenantFeatureAccessManagementRouter);
 
 app.use("/api/tenant", TenantFeatureAccessTenantRouter);
@@ -178,6 +189,7 @@ app.use((err, req, res, next) => {
   );
 
   const status = err?.status || err?.statusCode || 500;
+  res.locals.errorMessage = err?.message || null;
   logger.error(
     `[ERROR-HANDLER] ${req.method} ${req.url} → ${status}:`,
     err?.message,
@@ -238,6 +250,9 @@ try {
 startLeadHeatDecayCronService();
 startLiveChatCleanupService();
 
+// B-2: Initialize billing orphan reconciliation cron (every 15 minutes)
+initBillingReconciliationCron();
+
 // Initialize campaign queues before starting the scheduler so the cron can
 // enqueue BullMQ jobs on its very first tick.
 initCampaignQueues()
@@ -278,7 +293,7 @@ initCampaignQueues()
     }
 
     startCampaignDispatchWorker();
-    startCampaignSendWorker();
+    await startCampaignSendWorker();
     logger.info(
       `[STARTUP] Dispatch worker status: ${JSON.stringify(getDispatchWorkerStatus())}`,
     );
@@ -385,3 +400,29 @@ initSocket(server);
 server.listen(PORT, () => {
   logger.info("Server + Socket running on", PORT);
 });
+
+/**
+ * Graceful shutdown: flush all campaign send worker buffers and close workers
+ * before process exits. Prevents data loss on SIGTERM/SIGINT/crash.
+ * B-5 mitigation: ensures up to ~100 buffered messages are persisted before exit.
+ */
+const gracefulShutdown = async () => {
+  logger.info("[SHUTDOWN] Graceful shutdown initiated...");
+  try {
+    logger.info("[SHUTDOWN] Closing send worker (will flush buffers)...");
+    await closeSendWorker();
+  } catch (err) {
+    logger.error(`[SHUTDOWN] Error closing send worker: ${err.message}`);
+  }
+  try {
+    logger.info("[SHUTDOWN] Closing dispatch worker...");
+    await closeDispatchWorker();
+  } catch (err) {
+    logger.error(`[SHUTDOWN] Error closing dispatch worker: ${err.message}`);
+  }
+  logger.info("[SHUTDOWN] Graceful shutdown complete. Exiting.");
+  process.exit(0);
+};
+
+process.on("SIGTERM", gracefulShutdown);
+process.on("SIGINT", gracefulShutdown);

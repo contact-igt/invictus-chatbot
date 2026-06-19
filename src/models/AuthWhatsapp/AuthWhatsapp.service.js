@@ -39,6 +39,31 @@ const httpsAgent = new https.Agent({
   keepAlive: true,
 });
 
+const META_GRAPH_BASE_URL = "https://graph.facebook.com";
+const DEFAULT_META_REQUEST_TIMEOUT_MS = 30000;
+
+const buildMetaMessagesUrl = (apiVersion, phoneNumberId) =>
+  `${META_GRAPH_BASE_URL}/${apiVersion}/${phoneNumberId}/messages`;
+
+const buildMetaSendRequestConfig = (accessToken) => ({
+  headers: {
+    Authorization: `Bearer ${accessToken}`,
+    "Content-Type": "application/json",
+  },
+  httpsAgent,
+  proxy: false,
+  timeout: Number(process.env.META_REQUEST_TIMEOUT_MS || DEFAULT_META_REQUEST_TIMEOUT_MS),
+});
+
+const sanitizeMetaErrorBody = (body) => {
+  if (!body || typeof body !== "object") return body || null;
+  return JSON.parse(
+    JSON.stringify(body, (key, value) =>
+      String(key).toLowerCase().includes("token") ? "[redacted]" : value,
+    ),
+  );
+};
+
 const FIXED_MISSING_INFO_FALLBACK = MISSING_INFO_FALLBACK_REPLY;
 
 const FACTUAL_KEYWORD_PATTERN =
@@ -456,6 +481,7 @@ export const sendWhatsAppTemplate = async (
   templateName,
   languageCode,
   components,
+  sendContext = {},
 ) => {
   const [rows] = await db.sequelize.query(
     `SELECT phone_number_id FROM ${tableNames.WHATSAPP_ACCOUNT}
@@ -468,7 +494,6 @@ export const sendWhatsAppTemplate = async (
   const { phone_number_id } = rows[0];
   const access_token = await getSecret(tenant_id, "whatsapp");
   if (!access_token) throw new Error("WhatsApp access token not found");
-  console.log("components", JSON.stringify(components, null, 2));
 
   // Guard against null/empty language code — default to "en" as safe fallback
   const resolvedLanguageCode = languageCode || "en";
@@ -490,33 +515,44 @@ export const sendWhatsAppTemplate = async (
       components: components || [],
     },
   };
-  console.log("Full Payload:", JSON.stringify(payload, null, 2));
   const META_API_VERSION = process.env.META_API_VERSION || "v23.0";
-  console.log(
-    `[SEND-TEMPLATE] Using Meta API version: ${META_API_VERSION}, phone_number_id: ${phone_number_id}, to: ${to}`,
-  );
+  const requestUrl = buildMetaMessagesUrl(META_API_VERSION, phone_number_id);
+  console.log("[SEND-TEMPLATE] Meta send request", {
+    campaign_id: sendContext.campaign_id || null,
+    recipient_id: sendContext.recipient_id || null,
+    phone: to,
+    phone_number_id,
+    template_name: templateName,
+    request_url: requestUrl,
+  });
 
   try {
     const response = await axios.post(
-      `https://graph.facebook.com/${META_API_VERSION}/${phone_number_id}/messages`,
+      requestUrl,
       payload,
-      {
-        headers: {
-          Authorization: `Bearer ${access_token}`,
-          "Content-Type": "application/json",
-        },
-        httpsAgent,
-      },
+      buildMetaSendRequestConfig(access_token),
     );
 
     const meta_message_id = response.data?.messages?.[0]?.id;
 
     return { phone_number_id, meta_message_id };
   } catch (error) {
+    console.error("[SEND-TEMPLATE] Meta send failed", {
+      campaign_id: sendContext.campaign_id || null,
+      recipient_id: sendContext.recipient_id || null,
+      phone: to,
+      phone_number_id,
+      template_name: templateName,
+      request_url: requestUrl,
+      error_code: error.code || null,
+      error_message: error.message,
+      meta_status: error.response?.status || null,
+      meta_error_body: sanitizeMetaErrorBody(error.response?.data),
+    });
     if (error.response) {
       console.error(
         "Meta API Error Details:",
-        JSON.stringify(error.response.data, null, 2),
+        JSON.stringify(sanitizeMetaErrorBody(error.response.data), null, 2),
       );
       const metaErr = error.response.data?.error || {};
       const message = metaErr.message || error.message;
@@ -524,7 +560,12 @@ export const sendWhatsAppTemplate = async (
       const subcode = metaErr.error_subcode
         ? ` (Subcode: ${metaErr.error_subcode})`
         : "";
-      throw new Error(`Meta API Error: ${message}${code}${subcode}`);
+      const metaError = new Error(`Meta API Error: ${message}${code}${subcode}`);
+      metaError.meta_response_status = error.response.status;
+      metaError.meta_error_code = metaErr.code || null;
+      metaError.meta_error_subcode = metaErr.error_subcode || null;
+      metaError.meta_error_body = sanitizeMetaErrorBody(error.response.data);
+      throw metaError;
     }
     throw error;
   }

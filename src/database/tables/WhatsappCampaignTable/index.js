@@ -75,6 +75,11 @@ export const WhatsappCampaignTable = (sequelize, Sequelize) => {
         defaultValue: 0,
       },
 
+      paused_reason: {
+        type: Sequelize.TEXT,
+        allowNull: true,
+      },
+
       scheduled_at: {
         type: Sequelize.DATE,
         allowNull: true,
@@ -108,6 +113,13 @@ export const WhatsappCampaignTable = (sequelize, Sequelize) => {
       media_handle: {
         type: Sequelize.TEXT,
         allowNull: true,
+      },
+
+      last_dispatch_enqueued_at: {
+        type: Sequelize.DATE,
+        allowNull: true,
+        comment:
+          "Timestamp when campaign dispatch was last enqueued (for finalization race guards)",
       },
 
       is_deleted: {
@@ -166,6 +178,10 @@ export const WhatsappCampaignTable = (sequelize, Sequelize) => {
         {
           name: "idx_campaign_status_scheduled_at",
           fields: ["status", "scheduled_at"],
+        },
+        {
+          name: "idx_campaigns_status_last_dispatch_enqueued",
+          fields: ["status", "last_dispatch_enqueued_at"],
         },
         {
           name: "idx_campaign_deleted",

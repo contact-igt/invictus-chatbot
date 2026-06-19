@@ -53,7 +53,12 @@ import {
   buildBookingToManageSwitchConfirmPayload,
   sendAppointmentPayload,
 } from "../AppointmentModel/whatsappAppointmentTemplates.service.js";
-import { parseButtonReply, sendQuickReply, sendListMessage, sendAppointmentCard } from "./whatsappButtons.service.js"; // NEW
+import {
+  parseButtonReply,
+  sendQuickReply,
+  sendListMessage,
+  sendAppointmentCard,
+} from "./whatsappButtons.service.js"; // NEW
 
 import { processBillingFromWebhook } from "../BillingModel/billing.service.js";
 import {
@@ -71,6 +76,7 @@ import {
 } from "../TenantModel/tenant.service.js";
 
 import db from "../../database/index.js";
+import { tableNames } from "../../database/tableName.js";
 import {
   createContactService,
   getContactByPhoneAndTenantIdService,
@@ -91,7 +97,6 @@ import {
   updateLiveChatTimestampService,
 } from "../LiveChatModel/livechat.service.js";
 import { markMediaAsApprovedService } from "../GalleryModel/gallery.service.js";
-import { tableNames } from "../../database/tableName.js";
 
 const FIXED_MISSING_INFO_FALLBACK = MISSING_INFO_FALLBACK_REPLY;
 
@@ -99,7 +104,9 @@ const FIXED_MISSING_INFO_FALLBACK = MISSING_INFO_FALLBACK_REPLY;
 const faqTrace = (label, data) => {
   const line = `[${new Date().toISOString()}] ${label} ${JSON.stringify(data)}\n`;
   process.stdout.write(line);
-  try { fs.appendFileSync("/tmp/faq_trace.log", line); } catch {}
+  try {
+    fs.appendFileSync("/tmp/faq_trace.log", line);
+  } catch {}
 };
 
 const ENABLE_APPOINTMENT_BUTTONS = false;
@@ -152,7 +159,8 @@ const isLegacyAppointmentManagementReplyId = (replyId = "") => {
 const getLegacyAppointmentIntentForReply = (replyId = "") => {
   const id = String(replyId || "").trim();
   if (id === "view_my_appointments") return "view_my_appointments";
-  if (id === "cancel_appointment" || id.startsWith("cancel_")) return "cancel_appointment";
+  if (id === "cancel_appointment" || id.startsWith("cancel_"))
+    return "cancel_appointment";
   if (id.startsWith("reschedule_")) return "reschedule_appointment";
   return null;
 };
@@ -201,9 +209,7 @@ const resolveAiReplyEnvelope = (aiResult, userText) => {
   // send the AI's actual reply (not the fallback). Only use the fallback
   // when the AI reply is empty/null (true missing info scenario).
   const messageToSend =
-    finalReply && finalReply.trim()
-      ? finalReply.trim()
-      : fallback;
+    finalReply && finalReply.trim() ? finalReply.trim() : fallback;
 
   return {
     messageToSend,
@@ -325,7 +331,7 @@ export const receiveMessage = async (req, res) => {
             {
               replacements: [
                 mappedStatus,
-                mappedStatus === 'rejected' ? rejectionReason : null,
+                mappedStatus === "rejected" ? rejectionReason : null,
                 template.template_id,
                 account.tenant_id,
               ],
@@ -341,7 +347,10 @@ export const receiveMessage = async (req, res) => {
             {
               replacements: [
                 template.template_id,
-                JSON.stringify({ event: status, reason: rejectionReason || null }),
+                JSON.stringify({
+                  event: status,
+                  reason: rejectionReason || null,
+                }),
                 mappedStatus,
               ],
             },
@@ -422,6 +431,34 @@ export const receiveMessage = async (req, res) => {
         console.error("Error finding tenant_id for webhook:", e);
       }
 
+      // B-4: Cross-validate webhook phone_number_id belongs to resolved tenant (security fix)
+      if (webhook_tenant_id && value?.metadata?.phone_number_id) {
+        try {
+          const webhookPhoneId = value.metadata.phone_number_id;
+          const [tenantPhoneAccount] = await db.sequelize.query(
+            `SELECT phone_number_id FROM whatsapp_accounts 
+             WHERE tenant_id = ? AND phone_number_id = ? LIMIT 1`,
+            { replacements: [webhook_tenant_id, webhookPhoneId] },
+          );
+
+          if (!tenantPhoneAccount || tenantPhoneAccount.length === 0) {
+            // B-4: Tenant-scoping mismatch — webhook phone_number_id does not belong to resolved tenant
+            console.error(
+              `[WEBHOOK] SECURITY: Tenant-scoping mismatch for status update ${messageId}. ` +
+                `Resolved tenant=${webhook_tenant_id} but webhook phone_number_id=${webhookPhoneId} ` +
+                `does not belong to that tenant. Rejecting webhook.`,
+            );
+            return res.sendStatus(200); // Accept HTTP but reject processing
+          }
+        } catch (e) {
+          console.error(
+            `[WEBHOOK] Error validating tenant-scoping for message ${messageId}:`,
+            e,
+          );
+          // On error, continue processing (fail-open for availability, but log the issue)
+        }
+      }
+
       if (webhook_tenant_id) {
         console.log(
           `[WEBHOOK] Identified tenant ${webhook_tenant_id} for status update: ${messageId}`,
@@ -447,6 +484,12 @@ export const receiveMessage = async (req, res) => {
 
         if (recipient) {
           const oldStatus = recipient.status;
+          if (
+            status === "failed" &&
+            ["delivered", "read", "replied"].includes(oldStatus)
+          ) {
+            return;
+          }
           const statusPriority = {
             sent: 1,
             delivered: 2,
@@ -456,46 +499,29 @@ export const receiveMessage = async (req, res) => {
             permanently_failed: 6,
           };
 
-          // Determine if this is a permanent failure from Meta error message
-          let effectiveStatus = status;
-          if (status === "failed") {
-            const errorTitle = String(
-              statusUpdate.errors?.[0]?.title || "",
-            ).toLowerCase();
-            const errorMessage = String(
-              statusUpdate.errors?.[0]?.message || "",
-            ).toLowerCase();
-            const combinedError = errorTitle + " " + errorMessage;
-
-            const isPermanentMetaError =
-              combinedError.includes("healthy ecosystem") ||
-              combinedError.includes("not delivered") ||
-              combinedError.includes("spam") ||
-              combinedError.includes("blocked") ||
-              combinedError.includes("recipient not on whatsapp") ||
-              combinedError.includes("incapable of receiving") ||
-              combinedError.includes("re-engage") ||
-              combinedError.includes("user is not in allowed list");
-
-            if (isPermanentMetaError) {
-              effectiveStatus = "permanently_failed";
-            }
-          }
+          // Any 'failed' delivery webhook from Meta is terminal — Meta does
+          // not retry a failed send on our behalf, and no internal worker re-
+          // dispatches recipients in status='failed' either. Collapse to
+          // 'permanently_failed' so recipient state matches the send worker's
+          // permanent-failure path and campaigns can finalize cleanly.
+          const effectiveStatus =
+            status === "failed" ? "permanently_failed" : status;
 
           if (
             statusPriority[effectiveStatus] > (statusPriority[oldStatus] || 0)
           ) {
+            const errorTitle = statusUpdate.errors?.[0]?.title || null;
+            const errorMessage = statusUpdate.errors?.[0]?.message || null;
+            const combinedError =
+              [errorTitle, errorMessage].filter(Boolean).join(": ") || null;
             const updateData = {
               status: effectiveStatus,
               error_message:
-                effectiveStatus === "failed" ||
-                  effectiveStatus === "permanently_failed"
-                  ? statusUpdate.errors?.[0]?.title
-                  : null,
+                effectiveStatus === "permanently_failed" ? combinedError : null,
             };
 
-            // Mark as max retries if permanently failed
             if (effectiveStatus === "permanently_failed") {
+              updateData.last_error = combinedError;
               updateData.retry_count = 3;
               updateData.next_retry_at = null;
             }
@@ -530,10 +556,10 @@ export const receiveMessage = async (req, res) => {
       });
 
       // After webhook status update, check if campaign should be marked completed/failed
+      // B-3: Only finalize if last_dispatch_enqueued_at is >5 minutes old to prevent race
       if (
         campaignUpdatePayload &&
-        (campaignUpdatePayload.status === "failed" ||
-          campaignUpdatePayload.status === "permanently_failed")
+        campaignUpdatePayload.status === "permanently_failed"
       ) {
         setImmediate(async () => {
           try {
@@ -544,7 +570,11 @@ export const receiveMessage = async (req, res) => {
               where: { campaign_id, status: "pending", is_deleted: false },
             });
 
-            // If no pending recipients, check final status
+            // If no pending recipients, finalize the campaign. BullMQ retries
+            // happen entirely in-memory before a recipient transitions out of
+            // "pending", so once pendingCount === 0 every retry has already
+            // resolved. No re-dispatch path exists for status='failed' or
+            // 'permanently_failed' recipients, so they are terminal here.
             if (pendingCount === 0) {
               const successCount = await db.WhatsappCampaignRecipients.count({
                 where: {
@@ -561,23 +591,20 @@ export const receiveMessage = async (req, res) => {
                 },
               });
 
-              const retryableFailedCount =
-                await db.WhatsappCampaignRecipients.count({
-                  where: {
-                    campaign_id,
-                    is_deleted: false,
-                    status: "failed",
-                    retry_count: { [db.Sequelize.Op.lt]: 3 },
-                  },
-                });
+              // B-3: Only update if last_dispatch_enqueued_at is >5 minutes old
+              // This prevents marking campaign complete while a fresh dispatch is still enqueued
+              const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+              const newStatus = successCount > 0 ? "completed" : "failed";
+              const [affectedRows] = await db.sequelize.query(
+                `UPDATE ${tableNames.WHATSAPP_CAMPAIGN}
+                 SET status = ?
+                 WHERE campaign_id = ?
+                   AND status = 'active'
+                   AND (last_dispatch_enqueued_at IS NULL OR last_dispatch_enqueued_at < ?)`,
+                { replacements: [newStatus, campaign_id, fiveMinutesAgo] },
+              );
 
-              // Only update if no retryable failures pending
-              if (retryableFailedCount === 0) {
-                const newStatus = successCount > 0 ? "completed" : "failed";
-                await db.WhatsappCampaigns.update(
-                  { status: newStatus },
-                  { where: { campaign_id, status: "active" } },
-                );
+              if (affectedRows > 0) {
                 console.log(
                   `[WEBHOOK] Campaign ${campaign_id} marked as ${newStatus} — success=${successCount}`,
                 );
@@ -736,7 +763,13 @@ export const receiveMessage = async (req, res) => {
     });
 
     // Diagnostic: log every webhook receipt to detect multi-instance delivery
-    console.log("[WEBHOOK-RECV]", { pid: process.pid, host: os.hostname(), messageId, phone, tenant_id });
+    console.log("[WEBHOOK-RECV]", {
+      pid: process.pid,
+      host: os.hostname(),
+      messageId,
+      phone,
+      tenant_id,
+    });
 
     // 4. Atomic dedupe gate. If this did not insert, Meta already delivered it.
     const didMarkMessage = await tryMarkMessageProcessed(
@@ -844,7 +877,10 @@ export const receiveMessage = async (req, res) => {
     // We save the meta_media_id to DB first (fast, no user delay), then async-download
     // and update the DB + re-emit so the frontend swaps to the permanent R2 URL.
     const DOWNLOADABLE_TYPES = ["image", "video", "audio", "document"];
-    if (DOWNLOADABLE_TYPES.includes(type) && media_url?.startsWith("meta_media_id:")) {
+    if (
+      DOWNLOADABLE_TYPES.includes(type) &&
+      media_url?.startsWith("meta_media_id:")
+    ) {
       const rawMediaId = media_url.replace("meta_media_id:", "");
       const msgId = savedMsg?.id;
       const capturedContactId = contactsaved?.contact_id;
@@ -868,12 +904,16 @@ export const receiveMessage = async (req, res) => {
           );
 
           // Re-emit with the permanent URL so the frontend swaps immediately
-          ioInstance.to(`tenant-${capturedTenantId}`).emit("media-url-updated", {
-            messageId: msgId,
-            media_url: result.r2Url,
-          });
+          ioInstance
+            .to(`tenant-${capturedTenantId}`)
+            .emit("media-url-updated", {
+              messageId: msgId,
+              media_url: result.r2Url,
+            });
 
-          console.log(`[MEDIA-DOWNLOAD] Stored incoming ${type} → ${result.r2Url}`);
+          console.log(
+            `[MEDIA-DOWNLOAD] Stored incoming ${type} → ${result.r2Url}`,
+          );
         } catch (err) {
           console.error("[MEDIA-DOWNLOAD] Async download failed:", err.message);
         }
@@ -1062,8 +1102,10 @@ export const receiveMessage = async (req, res) => {
         );
 
         const activeManageAppointmentSession =
-          await hasActiveManageAppointmentSession({ tenantId: tenant_id, userPhone: phone })
-            .catch(() => false);
+          await hasActiveManageAppointmentSession({
+            tenantId: tenant_id,
+            userPhone: phone,
+          }).catch(() => false);
         if (
           !activeManageAppointmentSession &&
           isDoctorListTemplateRequest({ text, replyId: buttonReplyId })
@@ -1075,10 +1117,11 @@ export const receiveMessage = async (req, res) => {
             message: text,
             whatsappMessageId: messageId || null,
           });
-          const doctorListResult = await buildAvailableDoctorListAppointmentResponse({
-            tenantId: tenant_id,
-            userPhone: phone,
-          });
+          const doctorListResult =
+            await buildAvailableDoctorListAppointmentResponse({
+              tenantId: tenant_id,
+              userPhone: phone,
+            });
           await handleAdvancedAppointmentResponse(
             doctorListResult,
             tenant_id,
@@ -1099,22 +1142,32 @@ export const receiveMessage = async (req, res) => {
           if (imageUrl?.startsWith("meta_media_id:")) {
             const rawId = imageUrl.replace("meta_media_id:", "");
             const dlResult = await downloadAndStoreIncomingMedia(
-              rawId, media_mime_type, "image", tenant_id, contactsaved?.contact_id,
+              rawId,
+              media_mime_type,
+              "image",
+              tenant_id,
+              contactsaved?.contact_id,
             ).catch(() => null);
             imageUrl = dlResult?.r2Url || null;
           }
 
           if (!imageUrl) {
             await sendWhatsAppMessage(
-              tenant_id, phone,
+              tenant_id,
+              phone,
               "I received your image but couldn't open it. Please try sending it again.",
             ).catch(() => {});
             return;
           }
 
           const visionResult = await getOpenAIVisionReply(
-            tenant_id, phone, imageUrl, text,
-            contactsaved?.contact_id, phone_number_id, cachedData,
+            tenant_id,
+            phone,
+            imageUrl,
+            text,
+            contactsaved?.contact_id,
+            phone_number_id,
+            cachedData,
           );
 
           const visionReply = visionResult?.message;
@@ -1122,22 +1175,39 @@ export const receiveMessage = async (req, res) => {
 
           let visionWamid = null;
           try {
-            const visionSend = await sendWhatsAppMessage(tenant_id, phone, visionReply);
+            const visionSend = await sendWhatsAppMessage(
+              tenant_id,
+              phone,
+              visionReply,
+            );
             visionWamid = visionSend?.wamid || null;
           } catch (sendErr) {
             console.error("[VISION-AI] Failed to send reply:", sendErr.message);
           }
 
           const savedVisionMsg = await createUserMessageService(
-            tenant_id, contactsaved?.contact_id, phone_number_id, phone,
-            visionWamid, name, "bot", null, visionReply, "text", null, null,
+            tenant_id,
+            contactsaved?.contact_id,
+            phone_number_id,
+            phone,
+            visionWamid,
+            name,
+            "bot",
+            null,
+            visionReply,
+            "text",
+            null,
+            null,
             visionWamid ? "sent" : null,
           );
 
           const ioVision = getIO();
-          ioVision.to(`tenant-${tenant_id}`).emit("ai-typing", { tenant_id, phone, status: false });
+          ioVision
+            .to(`tenant-${tenant_id}`)
+            .emit("ai-typing", { tenant_id, phone, status: false });
           ioVision.to(`tenant-${tenant_id}`).emit("new-message", {
-            tenant_id, phone,
+            tenant_id,
+            phone,
             id: savedVisionMsg?.id,
             contact_id: contactsaved?.contact_id,
             phone_number_id,
@@ -1155,7 +1225,8 @@ export const receiveMessage = async (req, res) => {
         // ── Audio / voice guard — send polite fallback (audio transcription is future work) ──
         if (type === "audio") {
           await sendWhatsAppMessage(
-            tenant_id, phone,
+            tenant_id,
+            phone,
             "I received your voice message! If you have a question, please type it and I'll be happy to help.",
           ).catch(() => {});
           return;
@@ -1164,7 +1235,8 @@ export const receiveMessage = async (req, res) => {
         // ── Video / document — acknowledge receipt, invite text question ──
         if (type === "video" || type === "document") {
           await sendWhatsAppMessage(
-            tenant_id, phone,
+            tenant_id,
+            phone,
             "Thanks for sharing! If you have any questions, please type them and I'll be happy to help.",
           ).catch(() => {});
           return;
@@ -1246,24 +1318,44 @@ export const receiveMessage = async (req, res) => {
         });
 
         // If getOpenAIReply routed an appointment intent, send the Advanced Appointment response.
-        const _apptTrace = { _appointmentResult: !!aiResult?._appointmentResult, tagDetected: aiResult?.tagDetected, msgPreview: String(aiResult?.message || "").substring(0, 60) };
-        try { import("fs").then(fs => fs.default.appendFileSync("/tmp/faq_trace.log", `[${new Date().toISOString()}] [CONTROLLER] aiResult check ${JSON.stringify(_apptTrace)}\n`)).catch(() => {}); } catch {}
-        console.log("[FAQ-PIPELINE][CTRL] aiResult:", JSON.stringify(_apptTrace));
+        const _apptTrace = {
+          _appointmentResult: !!aiResult?._appointmentResult,
+          tagDetected: aiResult?.tagDetected,
+          msgPreview: String(aiResult?.message || "").substring(0, 60),
+        };
+        try {
+          import("fs")
+            .then((fs) =>
+              fs.default.appendFileSync(
+                "/tmp/faq_trace.log",
+                `[${new Date().toISOString()}] [CONTROLLER] aiResult check ${JSON.stringify(_apptTrace)}\n`,
+              ),
+            )
+            .catch(() => {});
+        } catch {}
+        console.log(
+          "[FAQ-PIPELINE][CTRL] aiResult:",
+          JSON.stringify(_apptTrace),
+        );
         if (
           aiResult?._appointmentRoute &&
-          isAppointmentOperationDecisionEnabled(aiResult._appointmentRoute, routerMode)
+          isAppointmentOperationDecisionEnabled(
+            aiResult._appointmentRoute,
+            routerMode,
+          )
         ) {
-          const handledByAiSafetyRoute = await handleAppointmentOperationDecision({
-            decision: aiResult._appointmentRoute,
-            normalizedMessage: currentNormalizedMessage,
-            tenant_id,
-            phone,
-            contactObj,
-            contactsaved,
-            phone_number_id,
-            name,
-            whatsappMessageId: messageId || null,
-          });
+          const handledByAiSafetyRoute =
+            await handleAppointmentOperationDecision({
+              decision: aiResult._appointmentRoute,
+              normalizedMessage: currentNormalizedMessage,
+              tenant_id,
+              phone,
+              contactObj,
+              contactsaved,
+              phone_number_id,
+              name,
+              whatsappMessageId: messageId || null,
+            });
           if (handledByAiSafetyRoute) return;
         }
 
@@ -1398,9 +1490,22 @@ export const receiveMessage = async (req, res) => {
 
         // Execute tag handler AFTER sending the AI reply
         // This ensures correct message ordering (e.g., "Let me check..." before slots list)
-        faqTrace("[CONTROLLER] pre-executeTagHandler", { tagToExecute: tagToExecute ?? null, isMissingInfo: resolveAiReplyEnvelope(aiResult, text).isMissingInfoSignal, aiTag: aiResult?.tagDetected ?? null, msgPreview: String(aiResult?.message || "").substring(0, 60) });
+        faqTrace("[CONTROLLER] pre-executeTagHandler", {
+          tagToExecute: tagToExecute ?? null,
+          isMissingInfo: resolveAiReplyEnvelope(aiResult, text)
+            .isMissingInfoSignal,
+          aiTag: aiResult?.tagDetected ?? null,
+          msgPreview: String(aiResult?.message || "").substring(0, 60),
+        });
         if (tagToExecute) {
-          faqTrace("[CONTROLLER] ▶ invoking executeTagHandler", { tag: tagToExecute, payload: String(tagPayloadToExecute || "").substring(0, 100), tenant_id, phone, messageId: messageId || null, message_db_id: savedMsg?.id || null });
+          faqTrace("[CONTROLLER] ▶ invoking executeTagHandler", {
+            tag: tagToExecute,
+            payload: String(tagPayloadToExecute || "").substring(0, 100),
+            tenant_id,
+            phone,
+            messageId: messageId || null,
+            message_db_id: savedMsg?.id || null,
+          });
           try {
             const { executeTagHandler } =
               await import("../../utils/ai/aiTagHandlers/index.js");
@@ -1418,12 +1523,20 @@ export const receiveMessage = async (req, res) => {
               },
               text,
             );
-            faqTrace("[CONTROLLER] ✓ executeTagHandler completed", { tag: tagToExecute });
+            faqTrace("[CONTROLLER] ✓ executeTagHandler completed", {
+              tag: tagToExecute,
+            });
           } catch (tagErr) {
-            faqTrace("[CONTROLLER] ✗ executeTagHandler FAILED", { tag: tagToExecute, error: tagErr.message, stack: tagErr.stack?.substring(0, 300) });
+            faqTrace("[CONTROLLER] ✗ executeTagHandler FAILED", {
+              tag: tagToExecute,
+              error: tagErr.message,
+              stack: tagErr.stack?.substring(0, 300),
+            });
           }
         } else {
-          faqTrace("[CONTROLLER] ✗ tagToExecute is null — FAQ NOT created", { aiTag: aiResult?.tagDetected ?? null });
+          faqTrace("[CONTROLLER] ✗ tagToExecute is null — FAQ NOT created", {
+            aiTag: aiResult?.tagDetected ?? null,
+          });
         }
       } catch (err) {
         console.error("Background AI error:", err);
@@ -1471,8 +1584,10 @@ export const receiveMessage = async (req, res) => {
                     rawPayload: pending.rawPayload || null,
                   });
                 const queuedActiveManageAppointmentSession =
-                  await hasActiveManageAppointmentSession({ tenantId: tenant_id, userPhone: phone })
-                    .catch(() => false);
+                  await hasActiveManageAppointmentSession({
+                    tenantId: tenant_id,
+                    userPhone: phone,
+                  }).catch(() => false);
                 if (
                   !queuedActiveManageAppointmentSession &&
                   isDoctorListTemplateRequest({
@@ -1487,10 +1602,11 @@ export const receiveMessage = async (req, res) => {
                     message: pending.text || "",
                     whatsappMessageId: pending.messageId || null,
                   });
-                  const doctorListResult = await buildAvailableDoctorListAppointmentResponse({
-                    tenantId: tenant_id,
-                    userPhone: phone,
-                  });
+                  const doctorListResult =
+                    await buildAvailableDoctorListAppointmentResponse({
+                      tenantId: tenant_id,
+                      userPhone: phone,
+                    });
                   await handleAdvancedAppointmentResponse(
                     doctorListResult,
                     tenant_id,
@@ -1703,7 +1819,17 @@ export const receiveMessage = async (req, res) => {
                   });
 
                   if (queuedTagToExecute) {
-                    faqTrace("[CONTROLLER][QUEUED] ▶ invoking executeTagHandler", { tag: queuedTagToExecute, payload: String(queuedTagPayloadToExecute || "").substring(0, 100), tenant_id, phone });
+                    faqTrace(
+                      "[CONTROLLER][QUEUED] ▶ invoking executeTagHandler",
+                      {
+                        tag: queuedTagToExecute,
+                        payload: String(
+                          queuedTagPayloadToExecute || "",
+                        ).substring(0, 100),
+                        tenant_id,
+                        phone,
+                      },
+                    );
                     try {
                       const { executeTagHandler } =
                         await import("../../utils/ai/aiTagHandlers/index.js");
@@ -1721,9 +1847,19 @@ export const receiveMessage = async (req, res) => {
                         },
                         pending.text,
                       );
-                      faqTrace("[CONTROLLER][QUEUED] ✓ executeTagHandler completed", { tag: queuedTagToExecute });
+                      faqTrace(
+                        "[CONTROLLER][QUEUED] ✓ executeTagHandler completed",
+                        { tag: queuedTagToExecute },
+                      );
                     } catch (tagErr) {
-                      faqTrace("[CONTROLLER][QUEUED] ✗ executeTagHandler FAILED", { tag: queuedTagToExecute, error: tagErr.message, stack: tagErr.stack?.substring(0, 300) });
+                      faqTrace(
+                        "[CONTROLLER][QUEUED] ✗ executeTagHandler FAILED",
+                        {
+                          tag: queuedTagToExecute,
+                          error: tagErr.message,
+                          stack: tagErr.stack?.substring(0, 300),
+                        },
+                      );
                     }
                   }
                 }
@@ -1743,7 +1879,7 @@ export const receiveMessage = async (req, res) => {
                       status: false,
                     });
                   }
-                } catch (_) { }
+                } catch (_) {}
               }
             });
           }
@@ -1818,7 +1954,9 @@ async function routeAndMaybeHandleAppointmentOperation({
     mode: routerMode,
   });
 
-  if (!isAppointmentOperationDecisionEnabled(routingResult.decision, routerMode)) {
+  if (
+    !isAppointmentOperationDecisionEnabled(routingResult.decision, routerMode)
+  ) {
     return { handled: false, routingResult, routerMode };
   }
 
@@ -1848,7 +1986,8 @@ async function routeAndMaybeHandleAppointmentOperation({
     tenant_id,
     contact_id,
     message_id: message_db_id,
-    message_text: normalizeAppointmentOperationInput(normalizedMessage).messageText,
+    message_text:
+      normalizeAppointmentOperationInput(normalizedMessage).messageText,
     routingResult,
     io,
   });
@@ -1933,7 +2072,8 @@ async function maybeHandleBookingToManageSwitch({
   }
 
   if (
-    routingResult?.decision?.route === APPOINTMENT_OPERATION_ROUTES.MANAGE_APPOINTMENT &&
+    routingResult?.decision?.route ===
+      APPOINTMENT_OPERATION_ROUTES.MANAGE_APPOINTMENT &&
     isManageSwitchRequestFromBooking(input)
   ) {
     await sendAppointmentPayload(
@@ -2003,7 +2143,10 @@ async function closeSupersededAppointmentSession({
   }
 }
 
-const canonicalizeBookingOperationMessage = ({ decision, normalizedMessage }) => {
+const canonicalizeBookingOperationMessage = ({
+  decision,
+  normalizedMessage,
+}) => {
   const input = normalizeAppointmentOperationInput(normalizedMessage);
   if (input.buttonReplyId) return input.effectiveText;
   switch (decision?.action) {
@@ -2135,7 +2278,9 @@ async function handleAppointmentOperationDecision({
     input.buttonReplyId !== "cancel_appointment" &&
     isLegacyAppointmentManagementReplyId(input.buttonReplyId)
   ) {
-    const legacyIntent = getLegacyAppointmentIntentForReply(input.buttonReplyId);
+    const legacyIntent = getLegacyAppointmentIntentForReply(
+      input.buttonReplyId,
+    );
     if (legacyIntent) {
       const legacyResult = await handleLegacyAppointmentIntent(
         legacyIntent,
@@ -2316,7 +2461,11 @@ async function handleAdvancedAppointmentResponse(
   if (result.suppressResponse || result.duplicate || result.alreadyProcessed) {
     try {
       const io = getIO();
-      io.to(`tenant-${tenant_id}`).emit("ai-typing", { tenant_id, phone, status: false });
+      io.to(`tenant-${tenant_id}`).emit("ai-typing", {
+        tenant_id,
+        phone,
+        status: false,
+      });
     } catch {}
     return;
   }
@@ -2339,8 +2488,10 @@ async function handleAdvancedAppointmentResponse(
       payload?.interactive?.body?.text ||
       result.message ||
       "Appointment action processed.";
-    const messageTypeToSave = payload.type === "interactive" ? "interactive" : "text";
-    const interactive_payload = payload.type === "interactive" ? JSON.stringify(payload) : null;
+    const messageTypeToSave =
+      payload.type === "interactive" ? "interactive" : "text";
+    const interactive_payload =
+      payload.type === "interactive" ? JSON.stringify(payload) : null;
     const contact_id = contactsaved?.contact_id || null;
     const savedBotMsg = contact_id
       ? await createUserMessageService(
@@ -2364,7 +2515,11 @@ async function handleAdvancedAppointmentResponse(
       : null;
 
     const io = getIO();
-    io.to(`tenant-${tenant_id}`).emit("ai-typing", { tenant_id, phone, status: false });
+    io.to(`tenant-${tenant_id}`).emit("ai-typing", {
+      tenant_id,
+      phone,
+      status: false,
+    });
     io.to(`tenant-${tenant_id}`).emit("new-message", {
       tenant_id,
       phone,
@@ -2388,11 +2543,17 @@ async function handleAdvancedAppointmentResponse(
       try {
         await persistSentPayload(payload, wamid);
       } catch (dbErr) {
-        console.error("[ADV-APPT-RESPONSE] DB/socket persistence failed:", dbErr.message);
+        console.error(
+          "[ADV-APPT-RESPONSE] DB/socket persistence failed:",
+          dbErr.message,
+        );
       }
     }
   } catch (err) {
-    console.error("[ADV-APPT-RESPONSE] Failed to send appointment payload:", err.message);
+    console.error(
+      "[ADV-APPT-RESPONSE] Failed to send appointment payload:",
+      err.message,
+    );
     try {
       const io = getIO();
       io.to(`tenant-${tenant_id}`).emit("ai-typing", {
@@ -2424,51 +2585,71 @@ async function handleAdvancedAppointmentResponse(
 // NEW: Route an appointment orchestrator result to the correct WhatsApp message type.
 // Also saves the bot message to the DB and emits to the dashboard socket.
 async function handleAppointmentResponse( // NEW
-  result, tenant_id, phone, // NEW
-  contactsaved = null, phone_number_id = null, name = null, // NEW
-) { // NEW
+  result,
+  tenant_id,
+  phone, // NEW
+  contactsaved = null,
+  phone_number_id = null,
+  name = null, // NEW
+) {
+  // NEW
   if (!result) return; // NEW
 
   // Determine the plain-text version to save to the messages DB
   const textToSave = result.message || "Appointment action processed."; // NEW
   const isInteractive = Boolean(result.buttonType); // NEW
   let interactive_payload = null; // NEW
-  if (isInteractive) { // NEW
-    try { // NEW
-      interactive_payload = JSON.stringify({ // NEW
+  if (isInteractive) {
+    // NEW
+    try {
+      // NEW
+      interactive_payload = JSON.stringify({
+        // NEW
         buttonType: result.buttonType, // NEW
         slots: result.slots || null, // NEW
         doctors: result.doctors || null, // NEW
         appointments: result.appointments || null, // NEW
-        buttons: // NEW
-          result.buttonType === "confirmation" || result.buttonType === "cancel_confirmation" // NEW
+        // NEW
+        buttons:
+          result.buttonType === "confirmation" ||
+          result.buttonType === "cancel_confirmation" // NEW
             ? [{ title: "Confirm" }, { title: "Cancel" }] // NEW
             : result.buttonType === "greeting_menu" // NEW
-              ? [ // NEW
-                { title: "Book appointment" }, // NEW
-                { title: "My appointments" }, // NEW
-                { title: "Cancel / Reschedule" }, // NEW
-              ] // NEW
+              ? [
+                  // NEW
+                  { title: "Book appointment" }, // NEW
+                  { title: "My appointments" }, // NEW
+                  { title: "Cancel / Reschedule" }, // NEW
+                ] // NEW
               : result.buttonType === "book_prompt" // NEW
                 ? [{ title: "Book appointment" }] // NEW
                 : result.buttonType === "post_booking" // NEW
                   ? [{ title: "My appointments" }, { title: "Book another" }] // NEW
                   : null, // NEW
       }); // NEW
-    } catch { // NEW
+    } catch {
+      // NEW
       interactive_payload = null; // NEW
     } // NEW
   } // NEW
 
-  try { // NEW
+  try {
+    // NEW
     // ── Send the WhatsApp message (interactive or plain text) ─────────────
-    if (result.buttonType === "confirmation" || result.buttonType === "cancel_confirmation") { // NEW
-      await sendQuickReply(tenant_id, phone, result.message, [ // NEW
+    if (
+      result.buttonType === "confirmation" ||
+      result.buttonType === "cancel_confirmation"
+    ) {
+      // NEW
+      await sendQuickReply(tenant_id, phone, result.message, [
+        // NEW
         { id: "confirm_yes", title: "Confirm" }, // NEW
         { id: "confirm_no", title: "Cancel" }, // NEW
       ]); // NEW
-    } else if (result.buttonType === "slot_selection" && result.slots?.length) { // NEW
-      const rows = result.slots.slice(0, 10).map((s) => ({ // NEW
+    } else if (result.buttonType === "slot_selection" && result.slots?.length) {
+      // NEW
+      const rows = result.slots.slice(0, 10).map((s) => ({
+        // NEW
         id:
           s.id ||
           (s.time
@@ -2477,77 +2658,132 @@ async function handleAppointmentResponse( // NEW
         title: s.title || s.time, // NEW
         description: s.description || "", // NEW
       })); // NEW
-      await sendListMessage( // NEW
-        tenant_id, phone, // NEW
+      await sendListMessage(
+        // NEW
+        tenant_id,
+        phone, // NEW
         result.message || "Please choose an available time slot.", // NEW
         "Pick a Time", // NEW
         [{ title: result.slotSectionTitle || "Available Time Slots", rows }], // NEW
       ); // NEW
-    } else if (result.buttonType === "doctor_list" && result.doctors?.length) { // NEW
-      const rows = result.doctors.slice(0, 10).map((d) => ({ // NEW
+    } else if (result.buttonType === "doctor_list" && result.doctors?.length) {
+      // NEW
+      const rows = result.doctors.slice(0, 10).map((d) => ({
+        // NEW
         id: "doctor_" + d.id, // NEW
         title: "Dr. " + d.name, // NEW
         description: d.specialization || "", // NEW
       })); // NEW
-      await sendListMessage( // NEW
-        tenant_id, phone, // NEW
+      await sendListMessage(
+        // NEW
+        tenant_id,
+        phone, // NEW
         "Please choose a doctor:", // NEW
         "View doctors", // NEW
         [{ title: "Available doctors", rows }], // NEW
       ); // NEW
-    } else if (result.buttonType === "appointment_actions" && result.appointments?.length) { // NEW
-      for (const apt of result.appointments) { // NEW
+    } else if (
+      result.buttonType === "appointment_actions" &&
+      result.appointments?.length
+    ) {
+      // NEW
+      for (const apt of result.appointments) {
+        // NEW
         await sendAppointmentCard(tenant_id, phone, apt); // NEW
       } // NEW
-    } else if (result.buttonType === "greeting_menu") { // NEW
-      await sendQuickReply(tenant_id, phone, result.message, [ // NEW
+    } else if (result.buttonType === "greeting_menu") {
+      // NEW
+      await sendQuickReply(tenant_id, phone, result.message, [
+        // NEW
         { id: "create_appointment", title: "Book appointment" }, // NEW
         { id: "view_my_appointments", title: "My appointments" }, // NEW
         { id: "cancel_appointment", title: "Cancel / Reschedule" }, // NEW
       ]); // NEW
-    } else if (result.buttonType === "book_prompt") { // NEW
-      await sendQuickReply(tenant_id, phone, result.message, [ // NEW
+    } else if (result.buttonType === "book_prompt") {
+      // NEW
+      await sendQuickReply(tenant_id, phone, result.message, [
+        // NEW
         { id: "create_appointment", title: "Book appointment" }, // NEW
       ]); // NEW
-    } else if (result.buttonType === "post_booking") { // NEW
-      await sendQuickReply(tenant_id, phone, result.message, [ // NEW
+    } else if (result.buttonType === "post_booking") {
+      // NEW
+      await sendQuickReply(tenant_id, phone, result.message, [
+        // NEW
         { id: "view_my_appointments", title: "My appointments" }, // NEW
         { id: "create_appointment", title: "Book another" }, // NEW
       ]); // NEW
-    } else { // NEW
+    } else {
+      // NEW
       await sendWhatsAppMessage(tenant_id, phone, result.message || "Done."); // NEW
     } // NEW
-  } catch (err) { // NEW
-    console.error("[APPT-RESPONSE] Failed to send appointment response:", err.message); // NEW
-    await sendWhatsAppMessage(tenant_id, phone, result.message || "Done.").catch(() => { }); // NEW
+  } catch (err) {
+    // NEW
+    console.error(
+      "[APPT-RESPONSE] Failed to send appointment response:",
+      err.message,
+    ); // NEW
+    await sendWhatsAppMessage(
+      tenant_id,
+      phone,
+      result.message || "Done.",
+    ).catch(() => {}); // NEW
   } // NEW
 
   // ── Persist bot message to DB + emit to dashboard socket ──────────────
-  try { // NEW
+  try {
+    // NEW
     const contact_id = contactsaved?.contact_id || null; // NEW
     const messageTypeToSave = isInteractive ? "interactive" : "text"; // NEW
     const savedBotMsg = contact_id // NEW
-      ? await createUserMessageService( // NEW
-        tenant_id, contact_id, phone_number_id, // NEW
-        phone, null, name, "bot", null, // NEW
-        textToSave, messageTypeToSave, null, null, null, null, null, interactive_payload, // NEW
-      ) // NEW
+      ? await createUserMessageService(
+          // NEW
+          tenant_id,
+          contact_id,
+          phone_number_id, // NEW
+          phone,
+          null,
+          name,
+          "bot",
+          null, // NEW
+          textToSave,
+          messageTypeToSave,
+          null,
+          null,
+          null,
+          null,
+          null,
+          interactive_payload, // NEW
+        ) // NEW
       : null; // NEW
 
     const io = getIO(); // NEW
-    io.to(`tenant-${tenant_id}`).emit("ai-typing", { tenant_id, phone, status: false }); // NEW
-    io.to(`tenant-${tenant_id}`).emit("new-message", { // NEW
-      tenant_id, phone, // NEW
+    io.to(`tenant-${tenant_id}`).emit("ai-typing", {
+      tenant_id,
+      phone,
+      status: false,
+    }); // NEW
+    io.to(`tenant-${tenant_id}`).emit("new-message", {
+      // NEW
+      tenant_id,
+      phone, // NEW
       id: savedBotMsg?.id || null, // NEW
-      contact_id, phone_number_id, // NEW
+      contact_id,
+      phone_number_id, // NEW
       name: contactsaved?.name || name || null, // NEW
       message: textToSave, // NEW
-      message_type: messageTypeToSave, interactive_payload, media_url: null, // NEW
-      status: "sent", sender: "bot", // NEW
+      message_type: messageTypeToSave,
+      interactive_payload,
+      media_url: null, // NEW
+      status: "sent",
+      sender: "bot", // NEW
       created_at: new Date(), // NEW
     }); // NEW
-  } catch (dbErr) { // NEW
-    console.error("[APPT-RESPONSE] DB/socket persistence failed:", dbErr.message); // NEW
+  } catch (dbErr) {
+    // NEW
+    console.error(
+      "[APPT-RESPONSE] DB/socket persistence failed:",
+      dbErr.message,
+    ); // NEW
   } // NEW
 } // NEW
 
@@ -2556,15 +2792,16 @@ async function handleAppointmentResponse( // NEW
 function encodeSlotTime(time) {
   // Pad single-digit hour: "9:00 AM" → "09:00 AM" first, then replace separators
   return String(time)
-    .replace(/^(\d):/, "0$1:")   // "9:00 AM" → "09:00 AM"
-    .replace(/:/g, "-")          // "09:00 AM" → "09-00 AM"
-    .replace(/\s+/g, "-");       // "09-00 AM" → "09-00-AM"
+    .replace(/^(\d):/, "0$1:") // "9:00 AM" → "09:00 AM"
+    .replace(/:/g, "-") // "09:00 AM" → "09-00 AM"
+    .replace(/\s+/g, "-"); // "09-00 AM" → "09-00-AM"
 }
 
 // Reverse encodeSlotTime: "09-00-AM" → "09:00 AM"
 function decodeSlotTime(encoded) {
   // Accepts both 1 and 2 digit hours for safety
-  return String(encoded).replace(/^(\d{1,2})-(\d{2})-([AP]M)$/, (_, h, m, p) =>
-    `${h.padStart(2, "0")}:${m} ${p}`,
+  return String(encoded).replace(
+    /^(\d{1,2})-(\d{2})-([AP]M)$/,
+    (_, h, m, p) => `${h.padStart(2, "0")}:${m} ${p}`,
   );
 }

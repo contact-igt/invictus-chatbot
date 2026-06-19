@@ -25,6 +25,7 @@ import {
 } from "../queues/campaignQueue.js";
 import { getTemplateComponents } from "../utils/templateCache.js";
 import { getCampaignCache } from "../utils/redis/redisCache.js";
+import { getRedisLock } from "../utils/redis/redisLock.js";
 import { getMetaApiCircuitBreaker } from "../services/circuitBreakerService.js";
 import db from "../database/index.js";
 import { tableNames } from "../database/tableName.js";
@@ -46,10 +47,19 @@ import {
 } from "../models/LiveChatModel/livechat.service.js";
 import { generateWhatsAppOTPService } from "../models/OtpVerificationModel/otpverification.service.js";
 import { recordCampaignDiagnosticEvent } from "../utils/campaignDiagnosticsEvents.js";
+import { getIO } from "../middlewares/socket/socket.js";
 import {
   batchInsertMessages,
+  batchUpdateRecipientContactIds,
   batchUpdateRecipientStatuses,
 } from "../services/campaign/dbBatch.js";
+import {
+  isNetworkSystemError,
+  isMetaAuthConfigError,
+  isFinallyPermanent,
+  createStructuredError,
+  formatErrorForLogging,
+} from "../utils/metaErrorClassifier.js";
 
 // Batch buffers per-tenant to reduce DB writes
 const TENANT_BUFFERS = new Map();
@@ -58,6 +68,20 @@ const DB_BATCH_FLUSH_MS = parseInt(
   process.env.CAMPAIGN_DB_BATCH_FLUSH_MS || "500",
   10,
 );
+
+const getTenantBuffer = (tenantId) => {
+  const tId = String(tenantId);
+  if (!TENANT_BUFFERS.has(tId)) {
+    TENANT_BUFFERS.set(tId, {
+      messages: [],
+      recipientUpdates: [],
+      contactBackfills: [],
+      recipientIdSet: new Set(), // B-1: Track recipient_ids in buffer for deduplication
+      flushTimer: null,
+    });
+  }
+  return TENANT_BUFFERS.get(tId);
+};
 
 const scheduleTenantFlush = (tenantId) => {
   const buf = TENANT_BUFFERS.get(tenantId);
@@ -74,6 +98,90 @@ const scheduleTenantFlush = (tenantId) => {
   }, DB_BATCH_FLUSH_MS);
 };
 
+// Marks a campaign "completed" once it has no recipients left in "pending".
+// Campaign recipients only ever end up as "sent" or "permanently_failed", so a
+// campaign where every recipient failed must still transition to completed
+// (it stops showing "active" forever). Only campaigns currently in a non-terminal
+// status are touched, so paused/cancelled/completed are left untouched.
+const EXPECTED_TERMINAL_RECIPIENT_STATUSES = [
+  "sent",
+  "delivered",
+  "read",
+  "replied",
+  "permanently_failed",
+];
+
+const finalizeCampaignIfComplete = async (campaign_id) => {
+  if (!campaign_id) return;
+  try {
+    const remainingPending = await db.WhatsappCampaignRecipients.count({
+      where: { campaign_id, status: "pending", is_deleted: false },
+    });
+    if (remainingPending > 0) return;
+
+    // Guard: a campaign should only ever finalize with recipients in the
+    // expected terminal set. If anything else (e.g. legacy 'failed') is
+    // present, log loudly so a non-terminal status can't silently leave a
+    // campaign without follow-up logic in the future.
+    const unexpected = await db.WhatsappCampaignRecipients.findAll({
+      where: {
+        campaign_id,
+        is_deleted: false,
+        status: {
+          [db.Sequelize.Op.notIn]: EXPECTED_TERMINAL_RECIPIENT_STATUSES,
+        },
+      },
+      attributes: ["status"],
+      group: ["status"],
+      raw: true,
+    });
+    if (unexpected.length > 0) {
+      logger.error(
+        `[SEND-WORKER] ALERT campaign ${campaign_id} has recipients in unexpected statuses: ${unexpected
+          .map((r) => r.status)
+          .join(", ")} \u2014 finalize blocked`,
+      );
+      return;
+    }
+
+    // B-3: Only finalize if last_dispatch_enqueued_at is >5 minutes old
+    // This prevents race where webhook finalizes before all send jobs start
+    const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+    const [affected] = await db.WhatsappCampaigns.update(
+      { status: "completed" },
+      {
+        where: {
+          campaign_id,
+          status: {
+            [db.Sequelize.Op.in]: ["active", "failed", "scheduled", "draft"],
+          },
+          [db.Sequelize.Op.or]: [
+            db.sequelize.where(
+              db.sequelize.col("last_dispatch_enqueued_at"),
+              db.Sequelize.Op.is,
+              null,
+            ),
+            db.sequelize.where(
+              db.sequelize.col("last_dispatch_enqueued_at"),
+              db.Sequelize.Op.lt,
+              fiveMinutesAgo,
+            ),
+          ],
+        },
+      },
+    );
+    if (affected > 0) {
+      logger.info(
+        `[SEND-WORKER] Campaign ${campaign_id} marked completed (no pending recipients remaining)`,
+      );
+    }
+  } catch (err) {
+    logger.warn(
+      `[SEND-WORKER] Failed to finalize campaign ${campaign_id}: ${err.message}`,
+    );
+  }
+};
+
 const flushTenantBuffers = async (tenantId) => {
   const buf = TENANT_BUFFERS.get(tenantId);
   if (!buf) return;
@@ -86,57 +194,31 @@ const flushTenantBuffers = async (tenantId) => {
     0,
     buf.recipientUpdates.length,
   );
-  if (messages.length === 0 && recipientUpdates.length === 0) return;
+  const contactBackfills = buf.contactBackfills.splice(
+    0,
+    buf.contactBackfills.length,
+  );
+  // Clear deduplication set for flushed recipient IDs
+  buf.recipientIdSet.clear();
+  if (
+    messages.length === 0 &&
+    recipientUpdates.length === 0 &&
+    contactBackfills.length === 0
+  )
+    return;
   try {
+    if (contactBackfills.length > 0) {
+      await batchUpdateRecipientContactIds(contactBackfills);
+    }
     if (recipientUpdates.length > 0) {
       await batchUpdateRecipientStatuses(recipientUpdates);
-      // After updating recipient statuses, check affected campaigns for outstanding recipients.
-      try {
-        const campaignIds = Array.from(
-          new Set(recipientUpdates.map((u) => u.campaign_id).filter(Boolean)),
-        );
-        for (const cid of campaignIds) {
-          const outstandingCount = await db.WhatsappCampaignRecipients.count({
-            where: {
-              campaign_id: cid,
-              is_deleted: false,
-              [db.Sequelize.Op.or]: [
-                { status: "pending" },
-                {
-                  status: "failed",
-                  retry_count: { [db.Sequelize.Op.lt]: 3 },
-                  next_retry_at: { [db.Sequelize.Op.ne]: null },
-                },
-              ],
-            },
-          });
-
-          if (outstandingCount === 0) {
-            try {
-              const campaign = await db.WhatsappCampaigns.findOne({
-                where: { campaign_id: cid },
-              });
-              if (
-                campaign &&
-                campaign.status !== "paused" &&
-                campaign.status !== "completed"
-              ) {
-                await campaign.update({ status: "completed" });
-                logger.info(
-                  `[SEND-WORKER] Campaign ${cid} marked completed (no outstanding recipients)`,
-                );
-              }
-            } catch (upErr) {
-              logger.warn(
-                `[SEND-WORKER] Failed to mark campaign ${cid} completed: ${upErr.message}`,
-              );
-            }
-          }
-        }
-      } catch (checkErr) {
-        logger.warn(
-          `[SEND-WORKER] Post-flush campaign completion check failed: ${checkErr.message}`,
-        );
+      // After persisting statuses, finalize any campaigns that now have no
+      // pending recipients left (all sent or permanently_failed).
+      const campaignIds = Array.from(
+        new Set(recipientUpdates.map((u) => u.campaign_id).filter(Boolean)),
+      );
+      for (const cid of campaignIds) {
+        await finalizeCampaignIfComplete(cid);
       }
     }
     if (messages.length > 0) {
@@ -149,37 +231,11 @@ const flushTenantBuffers = async (tenantId) => {
     // On failure, re-queue the buffers to attempt later
     buf.messages.unshift(...messages);
     buf.recipientUpdates.unshift(...recipientUpdates);
+    buf.contactBackfills.unshift(...contactBackfills);
   }
 };
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-// Errors that will never succeed on retry — do not let BullMQ retry these.
-const PERMANENT_ERROR_PATTERNS = [
-  "healthy ecosystem",
-  "not delivered",
-  "spam",
-  "blocked",
-  "recipient not on whatsapp",
-  "incapable of receiving",
-  "re-engage",
-  "invalid phone",
-  "variable mismatch",
-  "missing media",
-  "no valid url",
-];
-
-const isFinallyPermanent = (err) => {
-  const lower = String(err?.message || "").toLowerCase();
-  const metaCode = Number(
-    err?.code || err?.error?.code || err?.response?.data?.error?.code,
-  );
-  // Errors explicitly flagged permanent by build logic
-  if (err?.validation === true) return true;
-  // Meta error 131030 should not be retried for test/fake recipients.
-  if (metaCode === 131030) return true;
-  return PERMANENT_ERROR_PATTERNS.some((p) => lower.includes(p));
-};
+// ── Error classification moved to metaErrorClassifier.js for centralized management
 
 // ── Core processor ────────────────────────────────────────────────────────────
 
@@ -215,7 +271,8 @@ async function processSendJob(job) {
     return;
   }
 
-  // Respect paused / cancelled — discard without marking failed
+  // Pause is honored at job start. Jobs that already passed this point may still
+  // finish their Meta request; dispatch fan-out is what stops additional sends.
   if (["paused", "cancelled", "completed"].includes(campaign.status)) {
     logger.info(
       `[SEND-WORKER] Campaign ${campaign_id} is ${campaign.status} — discarding job`,
@@ -355,7 +412,13 @@ async function processSendJob(job) {
         );
         contactId = newContact.contact_id;
       }
-      if (contactId) await recipient.update({ contact_id: contactId });
+      if (contactId) {
+        recipient.contact_id = contactId;
+        getTenantBuffer(tenant_id).contactBackfills.push({
+          id: recipient_id,
+          contact_id: contactId,
+        });
+      }
     }
 
     // ── 2. Ensure Lead Exists ───────────────────────────────────────────────
@@ -376,10 +439,16 @@ async function processSendJob(job) {
 
     // Authentication templates generate an OTP per recipient
     if (campaign.template?.category?.toLowerCase() === "authentication") {
-      const otp = await generateWhatsAppOTPService(
-        recipient.mobile_number,
-        campaign.template.template_name,
-      );
+      const existingOtp = job.data?.auth_otp || null;
+      const otp =
+        existingOtp ||
+        (await generateWhatsAppOTPService(
+          recipient.mobile_number,
+          campaign.template.template_name,
+        ));
+      if (!existingOtp && typeof job.updateData === "function") {
+        await job.updateData({ ...job.data, auth_otp: otp });
+      }
       components.push({
         type: "body",
         parameters: [{ type: "text", text: otp }],
@@ -571,8 +640,18 @@ async function processSendJob(job) {
           });
           components.push({ type: "carousel", cards: cardsPayload });
         }
-      } catch {
-        /* ignore carousel parse errors */
+      } catch (carouselErr) {
+        const rawSummary = String(carousel_data[0]?.text_content || "").slice(
+          0,
+          500,
+        );
+        logger.warn(
+          `[SEND-WORKER] Carousel payload parse/build failed campaign=${campaign_id} recipient=${recipient_id}: ${carouselErr.message}. payload_sample=${rawSummary}`,
+        );
+        throw Object.assign(
+          new Error(`Invalid carousel payload: ${carouselErr.message}`),
+          { validation: true, permanent: true },
+        );
       }
     }
 
@@ -633,162 +712,211 @@ async function processSendJob(job) {
       }
     }
 
-    // ── Fire-and-forget Meta API send (do not block worker on response) ───
+    // Send through Meta and capture wamid for webhook correlation.
 
     const circuitBreaker = getMetaApiCircuitBreaker(sendWhatsAppTemplate);
 
-    Promise.resolve()
-      .then(() =>
-        circuitBreaker.execute(
-          tenant_id,
-          formattedPhone,
-          campaign.template.template_name,
-          campaign.template.language,
-          components,
-        ),
-      )
-      .catch((sendErr) => {
-        logger.error(
-          `[SEND-WORKER] Fire-and-forget error: ${sendErr?.message || "unknown error"}`,
+    // B-1: Acquire per-recipient Redis lock to prevent double-sends on race/retry
+    const sendLockKey = `send-lock:${recipient_id}`;
+    const SEND_LOCK_TTL = 60; // seconds — enough for send + buffer write
+    const redisLock = getRedisLock(redis);
+    const lockResult = await redisLock.acquireWithRetry(
+      sendLockKey,
+      SEND_LOCK_TTL,
+      3, // retries
+    );
+
+    if (!lockResult.success) {
+      logger.warn(
+        `[SEND-WORKER] Failed to acquire send lock for recipient ${recipient_id} — retrying later`,
+      );
+      const lockErr = new Error(
+        "Could not acquire send lock (possible concurrent send in progress)",
+      );
+      lockErr.code = "SEND_LOCK_BUSY";
+      throw lockErr;
+    }
+
+    const { release: releaseSendLock } = lockResult;
+
+    try {
+      // ── Send through Meta ──
+      const sendResult = await circuitBreaker.execute(
+        tenant_id,
+        formattedPhone,
+        campaign.template.template_name,
+        campaign.template.language,
+        components,
+        {
+          campaign_id,
+          recipient_id,
+        },
+      );
+
+      // ── 8. Buffer recipient status + message insert for batched DB writes ──
+      let personalizedMessage = templateBodyText;
+      const bodyVars = Array.isArray(dynamicVariables)
+        ? dynamicVariables
+        : typeof dynamicVariables === "object" &&
+            dynamicVariables !== null &&
+            Array.isArray(dynamicVariables.body)
+          ? dynamicVariables.body
+          : [];
+      bodyVars.forEach((val, idx) => {
+        personalizedMessage = personalizedMessage.replace(
+          `{{${idx + 1}}}`,
+          val,
         );
       });
 
-    // ── 8. Buffer recipient status + message insert for batched DB writes ──
+      let finalMessageType = "template";
+      let finalMediaUrl = null;
+      if (
+        headerFormat &&
+        ["IMAGE", "VIDEO", "DOCUMENT"].includes(headerFormat.toUpperCase())
+      ) {
+        finalMessageType = headerFormat.toLowerCase();
+        finalMediaUrl = campaignHeaderMediaUrl || null;
+        personalizedMessage = finalMediaUrl
+          ? `[${headerFormat.toUpperCase()}: ${finalMediaUrl}]\n${personalizedMessage}`
+          : `[${headerFormat.toUpperCase()}]\n${personalizedMessage}`;
+      }
 
-    // Build personalizedMessage (same as previous logic) but avoid awaiting DB writes here
-    let personalizedMessage = templateBodyText;
-    const bodyVars = Array.isArray(dynamicVariables)
-      ? dynamicVariables
-      : typeof dynamicVariables === "object" &&
-          dynamicVariables !== null &&
-          Array.isArray(dynamicVariables.body)
-        ? dynamicVariables.body
-        : [];
-    bodyVars.forEach((val, idx) => {
-      personalizedMessage = personalizedMessage.replace(`{{${idx + 1}}}`, val);
-    });
+      if (footerComponent?.text_content)
+        personalizedMessage += "\n" + footerComponent.text_content;
 
-    let finalMessageType = "template";
-    let finalMediaUrl = null;
-    if (
-      headerFormat &&
-      ["IMAGE", "VIDEO", "DOCUMENT"].includes(headerFormat.toUpperCase())
-    ) {
-      finalMessageType = headerFormat.toLowerCase();
-      finalMediaUrl = campaignHeaderMediaUrl || null;
-      personalizedMessage = finalMediaUrl
-        ? `[${headerFormat.toUpperCase()}: ${finalMediaUrl}]\n${personalizedMessage}`
-        : `[${headerFormat.toUpperCase()}]\n${personalizedMessage}`;
-    }
-
-    if (footerComponent?.text_content)
-      personalizedMessage += "\n" + footerComponent.text_content;
-
-    if (buttonsComponent?.text_content) {
-      try {
-        const buttons = JSON.parse(buttonsComponent.text_content);
-        if (Array.isArray(buttons)) {
-          buttons.forEach((btn) => {
-            let btnLabel = btn.text;
-            if (btn.type === "URL" && btn.url) btnLabel += ` (${btn.url})`;
-            else if (btn.type === "PHONE_NUMBER" && btn.phone_number)
-              btnLabel += ` (${btn.phone_number})`;
-            personalizedMessage += `\n[Button: ${btnLabel}]`;
-          });
-        }
-      } catch {}
-    }
-
-    let campaignMediaMimeType = null;
-    if (finalMessageType === "document" && campaign.header_file_name) {
-      const ext = campaign.header_file_name.split(".").pop()?.toLowerCase();
-      const mimeMap = {
-        pdf: "application/pdf",
-        doc: "application/msword",
-        docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        xls: "application/vnd.ms-excel",
-        xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-      };
-      campaignMediaMimeType = mimeMap[ext] || "application/octet-stream";
-    }
-
-    // Prepare DB rows
-    const messageRow = {
-      tenant_id,
-      contact_id: contactId || null,
-      phone_number_id: null,
-      country_code: null,
-      phone: recipient.mobile_number,
-      wamid: null,
-      name: "System",
-      sender: "admin",
-      sender_id: null,
-      message: personalizedMessage,
-      message_type: finalMessageType,
-      media_url: finalMediaUrl,
-      media_mime_type: campaignMediaMimeType,
-      status: "sent",
-      template_name: campaign.template.template_name || null,
-      interactive_payload: null,
-      media_filename:
-        finalMessageType === "document"
-          ? campaign.header_file_name || null
-          : null,
-    };
-
-    const recipientUpdate = {
-      id: recipient_id,
-      campaign_id: campaign_id,
-      status: "sent",
-      meta_message_id: null,
-      error_message: null,
-      retry_count: null,
-      next_retry_at: null,
-    };
-
-    // Push to tenant-level buffers
-    const tId = String(tenant_id);
-    if (!TENANT_BUFFERS.has(tId)) {
-      TENANT_BUFFERS.set(tId, {
-        messages: [],
-        recipientUpdates: [],
-        flushTimer: null,
-      });
-    }
-    const buf = TENANT_BUFFERS.get(tId);
-    buf.messages.push(messageRow);
-    buf.recipientUpdates.push(recipientUpdate);
-    // Flush immediately if buffer exceeds threshold
-    if (
-      buf.messages.length >= DB_BATCH_SIZE ||
-      buf.recipientUpdates.length >= DB_BATCH_SIZE
-    ) {
-      void flushTenantBuffers(tId);
-    } else {
-      scheduleTenantFlush(tId);
-    }
-
-    // Fire-and-forget livechat updates (do not block send path)
-    if (contactId) {
-      (async () => {
+      if (buttonsComponent?.text_content) {
         try {
-          const livelist = await getLivechatByIdService(tenant_id, contactId);
-          if (!livelist) {
-            await createLiveChatService(tenant_id, contactId);
-          } else {
-            await updateLiveChatTimestampService(tenant_id, contactId);
+          const buttons = JSON.parse(buttonsComponent.text_content);
+          if (Array.isArray(buttons)) {
+            buttons.forEach((btn) => {
+              let btnLabel = btn.text;
+              if (btn.type === "URL" && btn.url) btnLabel += ` (${btn.url})`;
+              else if (btn.type === "PHONE_NUMBER" && btn.phone_number)
+                btnLabel += ` (${btn.phone_number})`;
+              personalizedMessage += `\n[Button: ${btnLabel}]`;
+            });
           }
-        } catch (e) {
-          logger.debug(
-            `[SEND-WORKER] LiveChat update failed (tenant=${tenant_id} contact=${contactId}): ${e.message}`,
-          );
-        }
-      })();
-    }
+        } catch {}
+      }
 
-    logger.info(
-      `[SEND-WORKER] Buffered sent — campaign=${campaign_id} recipient=${recipient_id} phone=${formattedPhone}`,
-    );
+      let campaignMediaMimeType = null;
+      if (finalMessageType === "document" && campaign.header_file_name) {
+        const ext = campaign.header_file_name.split(".").pop()?.toLowerCase();
+        const mimeMap = {
+          pdf: "application/pdf",
+          doc: "application/msword",
+          docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          xls: "application/vnd.ms-excel",
+          xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        };
+        campaignMediaMimeType = mimeMap[ext] || "application/octet-stream";
+      }
+
+      const metaMessageId = sendResult?.meta_message_id ?? null;
+
+      const messageRow = {
+        tenant_id,
+        contact_id: contactId || null,
+        phone_number_id: null,
+        country_code: null,
+        phone: recipient.mobile_number,
+        wamid: metaMessageId,
+        name: "System",
+        sender: "admin",
+        sender_id: null,
+        message: personalizedMessage,
+        message_type: finalMessageType,
+        media_url: finalMediaUrl,
+        media_mime_type: campaignMediaMimeType,
+        status: "sent",
+        template_name: campaign.template.template_name || null,
+        interactive_payload: null,
+        media_filename:
+          finalMessageType === "document"
+            ? campaign.header_file_name || null
+            : null,
+      };
+
+      const recipientUpdate = {
+        id: recipient_id,
+        campaign_id: campaign_id,
+        status: "sent",
+        meta_message_id: metaMessageId,
+        error_message: null,
+        retry_count: null,
+        next_retry_at: null,
+      };
+
+      const tId = String(tenant_id);
+      const buf = getTenantBuffer(tId);
+      buf.messages.push(messageRow);
+
+      // B-1: Deduplication — last-write-wins per recipient_id
+      if (buf.recipientIdSet.has(recipient_id)) {
+        const prevIdx = buf.recipientUpdates.findIndex(
+          (u) => u.id === recipient_id,
+        );
+        if (prevIdx >= 0) {
+          buf.recipientUpdates.splice(prevIdx, 1);
+        }
+      }
+      buf.recipientIdSet.add(recipient_id);
+      buf.recipientUpdates.push(recipientUpdate);
+
+      if (
+        buf.messages.length >= DB_BATCH_SIZE ||
+        buf.recipientUpdates.length >= DB_BATCH_SIZE ||
+        buf.contactBackfills.length >= DB_BATCH_SIZE
+      ) {
+        flushTenantBuffers(tId).catch((flushErr) =>
+          logger.warn(
+            `[SEND-WORKER] Threshold flush failed for tenant ${tId}: ${flushErr.message}`,
+          ),
+        );
+      } else {
+        scheduleTenantFlush(tId);
+      }
+
+      // Fire-and-forget livechat updates (do not block send path)
+      if (contactId) {
+        (async () => {
+          try {
+            const livelist = await getLivechatByIdService(tenant_id, contactId);
+            if (!livelist) {
+              await createLiveChatService(tenant_id, contactId);
+            } else {
+              await updateLiveChatTimestampService(tenant_id, contactId);
+            }
+          } catch (e) {
+            logger.debug(
+              `[SEND-WORKER] LiveChat update failed (tenant=${tenant_id} contact=${contactId}): ${e.message}`,
+            );
+          }
+        })();
+      }
+
+      logger.info(
+        `[SEND-WORKER] Buffered sent — campaign=${campaign_id} recipient=${recipient_id} phone=${formattedPhone}`,
+      );
+    } catch (error) {
+      // B-1: On send error, release lock and re-throw for outer catch
+      try {
+        await releaseSendLock();
+      } catch (releasErr) {
+        logger.warn(
+          `[SEND-WORKER] Failed to release send lock on error for recipient ${recipient_id}: ${releasErr.message}`,
+        );
+      }
+      throw error;
+    } finally {
+      // B-1: Backup lock release (in case lock wasn't released in catch)
+      try {
+        await releaseSendLock();
+      } catch (finalErr) {
+        // Silently ignore — lock may have already been released
+      }
+    }
 
     // Emit diagnostic event
     recordCampaignDiagnosticEvent({
@@ -798,29 +926,83 @@ async function processSendJob(job) {
       meta: { campaign_id, tenant_id, recipient_id, phone: formattedPhone },
     });
   } catch (err) {
-    // Classify the error
+    // Classify the error using numeric Meta error codes
     const isPermErr = isFinallyPermanent(err);
 
+    // Auth/config errors (expired token, wrong permissions) are tenant-level —
+    // the same broken token affects ALL campaigns for this tenant. Pause every
+    // active campaign at once so 1000 campaigns don't each hit Meta, fail, and
+    // get paused one by one.
+    if (isMetaAuthConfigError(err)) {
+      const errorMsg = formatErrorForLogging(err);
+      logger.error(
+        `[SEND-WORKER] Auth/config error for tenant ${tenant_id} campaign ${campaign_id} recipient ${recipient_id}: ${errorMsg} — pausing ALL active campaigns for tenant`,
+      );
+
+      const pausedReason = `WhatsApp API access error: ${errorMsg}. Please update your WhatsApp access token in Settings.`;
+
+      try {
+        const [affectedRows] = await db.WhatsappCampaigns.update(
+          {
+            status: "paused",
+            paused_reason: pausedReason,
+          },
+          {
+            where: {
+              tenant_id,
+              status: "active",
+              is_deleted: false,
+            },
+          },
+        );
+        if (affectedRows > 0) {
+          logger.warn(
+            `[SEND-WORKER] ${affectedRows} campaign(s) paused for tenant ${tenant_id} due to auth/config error`,
+          );
+          try {
+            const io = getIO();
+            io.to(`tenant-${tenant_id}`).emit("campaign_paused", {
+              campaign_id: null,
+              status: "paused",
+              paused_reason: pausedReason,
+              all_campaigns: true,
+              affected_count: affectedRows,
+            });
+            io.to(`tenant-${tenant_id}`).emit("campaign-status-update", {
+              campaign_id,
+              status: "paused",
+              paused_reason: pausedReason,
+            });
+          } catch (_) {
+            /* socket emit is best-effort */
+          }
+        }
+      } catch (pauseErr) {
+        logger.error(
+          `[SEND-WORKER] Failed to pause campaigns for tenant ${tenant_id} on auth error: ${pauseErr.message}`,
+        );
+      }
+
+      return; // do NOT throw — job is done, campaigns are paused
+    }
+
     if (isPermErr) {
+      // Create structured error object for storage
+      const structuredError = createStructuredError(err);
+      const errorJson = JSON.stringify(structuredError);
+
       // Mark permanently failed right now — buffer update so many updates are batched
       logger.warn(
-        `[SEND-WORKER] Permanent failure for recipient ${recipient_id}: ${err.message}`,
+        `[SEND-WORKER] Permanent failure for recipient ${recipient_id}: ${formatErrorForLogging(err)}`,
       );
       const tId = String(tenant_id);
-      if (!TENANT_BUFFERS.has(tId)) {
-        TENANT_BUFFERS.set(tId, {
-          messages: [],
-          recipientUpdates: [],
-          flushTimer: null,
-        });
-      }
-      const buf = TENANT_BUFFERS.get(tId);
+      const buf = getTenantBuffer(tId);
       buf.recipientUpdates.push({
         id: recipient_id,
         campaign_id: campaign_id,
         status: "permanently_failed",
-        error_message: err.message,
-        last_error: err.message,
+        error_message: structuredError.message, // Human-readable message
+        last_error: errorJson, // Full structured error as JSON
         retry_count: 3,
         next_retry_at: null,
       });
@@ -831,7 +1013,7 @@ async function processSendJob(job) {
 
     // Retryable — throw so BullMQ retries with configured backoff
     logger.warn(
-      `[SEND-WORKER] Retryable failure for recipient ${recipient_id} (attempt ${job.attemptsMade + 1}): ${err.message}`,
+      `[SEND-WORKER] Retryable failure for recipient ${recipient_id} (attempt ${job.attemptsMade + 1}): ${formatErrorForLogging(err)}`,
     );
     recordCampaignDiagnosticEvent({
       source: "send-worker",
@@ -843,6 +1025,7 @@ async function processSendJob(job) {
         tenant_id,
         recipient_id,
         attempt: job.attemptsMade + 1,
+        error_code: err.code || null,
       },
     });
     throw err;
@@ -853,13 +1036,18 @@ async function processSendJob(job) {
 
 const sendWorkers = new Map();
 
-const markRecipientPermanentlyFailed = async (recipientId, errorMessage) => {
+const markRecipientPermanentlyFailed = async (
+  recipientId,
+  errorMessage,
+  campaign_id = null,
+  errorData = null,
+) => {
   try {
     await db.WhatsappCampaignRecipients.update(
       {
         status: "permanently_failed",
         error_message: errorMessage,
-        last_error: errorMessage,
+        last_error: errorData || errorMessage, // Store structured error if available, fall back to message
         retry_count: 3,
         next_retry_at: null,
       },
@@ -869,7 +1057,13 @@ const markRecipientPermanentlyFailed = async (recipientId, errorMessage) => {
     logger.error(
       `[SEND-WORKER] Could not mark recipient ${recipientId} permanently_failed: ${updateErr.message}`,
     );
+    return;
   }
+
+  // The retry-exhaustion path bypasses the buffered flush, so finalize the
+  // campaign here too — otherwise a campaign whose last recipients fail via
+  // retries would stay "active" forever.
+  await finalizeCampaignIfComplete(campaign_id);
 };
 
 const pushFailedJobToTenantDlq = async (tenantId, job, err) => {
@@ -901,6 +1095,111 @@ const pushFailedJobToTenantDlq = async (tenantId, job, err) => {
   }
 };
 
+const logExhaustedSystemFailure = async (tenantId, job, err) => {
+  const campaignId = job?.data?.campaign_id || null;
+  const recipientId = job?.data?.recipient_id || null;
+  const attemptsMade = Number(job?.attemptsMade || 0);
+  const structuredError = createStructuredError(err);
+  let recipientStatusAction = "not_updated";
+
+  if (recipientId) {
+    try {
+      const [affectedRows] = await db.WhatsappCampaignRecipients.update(
+        {
+          status: "permanently_failed",
+          error_message: structuredError.message,
+          last_error: JSON.stringify(structuredError),
+          retry_count: attemptsMade,
+          next_retry_at: null,
+        },
+        {
+          where: {
+            id: recipientId,
+            status: "pending",
+            is_deleted: false,
+          },
+        },
+      );
+      if (affectedRows === 1) {
+        recipientStatusAction = "marked_permanently_failed";
+        await finalizeCampaignIfComplete(campaignId);
+      } else {
+        recipientStatusAction = "skipped_non_pending";
+        logger.warn(
+          `[SEND-WORKER] Exhausted system/network failure did not update recipient ${recipientId} because it is no longer pending`,
+        );
+      }
+    } catch (updateErr) {
+      logger.error(
+        `[SEND-WORKER] Could not persist exhausted system/network failure for recipient ${recipientId}: ${updateErr.message}`,
+      );
+    }
+  }
+
+  logger.error(
+    `[SEND-WORKER] Retries exhausted for system/network failure tenant=${tenantId} campaign=${campaignId} recipient=${recipientId} attempts=${attemptsMade} code=${err.code || "n/a"} message=${err.message}. recipient_status_action=${recipientStatusAction}.`,
+  );
+  recordCampaignDiagnosticEvent({
+    source: "send-worker",
+    type: "error",
+    level: "error",
+    message: `System/network failure after retries tenant=${tenantId} recipient=${recipientId}: ${err.message}`,
+    meta: {
+      tenant_id: tenantId,
+      campaign_id: campaignId,
+      job_id: job?.id || null,
+      recipient_id: recipientId,
+      error_code: err.code || null,
+      error_message: err.message,
+      retry_count: attemptsMade,
+      recipient_status_action: recipientStatusAction,
+    },
+  });
+};
+
+const pauseCampaignForAuthConfigError = async (tenantId, job, err) => {
+  const campaignId = job?.data?.campaign_id || null;
+  const recipientId = job?.data?.recipient_id || null;
+  if (!campaignId) return false;
+
+  const reason = `Meta authorization/configuration error: ${err.message}`;
+  const [affectedRows] = await db.WhatsappCampaigns.update(
+    {
+      status: "paused",
+      paused_reason: reason,
+    },
+    {
+      where: {
+        tenant_id: tenantId,
+        campaign_id: campaignId,
+        is_deleted: false,
+      },
+    },
+  );
+
+  logger.error(
+    `[SEND-WORKER] Campaign paused after Meta auth/config failure tenant=${tenantId} campaign=${campaignId} recipient=${recipientId} status=${err.meta_response_status || "n/a"} code=${err.meta_error_code || "n/a"} message=${err.message}`,
+  );
+  recordCampaignDiagnosticEvent({
+    source: "send-worker",
+    type: "error",
+    level: "error",
+    message: `Campaign paused for Meta auth/config failure campaign=${campaignId} recipient=${recipientId}: ${err.message}`,
+    meta: {
+      tenant_id: tenantId,
+      campaign_id: campaignId,
+      job_id: job?.id || null,
+      recipient_id: recipientId,
+      meta_response_status: err.meta_response_status || null,
+      meta_error_code: err.meta_error_code || null,
+      recipient_status_action: "left_pending",
+      campaign_status_action: affectedRows > 0 ? "paused" : "pause_not_applied",
+    },
+  });
+
+  return affectedRows > 0;
+};
+
 const createTenantSendWorker = (tenantId) => {
   if (sendWorkers.has(tenantId)) {
     return sendWorkers.get(tenantId);
@@ -909,12 +1208,20 @@ const createTenantSendWorker = (tenantId) => {
   const connection = getRedisConnection();
   const queueName = getTenantQueueName(tenantId);
   const perTenantConcurrency = parseInt(
-    process.env.WORKER_CONCURRENCY ||
-      process.env.CAMPAIGN_SEND_CONCURRENCY ||
-      "20",
+    process.env.CAMPAIGN_SEND_CONCURRENCY || "20",
     10,
   );
-  const workerLimiter = { max: 1000, duration: 1000 };
+  const metaRatePerSecond = parseInt(
+    process.env.CAMPAIGN_META_RATE_PER_SEC || "80",
+    10,
+  );
+  const workerLimiter = {
+    max:
+      Number.isFinite(metaRatePerSecond) && metaRatePerSecond > 0
+        ? metaRatePerSecond
+        : 80,
+    duration: 1000,
+  };
 
   const worker = new Worker(queueName, processSendJob, {
     connection,
@@ -925,22 +1232,68 @@ const createTenantSendWorker = (tenantId) => {
   worker.on("failed", async (job, err) => {
     if (!job) return;
 
+    // Create structured error object for logging and storage
+    const structuredError = createStructuredError(err);
+
     logger.error(
-      `[SEND-WORKER] All retries exhausted for tenant ${tenantId} job ${job.id} (recipient=${job.data.recipient_id}): ${err.message}`,
+      `[SEND-WORKER] All retries exhausted for tenant ${tenantId} job ${job.id} (recipient=${job.data.recipient_id}): ${formatErrorForLogging(err)}`,
     );
     recordCampaignDiagnosticEvent({
       source: "send-worker",
       type: "error",
       level: "error",
-      message: `Retries exhausted tenant=${tenantId} recipient=${job.data.recipient_id}: ${err.message}`,
+      message: `Retries exhausted tenant=${tenantId} recipient=${job.data.recipient_id}: ${formatErrorForLogging(err)}`,
       meta: {
         tenant_id: tenantId,
         job_id: job.id,
         recipient_id: job.data.recipient_id,
+        error_code: structuredError.code,
+        error_subcode: structuredError.subcode,
       },
     });
 
-    await markRecipientPermanentlyFailed(job.data.recipient_id, err.message);
+    if (!isFinallyPermanent(err)) {
+      if (isMetaAuthConfigError(err)) {
+        // Auth/config errors are tenant-level — pause ALL active campaigns
+        // to match the inline catch behavior and avoid 1000 campaigns each
+        // retrying against a broken token.
+        const reason = `WhatsApp API access error: ${formatErrorForLogging(err)}. Please update your WhatsApp access token in Settings.`;
+        try {
+          const [affectedRows] = await db.WhatsappCampaigns.update(
+            { status: "paused", paused_reason: reason },
+            {
+              where: {
+                tenant_id: tenantId,
+                status: "active",
+                is_deleted: false,
+              },
+            },
+          );
+          if (affectedRows > 0) {
+            logger.error(
+              `[SEND-WORKER] ${affectedRows} campaign(s) paused for tenant ${tenantId} after retry exhaustion auth error: ${formatErrorForLogging(err)}`,
+            );
+          }
+        } catch (pauseErr) {
+          logger.error(
+            `[SEND-WORKER] Failed to pause tenant ${tenantId} campaigns on retry-exhaustion auth error: ${pauseErr.message}`,
+          );
+        }
+        await pushFailedJobToTenantDlq(tenantId, job, err);
+        return;
+      }
+
+      await logExhaustedSystemFailure(tenantId, job, err);
+      await pushFailedJobToTenantDlq(tenantId, job, err);
+      return;
+    }
+
+    await markRecipientPermanentlyFailed(
+      job.data.recipient_id,
+      structuredError.message,
+      job.data.campaign_id,
+      JSON.stringify(structuredError),
+    );
     await pushFailedJobToTenantDlq(tenantId, job, err);
   });
 
@@ -967,13 +1320,7 @@ const createTenantSendWorker = (tenantId) => {
     },
   });
   // Initialize per-tenant buffers
-  if (!TENANT_BUFFERS.has(tenantId)) {
-    TENANT_BUFFERS.set(tenantId, {
-      messages: [],
-      recipientUpdates: [],
-      flushTimer: null,
-    });
-  }
+  getTenantBuffer(tenantId);
   return worker;
 };
 
@@ -1072,7 +1419,6 @@ if (isDirectRun) {
       process.exit(0);
     });
 
-    
     process.stdin.resume();
   };
 

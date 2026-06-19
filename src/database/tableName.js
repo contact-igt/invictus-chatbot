@@ -79,4 +79,5 @@ export const tableNames = {
   SIDEBAR_SECTION_INDUSTRIES: "sidebar_section_industries",
   SIDEBAR_SECTION_PLANS: "sidebar_section_plans",
   SIDEBAR_SECTION_TENANTS: "sidebar_section_tenants",
+  API_REQUEST_LOGS: "api_request_logs",
 };

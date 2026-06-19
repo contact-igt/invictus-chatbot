@@ -17,9 +17,10 @@ export class CampaignBillingService {
    * @param {string} tenantId - Tenant ID
    * @param {number} amount - Amount to reserve (in INR)
    * @param {number} ttl - Reservation TTL in seconds (default: 300 = 5 min)
+   * @param {string} [campaignId] - Campaign ID for reconciliation metadata
    * @returns {Promise<{success: boolean, reservationId?: string, reason?: string}>}
    */
-  async createReservation(tenantId, amount, ttl = 300) {
+  async createReservation(tenantId, amount, ttl = 300, campaignId = null) {
     try {
       const reserveAmount = Number(amount);
       if (!Number.isFinite(reserveAmount) || reserveAmount <= 0) {
@@ -54,8 +55,9 @@ export class CampaignBillingService {
         };
       }
 
-      // Keep cache aligned with DB to prevent stale-high balances without
-      // clobbering in-flight reservation deductions.
+      // Keep cache aligned with DB — always sync to the authoritative DB
+      // balance before reserving. This handles both stale-high (missed
+      // deduction) and stale-low (recharge happened externally) scenarios.
       const walletKey = `wallet:balance:${tenantId}`;
       const cachedBalanceRaw = await this.redis.get(walletKey);
       if (!cachedBalanceRaw) {
@@ -70,15 +72,18 @@ export class CampaignBillingService {
           logger.warn(
             `[BILLING] Wallet cache reset for tenant ${tenantId} due to invalid cached balance`,
           );
-        } else if (dbBalance < cachedBalance) {
+        } else if (Math.abs(dbBalance - cachedBalance) > 0.01) {
+          // Sync cache to DB when they diverge (handles both recharge and missed deductions)
           await this.redis.set(walletKey, dbBalance.toString());
-          logger.warn(
-            `[BILLING] Wallet cache corrected for tenant ${tenantId}: cache ₹${cachedBalance} -> DB ₹${dbBalance}`,
+          logger.info(
+            `[BILLING] Wallet cache synced for tenant ${tenantId}: cache ₹${cachedBalance} -> DB ₹${dbBalance}`,
           );
         }
       }
 
-      // Atomic reservation: check balance and deduct in one operation
+      // Atomic reservation: check balance and deduct in one operation.
+      // Stores reservation as a hash with metadata so the reconciliation cron
+      // can introspect orphaned keys (tenant_id, campaign_id, amount, created_at).
       const script = `
         local balance = redis.call('get', KEYS[1])
         if not balance then
@@ -92,8 +97,9 @@ export class CampaignBillingService {
           return {0, 'insufficient_balance', balance}
         end
 
-        redis.call('decrbyfloat', KEYS[1], reserveAmount)
-        redis.call('setex', KEYS[2], ARGV[2], ARGV[1])
+        redis.call('incrbyfloat', KEYS[1], 0 - reserveAmount)
+        redis.call('hset', KEYS[2], 'amount', ARGV[1], 'tenant_id', ARGV[3], 'campaign_id', ARGV[4], 'created_at', ARGV[5])
+        redis.call('expire', KEYS[2], ARGV[2])
 
         return {1, balance - reserveAmount}
       `;
@@ -107,6 +113,9 @@ export class CampaignBillingService {
         reservationKey,
         reserveAmount.toString(),
         ttl.toString(),
+        tenantId,
+        campaignId || "",
+        new Date().toISOString(),
       );
 
       const [success, ...data] = result;
@@ -157,9 +166,9 @@ export class CampaignBillingService {
       const reservationKey = `reservation:${reservationId}`;
       const walletKey = `wallet:balance:${tenantId}`;
 
-      // Get reserved amount and delete reservation atomically
+      // Get reserved amount from hash and delete reservation atomically
       const script = `
-        local reservedAmount = redis.call('get', KEYS[1])
+        local reservedAmount = redis.call('hget', KEYS[1], 'amount')
         if not reservedAmount then
           return 0
         end
@@ -234,8 +243,9 @@ export class CampaignBillingService {
       const normalizedConsumed = Math.max(0, Number(consumedAmount));
 
       // Partial confirm: refund (reserved - consumed) back to wallet cache.
+      // Reservation is stored as a hash with 'amount' field.
       const script = `
-        local reservationValue = redis.call('get', KEYS[1])
+        local reservationValue = redis.call('hget', KEYS[1], 'amount')
         if not reservationValue then
           return {0, 'reservation_not_found'}
         end
@@ -395,19 +405,57 @@ export class CampaignBillingService {
   }
 
   /**
-   * Get billing statistics
+   * Get billing statistics (uses SCAN instead of KEYS for production safety)
    * @returns {Promise<Object>}
    */
   async getStats() {
     try {
-      const reservationKeys = await this.redis.keys("reservation:*");
-      const walletKeys = await this.redis.keys("wallet:balance:*");
+      let reservationCount = 0;
+      let walletCount = 0;
+      const reservationSamples = [];
+      const walletSamples = [];
+
+      // SCAN for reservation keys
+      let cursor = "0";
+      do {
+        const [nextCursor, keys] = await this.redis.scan(
+          cursor,
+          "MATCH",
+          "reservation:*",
+          "COUNT",
+          100,
+        );
+        cursor = nextCursor;
+        reservationCount += keys.length;
+        if (reservationSamples.length < 5) {
+          reservationSamples.push(
+            ...keys.slice(0, 5 - reservationSamples.length),
+          );
+        }
+      } while (cursor !== "0");
+
+      // SCAN for wallet keys
+      cursor = "0";
+      do {
+        const [nextCursor, keys] = await this.redis.scan(
+          cursor,
+          "MATCH",
+          "wallet:balance:*",
+          "COUNT",
+          100,
+        );
+        cursor = nextCursor;
+        walletCount += keys.length;
+        if (walletSamples.length < 5) {
+          walletSamples.push(...keys.slice(0, 5 - walletSamples.length));
+        }
+      } while (cursor !== "0");
 
       return {
-        activeReservations: reservationKeys.length,
-        cachedWallets: walletKeys.length,
-        reservations: reservationKeys.slice(0, 5), // Sample
-        wallets: walletKeys.slice(0, 5), // Sample
+        activeReservations: reservationCount,
+        cachedWallets: walletCount,
+        reservations: reservationSamples,
+        wallets: walletSamples,
       };
     } catch (err) {
       logger.warn(`[BILLING] Failed to get billing stats: ${err.message}`);
@@ -418,10 +466,23 @@ export class CampaignBillingService {
 
 // Export singleton instance
 let campaignBillingServiceInstance = null;
+let billingServiceRedisClient = null;
 
 export const getCampaignBillingService = (redisClient) => {
-  if (!campaignBillingServiceInstance && redisClient) {
+  if (!redisClient) return campaignBillingServiceInstance;
+
+  // Re-create if client changed (e.g. after Redis reconnect)
+  if (
+    !campaignBillingServiceInstance ||
+    billingServiceRedisClient !== redisClient
+  ) {
     campaignBillingServiceInstance = new CampaignBillingService(redisClient);
+    billingServiceRedisClient = redisClient;
   }
   return campaignBillingServiceInstance;
+};
+
+export const resetCampaignBillingService = () => {
+  campaignBillingServiceInstance = null;
+  billingServiceRedisClient = null;
 };

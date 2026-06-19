@@ -12,6 +12,7 @@ import {
   triggerCampaignExecutionController,
   estimateCampaignCostController,
   updateCampaignStatusController,
+  retryCampaignRecipientsController,
   campaignEventWebhookController,
   getCampaignStatsController,
   uploadCampaignMediaController,
@@ -92,7 +93,15 @@ router.get(
   "/whatsapp-campaign/diagnostics",
   authenticate,
   authorize({ user_type: "tenant", roles: tenantRoles }),
+  // Ops/internal diagnostic surface; not called by the campaign UI.
   getCampaignDiagnosticsController,
+);
+
+router.post(
+  "/whatsapp-campaign/retry-recipients",
+  authenticate,
+  authorize({ user_type: "tenant", roles: ["tenant_admin"] }),
+  retryCampaignRecipientsController,
 );
 
 router.get(
@@ -159,6 +168,8 @@ router.post(
 
 router.post(
   "/whatsapp-campaign/event",
+  // Optional external campaign event webhook. It is intentionally not a
+  // frontend route and should be protected with CAMPAIGN_EVENT_WEBHOOK_SECRET.
   requireCampaignEventSecret,
   campaignEventWebhookController,
 );
@@ -184,7 +195,8 @@ router.delete(
   hardDeleteCampaignController,
 );
 
-// REST aliases (v1 contract friendly)
+// Compatibility aliases for older API clients. The frontend canonical path is
+// /whatsapp/whatsapp-campaign; do not add new UI callers to /campaigns.
 router.post(
   "/campaigns",
   authenticate,

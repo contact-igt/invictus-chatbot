@@ -162,17 +162,27 @@ export class RedisCache {
   }
 
   /**
-   * Clear all cache keys with current prefix
+   * Clear all cache keys with current prefix (uses SCAN for production safety)
    * @returns {Promise<boolean>}
    */
   async clear() {
     try {
       const pattern = `${this.keyPrefix}*`;
-      const keys = await this.redis.keys(pattern);
+      let cursor = "0";
 
-      if (keys.length > 0) {
-        await this.redis.del(keys);
-      }
+      do {
+        const [nextCursor, keys] = await this.redis.scan(
+          cursor,
+          "MATCH",
+          pattern,
+          "COUNT",
+          100,
+        );
+        cursor = nextCursor;
+        if (keys.length > 0) {
+          await this.redis.del(keys);
+        }
+      } while (cursor !== "0");
 
       return true;
     } catch (err) {
@@ -182,18 +192,35 @@ export class RedisCache {
   }
 
   /**
-   * Get cache statistics
+   * Get cache statistics (uses SCAN for production safety)
    * @returns {Promise<Object>}
    */
   async getStats() {
     try {
       const pattern = `${this.keyPrefix}*`;
-      const keys = await this.redis.keys(pattern);
+      let keyCount = 0;
+      const sampleKeys = [];
+      let cursor = "0";
+
+      do {
+        const [nextCursor, keys] = await this.redis.scan(
+          cursor,
+          "MATCH",
+          pattern,
+          "COUNT",
+          100,
+        );
+        cursor = nextCursor;
+        keyCount += keys.length;
+        if (sampleKeys.length < 10) {
+          sampleKeys.push(...keys.slice(0, 10 - sampleKeys.length));
+        }
+      } while (cursor !== "0");
 
       return {
-        keyCount: keys.length,
+        keyCount,
         keyPrefix: this.keyPrefix,
-        keys: keys.slice(0, 10), // Sample first 10 keys
+        keys: sampleKeys,
       };
     } catch (err) {
       logger.warn(`[REDIS-CACHE] Failed to get cache stats: ${err.message}`);
@@ -294,17 +321,32 @@ export class CampaignCache extends RedisCache {
 // Export singleton instances
 let redisCacheInstance = null;
 let campaignCacheInstance = null;
+let redisCacheClient = null;
+let campaignCacheClient = null;
 
 export const getRedisCache = (redisClient) => {
-  if (!redisCacheInstance && redisClient) {
+  if (!redisClient) return null;
+
+  if (!redisCacheInstance || redisCacheClient !== redisClient) {
     redisCacheInstance = new RedisCache(redisClient);
+    redisCacheClient = redisClient;
   }
   return redisCacheInstance;
 };
 
 export const getCampaignCache = (redisClient) => {
-  if (!campaignCacheInstance && redisClient) {
+  if (!redisClient) return null;
+
+  if (!campaignCacheInstance || campaignCacheClient !== redisClient) {
     campaignCacheInstance = new CampaignCache(redisClient);
+    campaignCacheClient = redisClient;
   }
   return campaignCacheInstance;
+};
+
+export const resetRedisCaches = () => {
+  redisCacheInstance = null;
+  campaignCacheInstance = null;
+  redisCacheClient = null;
+  campaignCacheClient = null;
 };

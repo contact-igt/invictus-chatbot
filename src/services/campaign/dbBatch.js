@@ -59,10 +59,59 @@ export const batchInsertMessages = async (messages) => {
 
   try {
     const [result] = await db.sequelize.query(query, { replacements: values });
-    // MySQL returns insertId in result; but when inserting many rows, rowsAffected is better
-    return result?.affectedRows ?? (Array.isArray(result) ? result[0] : 0);
+    // MySQL returns insertId in result; but when inserting many rows, affectedRows is better
+    const affectedRows =
+      result?.affectedRows ?? (Array.isArray(result) ? result[0] : 0);
+    const droppedRows = messages.length - Number(affectedRows || 0);
+    if (droppedRows > 0) {
+      const skippedKeys = messages
+        .map(
+          (m) =>
+            m.wamid ||
+            `${m.tenant_id}:${m.phone}:${m.template_name || "template"}`,
+        )
+        .slice(0, 20);
+      logger.warn(
+        `[DB-BATCH] INSERT IGNORE skipped ${droppedRows}/${messages.length} message row(s). sample_keys=${JSON.stringify(skippedKeys)}`,
+      );
+    }
+    return affectedRows;
   } catch (err) {
     logger.error(`[DB-BATCH] batchInsertMessages failed: ${err.message}`);
+    throw err;
+  }
+};
+
+export const batchUpdateRecipientContactIds = async (updates) => {
+  if (!updates || updates.length === 0) return 0;
+
+  const validUpdates = updates.filter((u) => u.id && u.contact_id);
+  if (validUpdates.length === 0) return 0;
+
+  const ids = validUpdates.map((u) => u.id);
+  const idList = ids.map((id) => db.sequelize.escape(id)).join(",");
+  const contactCases = validUpdates
+    .map(
+      (u) =>
+        `WHEN ${db.sequelize.escape(u.id)} THEN ${db.sequelize.escape(u.contact_id)}`,
+    )
+    .join(" ");
+
+  const query = `UPDATE ${tableNames.WHATSAPP_CAMPAIGN_RECIPIENT}
+    SET contact_id = CASE id ${contactCases} END
+    WHERE id IN (${idList})`;
+
+  try {
+    const [result] = await db.sequelize.query(query);
+    const affectedRows = result?.affectedRows ?? 0;
+    logger.info(
+      `[DB-BATCH] batchUpdateRecipientContactIds affectedRows=${affectedRows}`,
+    );
+    return affectedRows;
+  } catch (err) {
+    logger.error(
+      `[DB-BATCH] batchUpdateRecipientContactIds failed: ${err.message}`,
+    );
     throw err;
   }
 };
@@ -71,6 +120,9 @@ export const batchUpdateRecipientStatuses = async (updates) => {
   if (!updates || updates.length === 0) return 0;
 
   const tableName = "whatsapp_campaign_recipients";
+  logger.info(
+    `[DB-BATCH] batchUpdateRecipientStatuses start batchSize=${updates.length}`,
+  );
 
   // We'll build a CASE statement for status and meta_message_id and error_message
   const ids = updates.map((u) => u.id);
@@ -111,20 +163,32 @@ export const batchUpdateRecipientStatuses = async (updates) => {
     )
     .join(" ");
 
+  const lastErrorCases = updates
+    .map(
+      (u) =>
+        `WHEN ${db.sequelize.escape(u.id)} THEN ${u.last_error !== undefined && u.last_error !== null ? db.sequelize.escape(u.last_error) : "NULL"}`,
+    )
+    .join(" ");
+
   const query = `UPDATE ${tableName} SET
     status = CASE id ${statusCases} END,
     meta_message_id = CASE id ${metaCases} END,
     error_message = CASE id ${errorCases} END,
     retry_count = CASE id ${retryCases} END,
-    next_retry_at = CASE id ${nextRetryCases} END
+    next_retry_at = CASE id ${nextRetryCases} END,
+    last_error = CASE id ${lastErrorCases} END
     WHERE id IN (${idList})`;
 
   try {
     const [result] = await db.sequelize.query(query);
-    return result?.affectedRows ?? 0;
+    const affectedRows = result?.affectedRows ?? 0;
+    logger.info(
+      `[DB-BATCH] batchUpdateRecipientStatuses affectedRows=${affectedRows}`,
+    );
+    return affectedRows;
   } catch (err) {
     logger.error(
-      `[DB-BATCH] batchUpdateRecipientStatuses failed: ${err.message}`,
+      `[DB-BATCH] batchUpdateRecipientStatuses failed: ${err.message}\n${err.stack || ""}`,
     );
     throw err;
   }
@@ -133,4 +197,5 @@ export const batchUpdateRecipientStatuses = async (updates) => {
 export default {
   batchInsertMessages,
   batchUpdateRecipientStatuses,
+  batchUpdateRecipientContactIds,
 };

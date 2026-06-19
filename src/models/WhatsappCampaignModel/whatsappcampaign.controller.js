@@ -9,6 +9,7 @@ import {
   getDeletedCampaignListService,
   restoreCampaignService,
   updateCampaignStatusService,
+  retryCampaignRecipientsService,
   recordCampaignEventService,
   getCampaignStatsService,
   resolveRecipientCount,
@@ -304,11 +305,9 @@ export const exportCampaignRecipientsCsvController = async (req, res) => {
 
 export const triggerCampaignExecutionController = async (req, res) => {
   try {
-    const batchSize = Number(req.body?.batch_size || req.query?.batch_size || 15);
     const result = await executeCampaignBatchService(
       req.params.campaign_id,
       req.user.tenant_id,
-      batchSize,
     );
     return res.status(200).json({ success: true, data: result });
   } catch (err) {
@@ -330,6 +329,24 @@ export const updateCampaignStatusController = async (req, res) => {
     return res.status(200).json({ success: true, data: result });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+export const retryCampaignRecipientsController = async (req, res) => {
+  try {
+    const result = await retryCampaignRecipientsService(
+      req.user.tenant_id,
+      req.body || {},
+    );
+    return res.status(200).json({ success: true, data: result });
+  } catch (err) {
+    return res.status(err.statusCode || 500).json({
+      success: false,
+      message: err.message,
+      ...(err.missingRecipientIds
+        ? { missing_recipient_ids: err.missingRecipientIds }
+        : {}),
+    });
   }
 };
 

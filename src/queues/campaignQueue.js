@@ -7,9 +7,32 @@
  *   campaignDLQ-{tenant_id}     - per-tenant dead-letter queue
  *
  * Falls back gracefully to cron-based execution when Redis is unavailable.
+ *
+ * CAMPAIGN_* env knobs used by campaign queues/workers:
+ *   CAMPAIGN_QUEUE_CONNECT_TIMEOUT_MS  Redis probe timeout, default 1200 ms
+ *   CAMPAIGN_JOB_ATTEMPTS              send job attempts, default 3
+ *   CAMPAIGN_JOB_BACKOFF_DELAY         send retry delay, default 300000 ms
+ *   CAMPAIGN_SEND_RATE_MAX             tenant queue rate max, default 3500
+ *   CAMPAIGN_SEND_RATE_DURATION        tenant queue rate window, default 60000 ms
+ *   CAMPAIGN_TENANT_RATE_LIMITS        JSON map of tenant_id to rate max
+ *   CAMPAIGN_DISPATCH_PAGE_SIZE        dispatch page size, default 500
+ *   CAMPAIGN_DISPATCH_LOCK_TTL         dispatch lock TTL, default 120 s
+ *   CAMPAIGN_BILLING_RESERVATION_TTL   reservation TTL, default 1800 s
+ *   CAMPAIGN_DISPATCH_CONCURRENCY      dispatch worker concurrency, default 10
+ *   CAMPAIGN_DISPATCH_CHUNK_SIZE       addBulk chunk size, default 500
+ *   CAMPAIGN_SEND_CONCURRENCY          send worker concurrency, default 20
+ *   CAMPAIGN_META_RATE_PER_SEC         Meta API limiter, default 80
+ *   CAMPAIGN_DB_BATCH_SIZE             DB flush batch size, default 100
+ *   CAMPAIGN_DB_BATCH_FLUSH_MS         DB flush interval, default 500 ms
+ *   CAMPAIGN_STALE_RECOVERY_MS         stuck active recovery age, default 120000 ms
+ *   CAMPAIGN_MAX_ACTIVE_HOURS          stale active auto-fail age, default 48 h
+ *   CAMPAIGN_EVENT_WEBHOOK_SECRET      optional event webhook shared secret
  */
 import net from "net";
 import { logger } from "../utils/logger.js";
+import { resetRedisCaches } from "../utils/redis/redisCache.js";
+import { resetRedisLock } from "../utils/redis/redisLock.js";
+import { resetCampaignBillingService } from "../services/campaignBillingService.js";
 
 const DEFAULT_REDIS_URL = "redis://127.0.0.1:6379";
 const CONNECT_TIMEOUT_MS = Number(
@@ -22,6 +45,7 @@ let queueAvailable = false;
 let queueDisabling = false;
 let queueDisableLogged = false;
 let BullmqQueueCtor = null;
+let intentionalClose = false;
 
 const tenantSendQueues = new Map();
 const tenantDlqQueues = new Map();
@@ -154,13 +178,45 @@ const closeTenantQueues = async () => {
   tenantDlqQueues.clear();
 };
 
+const resetRedisDependents = () => {
+  resetRedisCaches();
+  resetRedisLock();
+  resetCampaignBillingService();
+};
+
+const buildRedisConnection = (IORedis, redisUrl) =>
+  new IORedis(redisUrl, {
+    maxRetriesPerRequest: null,
+    enableReadyCheck: false,
+    lazyConnect: true,
+  });
+
+const waitForRedisReady = async (redis) => {
+  if (!redis) return false;
+  if (redis.status === "wait") {
+    await redis.connect();
+  }
+  const pingResult = await redis.ping();
+  return pingResult === "PONG";
+};
+
 // ── Queue initialisation ──────────────────────────────────────────────────────
 
 export const initCampaignQueues = async () => {
-  if (redisConnection) {
+  if (redisConnection && queueAvailable && campaignDispatchQueue) {
     logger.info("[CAMPAIGN-QUEUE] Already initialized - skipping re-init");
     return;
   }
+
+  if (queueDisabling) {
+    logger.warn(
+      "[CAMPAIGN-QUEUE] Initialization skipped while queue is disabling",
+    );
+    return;
+  }
+
+  queueDisableLogged = false;
+  intentionalClose = false;
 
   const redisUrl = process.env.REDIS_URL || DEFAULT_REDIS_URL;
 
@@ -183,10 +239,11 @@ export const initCampaignQueues = async () => {
     const IORedis = ioredisModule.default || ioredisModule;
     const { jobAttempts, jobBackoffDelay } = getQueueConfig();
 
-    redisConnection = new IORedis(redisUrl, {
-      maxRetriesPerRequest: null,
-      enableReadyCheck: false,
-    });
+    redisConnection = buildRedisConnection(IORedis, redisUrl);
+    const redisReady = await waitForRedisReady(redisConnection);
+    if (!redisReady) {
+      throw new Error("Redis ping failed");
+    }
 
     const logQueueDisabledOnce = (message, detail) => {
       if (queueDisableLogged) return;
@@ -206,6 +263,7 @@ export const initCampaignQueues = async () => {
 
       campaignDispatchQueue = null;
       queueAvailable = false;
+      resetRedisDependents();
 
       logQueueDisabledOnce(
         message,
@@ -225,6 +283,7 @@ export const initCampaignQueues = async () => {
       try {
         if (redisConnection) {
           try {
+            intentionalClose = true;
             redisConnection.disconnect();
           } catch {
             // ignore
@@ -237,6 +296,7 @@ export const initCampaignQueues = async () => {
     };
 
     redisConnection.on("error", (err) => {
+      if (intentionalClose || queueDisabling) return;
       logger.warn(`[CAMPAIGN-QUEUE] Redis connection error: ${err.message}`);
       void disableCampaignQueues(
         "[CAMPAIGN-QUEUE] Redis connection lost - queues disabled, switching to cron fallback.",
@@ -245,6 +305,7 @@ export const initCampaignQueues = async () => {
     });
 
     redisConnection.on("end", (err) => {
+      if (intentionalClose || queueDisabling) return;
       logger.warn("[CAMPAIGN-QUEUE] Redis connection ended");
       void disableCampaignQueues(
         "[CAMPAIGN-QUEUE] Redis connection ended - queues disabled, switching to cron fallback.",
@@ -253,6 +314,7 @@ export const initCampaignQueues = async () => {
     });
 
     redisConnection.on("close", (err) => {
+      if (intentionalClose || queueDisabling) return;
       logger.warn("[CAMPAIGN-QUEUE] Redis connection closed");
       void disableCampaignQueues(
         "[CAMPAIGN-QUEUE] Redis connection closed - queues disabled, switching to cron fallback.",
@@ -311,6 +373,7 @@ export const getCampaignQueueHealth = async () => {
   );
 
   const tenantQueues = [];
+  const seenTenantIds = new Set();
   const totals = {
     waiting: dispatchCounts.waiting || 0,
     active: dispatchCounts.active || 0,
@@ -319,6 +382,7 @@ export const getCampaignQueueHealth = async () => {
   };
 
   for (const [tenantId, queue] of tenantSendQueues.entries()) {
+    seenTenantIds.add(tenantId);
     const counts = await queue.getJobCounts(
       "waiting",
       "active",
@@ -339,6 +403,54 @@ export const getCampaignQueueHealth = async () => {
       failed: counts.failed || 0,
       delayed: counts.delayed || 0,
     });
+  }
+
+  if (BullmqQueueCtor && redisConnection) {
+    let stream = null;
+    do {
+      const [nextCursor, keys] = await redisConnection.scan(
+        stream || "0",
+        "MATCH",
+        "bull:campaignQueue-*:*",
+        "COUNT",
+        250,
+      );
+      stream = nextCursor;
+
+      for (const key of keys) {
+        const match = key.match(/^bull:campaignQueue-([^:]+):/);
+        const tenantId = match?.[1];
+        if (!tenantId || seenTenantIds.has(tenantId)) continue;
+
+        const queue = new BullmqQueueCtor(getTenantQueueName(tenantId), {
+          connection: redisConnection,
+        });
+        try {
+          const counts = await queue.getJobCounts(
+            "waiting",
+            "active",
+            "failed",
+            "delayed",
+          );
+          totals.waiting += counts.waiting || 0;
+          totals.active += counts.active || 0;
+          totals.failed += counts.failed || 0;
+          totals.delayed += counts.delayed || 0;
+          tenantQueues.push({
+            tenant_id: tenantId,
+            queue_name: queue.name,
+            waiting: counts.waiting || 0,
+            active: counts.active || 0,
+            failed: counts.failed || 0,
+            delayed: counts.delayed || 0,
+            discovered: true,
+          });
+          seenTenantIds.add(tenantId);
+        } finally {
+          await queue.close();
+        }
+      }
+    } while (stream !== "0");
   }
 
   return {
@@ -421,9 +533,15 @@ const requireBullmqQueue = () => {
 
 export const closeCampaignQueues = async () => {
   try {
-    if (campaignDispatchQueue) await campaignDispatchQueue.close();
+    intentionalClose = true;
+    const dispatchQueue = campaignDispatchQueue;
+    campaignDispatchQueue = null;
+    queueAvailable = false;
+    if (dispatchQueue) await dispatchQueue.close();
     await closeTenantQueues();
     if (redisConnection) redisConnection.disconnect();
+    redisConnection = null;
+    resetRedisDependents();
     logger.info("[CAMPAIGN-QUEUE] Closed gracefully");
   } catch (err) {
     logger.warn(`[CAMPAIGN-QUEUE] Error during close: ${err.message}`);
