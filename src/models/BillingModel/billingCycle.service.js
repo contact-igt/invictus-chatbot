@@ -171,6 +171,7 @@ export const closeBillingCycle = async (
         where: {
           tenant_id,
           billing_cycle_id: cycle.id,
+          entry_type: "message",
         },
         raw: true,
         transaction: t,
@@ -189,6 +190,16 @@ export const closeBillingCycle = async (
           billing_cycle_id: cycle.id,
         },
         raw: true,
+        transaction: t,
+      });
+
+      // Count messages linked to this billing cycle
+      const totalMessages = await db.BillingLedger.count({
+        where: {
+          tenant_id,
+          billing_cycle_id: cycle.id,
+          entry_type: "message",
+        },
         transaction: t,
       });
 
@@ -218,6 +229,7 @@ export const closeBillingCycle = async (
             totalMessageCost,
             totalAiCost,
             totalCost,
+            totalMessages,
             cycleEndDate: cycle.end_date,
           },
           t,
@@ -312,7 +324,7 @@ export const generateMonthlyInvoice = async (
   costData,
   transaction = null,
 ) => {
-  const { totalMessageCost, totalAiCost, totalCost, cycleEndDate } = costData;
+  const { totalMessageCost, totalAiCost, totalCost, totalMessages, cycleEndDate } = costData;
 
   // Due date = cycle end + 15 days
   const dueDate = new Date(cycleEndDate);
@@ -356,6 +368,7 @@ export const generateMonthlyInvoice = async (
       invoice_number: invoiceNumber,
       amount: total_amount, // Total including GST
       total_message_cost_inr: totalMessageCost,
+      total_messages: totalMessages,
       total_ai_cost_inr: totalAiCost,
       base_amount: base_amount,
       gst_amount: gstOnBase,
