@@ -196,6 +196,20 @@ export const defineAssociations = (db) => {
     constraints: false,
   });
 
+  // Tenant → Branches (One-to-Many)
+  db.Tenants.hasMany(db.Branches, {
+    foreignKey: "tenant_id",
+    sourceKey: "tenant_id",
+    as: "branches",
+    constraints: false,
+  });
+  db.Branches.belongsTo(db.Tenants, {
+    foreignKey: "tenant_id",
+    targetKey: "tenant_id",
+    as: "tenant",
+    constraints: false,
+  });
+
   // Tenant → Doctors (One-to-Many)
   db.Tenants.hasMany(db.Doctors, {
     foreignKey: "tenant_id",
@@ -361,6 +375,80 @@ export const defineAssociations = (db) => {
     foreignKey: "module_id",
     targetKey: "module_id",
     as: "saasModule",
+    constraints: false,
+  });
+
+  // SidebarSections -> NavigationItems (One-to-Many via business key)
+  db.SidebarSections.hasMany(db.NavigationItems, {
+    foreignKey: "sidebar_section_id",
+    sourceKey: "sidebar_section_id",
+    as: "navigationItems",
+    constraints: false,
+  });
+  db.NavigationItems.belongsTo(db.SidebarSections, {
+    foreignKey: "sidebar_section_id",
+    targetKey: "sidebar_section_id",
+    as: "sidebarSection",
+    constraints: false,
+  });
+
+  // SidebarSections -> SidebarSectionIndustries (One-to-Many)
+  db.SidebarSections.hasMany(db.SidebarSectionIndustries, {
+    foreignKey: "sidebar_section_id",
+    sourceKey: "sidebar_section_id",
+    as: "industryMappings",
+    constraints: false,
+  });
+  db.SidebarSectionIndustries.belongsTo(db.SidebarSections, {
+    foreignKey: "sidebar_section_id",
+    targetKey: "sidebar_section_id",
+    as: "sidebarSection",
+    constraints: false,
+  });
+  db.SidebarSectionIndustries.belongsTo(db.Industries, {
+    foreignKey: "industry_id",
+    targetKey: "industry_id",
+    as: "industry",
+    constraints: false,
+  });
+
+  // SidebarSections -> SidebarSectionPlans (One-to-Many)
+  db.SidebarSections.hasMany(db.SidebarSectionPlans, {
+    foreignKey: "sidebar_section_id",
+    sourceKey: "sidebar_section_id",
+    as: "planMappings",
+    constraints: false,
+  });
+  db.SidebarSectionPlans.belongsTo(db.SidebarSections, {
+    foreignKey: "sidebar_section_id",
+    targetKey: "sidebar_section_id",
+    as: "sidebarSection",
+    constraints: false,
+  });
+  db.SidebarSectionPlans.belongsTo(db.Plans, {
+    foreignKey: "plan_id",
+    targetKey: "plan_id",
+    as: "plan",
+    constraints: false,
+  });
+
+  // SidebarSections -> SidebarSectionTenants (One-to-Many)
+  db.SidebarSections.hasMany(db.SidebarSectionTenants, {
+    foreignKey: "sidebar_section_id",
+    sourceKey: "sidebar_section_id",
+    as: "tenantMappings",
+    constraints: false,
+  });
+  db.SidebarSectionTenants.belongsTo(db.SidebarSections, {
+    foreignKey: "sidebar_section_id",
+    targetKey: "sidebar_section_id",
+    as: "sidebarSection",
+    constraints: false,
+  });
+  db.SidebarSectionTenants.belongsTo(db.Tenants, {
+    foreignKey: "tenant_id",
+    targetKey: "tenant_id",
+    as: "tenant",
     constraints: false,
   });
 
@@ -601,6 +689,53 @@ export const defineAssociations = (db) => {
     sourceKey: "specialization_id",
     targetKey: "doctor_id",
     as: "doctors",
+    constraints: false,
+  });
+
+  // Doctor ↔ Branches (Many-to-Many via DoctorBranches)
+  db.Doctors.belongsToMany(db.Branches, {
+    through: db.DoctorBranches,
+    foreignKey: "doctor_id",
+    otherKey: "branch_id",
+    sourceKey: "doctor_id",
+    targetKey: "branch_id",
+    as: "branches",
+    constraints: false,
+  });
+  db.Branches.belongsToMany(db.Doctors, {
+    through: db.DoctorBranches,
+    foreignKey: "branch_id",
+    otherKey: "doctor_id",
+    sourceKey: "branch_id",
+    targetKey: "doctor_id",
+    as: "doctors",
+    constraints: false,
+  });
+
+  // Helper direct associations for mapping
+  db.Doctors.hasMany(db.DoctorBranches, {
+    foreignKey: "doctor_id",
+    sourceKey: "doctor_id",
+    as: "branchMappings",
+    constraints: false,
+  });
+  db.DoctorBranches.belongsTo(db.Doctors, {
+    foreignKey: "doctor_id",
+    targetKey: "doctor_id",
+    as: "doctor",
+    constraints: false,
+  });
+
+  db.Branches.hasMany(db.DoctorBranches, {
+    foreignKey: "branch_id",
+    sourceKey: "branch_id",
+    as: "doctorMappings",
+    constraints: false,
+  });
+  db.DoctorBranches.belongsTo(db.Branches, {
+    foreignKey: "branch_id",
+    targetKey: "branch_id",
+    as: "branch",
     constraints: false,
   });
 

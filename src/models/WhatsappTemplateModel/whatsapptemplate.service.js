@@ -1033,43 +1033,23 @@ export const submitWhatsappTemplateService = async ({
       transaction,
     });
 
-    console.log(
-      "🚀 Meta Payload being sent:",
-      JSON.stringify(payload, null, 2),
-    );
+    
 
     const bodyMetaComponent = payload.components?.find(
       (component) => component.type === "BODY",
     );
 
-    console.log("📋 BODY Component Details:", {
-      bodyComponent: bodyMetaComponent,
-      bodyComponentString: JSON.stringify(bodyMetaComponent),
-    });
+    
 
     // Debug: Validate payload structure
-    console.log("🔍 Payload Structure Validation:", {
-      hasComponents: !!payload.components,
-      componentCount: payload.components?.length,
-      bodyComponentIndex: payload.components?.findIndex(
-        (c) => c.type === "BODY",
-      ),
-      bodyComponentHasExample: !!payload.components?.find(
-        (c) => c.type === "BODY",
-      )?.example,
-    });
+    
 
     // ─────────────────────────────────────────
     // Submit to Meta
     // ─────────────────────────────────────────
     let response;
     try {
-      console.log("🔐 Meta Account Details:", {
-        waba_id: whatsappAccount?.waba_id,
-        access_token_exists: !!whatsappAccount?.access_token,
-        access_token_length: whatsappAccount?.access_token?.length,
-        access_token_first_20: whatsappAccount?.access_token?.substring(0, 20),
-      });
+      
 
       response = await axios.post(
         `https://graph.facebook.com/v23.0/${whatsappAccount.waba_id}/message_templates`,

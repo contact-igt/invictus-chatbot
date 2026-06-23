@@ -9,6 +9,7 @@ import {
   getDeletedCampaignListService,
   restoreCampaignService,
   updateCampaignStatusService,
+  retryCampaignRecipientsService,
   recordCampaignEventService,
   getCampaignStatsService,
   resolveRecipientCount,
@@ -244,133 +245,107 @@ export const createCampaignController = async (req, res) => {
       created_by,
     );
 
-    console.log(
-      `[CAMPAIGN-CREATE] Campaign ${campaign.campaign_id} created with status=${campaign.status}, type=${campaign_type}, template_id=${template_id}`,
-    );
-
-    // For immediate send campaigns (not scheduled), kick off the first batch only.
-    // The scheduler cron picks up remaining batches every minute — no tight loop here.
-    if (campaign_type !== "scheduled") {
-      console.log(
-        `[CAMPAIGN-CREATE] Triggering immediate execution for campaign ${campaign.campaign_id}`,
-      );
-      setImmediate(async () => {
-        console.log(
-          `[CAMPAIGN-IMMEDIATE] setImmediate fired for campaign ${campaign.campaign_id}`,
-        );
-        try {
-          const result = await executeCampaignBatchService(
-            campaign.campaign_id,
-            tenant_id,
-            15,
-          );
-          console.log(
-            `[CAMPAIGN-IMMEDIATE] Batch result for ${campaign.campaign_id}:`,
-            JSON.stringify(result),
-          );
-        } catch (err) {
-          console.error(
-            `[Campaign Immediate Exec] Error for campaign ${campaign.campaign_id}:`,
-            err.message,
-            err.stack,
-          );
-        }
-      });
-    } else {
-      console.log(
-        `[CAMPAIGN-CREATE] Scheduled campaign ${campaign.campaign_id} — will execute at ${req.body.scheduled_at}`,
-      );
-
-      // Queue a delayed dispatch so execution starts exactly at scheduled_at.
-      // Cron-based scheduler still exists as a safety fallback.
-      if (isCampaignQueueAvailable() && req.body.scheduled_at) {
-        try {
-          const dispatchQueue = getCampaignDispatchQueue();
-          const scheduledTs = new Date(req.body.scheduled_at).getTime();
-          const delay = Math.max(0, scheduledTs - Date.now());
-
-          await dispatchQueue.add(
-            "campaign-dispatch",
-            {
-              campaign_id: campaign.campaign_id,
-              tenant_id,
-              after_id: 0,
-            },
-            {
-              delay,
-              // Keep scheduled dispatch job IDs unique so retries/re-queues are
-              // never blocked by historical completed jobs with the same ID.
-              jobId: `dispatch:${campaign.campaign_id}:scheduled:${scheduledTs}:${Date.now()}`,
-            },
-          );
-
-          console.log(
-            `[CAMPAIGN-CREATE] Delayed dispatch queued for ${campaign.campaign_id} with delay=${delay}ms`,
-          );
-        } catch (queueErr) {
-          console.error(
-            `[CAMPAIGN-CREATE] Failed to enqueue delayed dispatch for ${campaign.campaign_id}:`,
-            queueErr.message,
-          );
-        }
-      }
-    }
-
-    return res.status(200).send({
+    return res.status(201).json({
+      success: true,
       message: "Campaign created successfully",
       campaign,
     });
   } catch (err) {
-    return res.status(500).send({ message: err.message });
+    console.error("[CAMPAIGN-CREATE] Error:", err.message);
+    return res.status(500).json({
+      success: false,
+      message: err.message || "Failed to create campaign",
+    });
+  }
+};
+
+export const getCampaignListController = async (req, res) => {
+  try {
+    const result = await getCampaignListService(req.user.tenant_id, req.query);
+    return res.status(200).json({ success: true, data: result });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+export const getCampaignByIdController = async (req, res) => {
+  try {
+    const campaign = await getCampaignByIdService(
+      req.params.campaign_id,
+      req.user.tenant_id,
+      req.query,
+    );
+    if (!campaign) {
+      return res.status(404).json({ success: false, message: "Campaign not found" });
+    }
+    return res.status(200).json({ success: true, data: campaign });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+export const exportCampaignRecipientsCsvController = async (req, res) => {
+  try {
+    const result = await exportCampaignRecipientsCsvService(
+      req.params.campaign_id,
+      req.user.tenant_id,
+      req.query?.recipient_status,
+    );
+    res.setHeader("Content-Type", "text/csv");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="${result.fileName}"`,
+    );
+    return res.status(200).send(result.csv);
+  } catch (err) {
+    const status = err.message === "Campaign not found" ? 404 : 500;
+    return res.status(status).json({ success: false, message: err.message });
+  }
+};
+
+export const triggerCampaignExecutionController = async (req, res) => {
+  try {
+    const result = await executeCampaignBatchService(
+      req.params.campaign_id,
+      req.user.tenant_id,
+    );
+    return res.status(200).json({ success: true, data: result });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
   }
 };
 
 export const updateCampaignStatusController = async (req, res) => {
-  const { campaign_id } = req.params;
-  const tenant_id = req.user.tenant_id;
-  const { status } = req.body;
-  const acted_by =
-    req.user.unique_id || req.user.email || req.user.user_id || "unknown";
-
-  if (!status) {
-    return res.status(400).json({
-      success: false,
-      error_code: "MISSING_STATUS",
-      message: "status is required",
-    });
-  }
-
   try {
+    const status = req.body?.status || req.query?.status;
+    if (!status) {
+      return res.status(400).json({ success: false, message: "status is required" });
+    }
     const result = await updateCampaignStatusService(
-      campaign_id,
-      tenant_id,
+      req.user.tenant_id,
+      req.params.campaign_id,
       status,
-      acted_by,
     );
-    return res.status(200).json({
-      success: true,
-      message: "Campaign status updated",
-      data: result,
-    });
+    return res.status(200).json({ success: true, data: result });
   } catch (err) {
-    if (err.message === "Campaign not found") {
-      return res.status(404).json({
-        success: false,
-        error_code: "CAMPAIGN_NOT_FOUND",
-        message: err.message,
-      });
-    }
-    if (err.message.includes("Invalid status transition")) {
-      return res.status(422).json({
-        success: false,
-        error_code: "INVALID_STATUS_TRANSITION",
-        message: err.message,
-      });
-    }
-    return res.status(500).json({
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+export const retryCampaignRecipientsController = async (req, res) => {
+  try {
+    const result = await retryCampaignRecipientsService(
+      req.user.tenant_id,
+      req.body || {},
+    );
+    return res.status(200).json({ success: true, data: result });
+  } catch (err) {
+    return res.status(err.statusCode || 500).json({
       success: false,
-      error_code: "CAMPAIGN_STATUS_UPDATE_FAILED",
       message: err.message,
+      ...(err.missingRecipientIds
+        ? { missing_recipient_ids: err.missingRecipientIds }
+        : {}),
     });
   }
 };
@@ -378,254 +353,62 @@ export const updateCampaignStatusController = async (req, res) => {
 export const campaignEventWebhookController = async (req, res) => {
   try {
     const result = await recordCampaignEventService(req.body || {});
-    return res.status(200).json({
-      success: true,
-      message: "Event recorded",
-      data: result,
-    });
+    return res.status(200).json({ success: true, data: result });
   } catch (err) {
-    return res.status(400).json({
-      success: false,
-      error_code: "INVALID_CAMPAIGN_EVENT",
-      message: err.message,
-    });
+    return res.status(500).json({ success: false, message: err.message });
   }
 };
 
 export const getCampaignStatsController = async (req, res) => {
-  const { campaign_id } = req.params;
-  const tenant_id = req.user.tenant_id;
   try {
-    const stats = await getCampaignStatsService(campaign_id, tenant_id);
-    return res.status(200).json({
-      success: true,
-      message: "Campaign stats fetched",
-      data: stats,
-    });
+    const result = await getCampaignStatsService(
+      req.user.tenant_id,
+      req.params.campaign_id,
+    );
+    return res.status(200).json({ success: true, data: result });
   } catch (err) {
-    if (err.message === "Campaign not found") {
-      return res.status(404).json({
+    const status = err.message === "Campaign not found" ? 404 : 500;
+    return res.status(status).json({ success: false, message: err.message });
+  }
+};
+
+export const uploadCampaignMediaController = async (req, res) => {
+  try {
+    const file = req.files?.file || req.file;
+    if (!file) {
+      return res.status(400).json({ success: false, message: "file is required" });
+    }
+
+    const account = await getWhatsappAccountByTenantService(req.user.tenant_id);
+    const accessToken = account?.access_token;
+    const appId = account?.app_id || process.env.META_APP_ID;
+    if (!accessToken || !appId) {
+      return res.status(400).json({
         success: false,
-        error_code: "CAMPAIGN_NOT_FOUND",
-        message: err.message,
+        message: "WhatsApp access token or Meta app id is missing",
       });
     }
-    return res.status(500).json({
-      success: false,
-      error_code: "CAMPAIGN_STATS_FETCH_FAILED",
-      message: err.message,
-    });
+
+    const media = await uploadMediaService(
+      file,
+      req.user.tenant_id,
+      req.user.unique_id || "system",
+      accessToken,
+      appId,
+      { folder: "campaigns" },
+    );
+
+    return res.status(201).json({ success: true, data: media });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
   }
 };
 
 export const getCampaignDiagnosticsController = async (_req, res) => {
   try {
-    const data = await getCampaignDiagnosticsService();
-    return res.status(200).json({
-      success: true,
-      message: "Campaign diagnostics fetched",
-      data,
-    });
+    const result = await getCampaignDiagnosticsService();
+    return res.status(200).json({ success: true, data: result });
   } catch (err) {
-    return res.status(500).json({
-      success: false,
-      message: err.message,
-    });
-  }
-};
-
-export const getCampaignListController = async (req, res) => {
-  const tenant_id = req.user.tenant_id;
-  try {
-    const data = await getCampaignListService(tenant_id, req.query);
-    return res.status(200).send({
-      message: "Success",
-      data,
-    });
-  } catch (err) {
-    return res.status(500).send({ message: err.message });
-  }
-};
-
-export const getCampaignByIdController = async (req, res) => {
-  const { campaign_id } = req.params;
-  const tenant_id = req.user.tenant_id;
-  try {
-    const campaign = await getCampaignByIdService(
-      campaign_id,
-      tenant_id,
-      req.query,
-    );
-    if (!campaign) {
-      return res.status(404).send({ message: "Campaign not found" });
-    }
-    return res.status(200).send({
-      message: "Success",
-      data: campaign,
-    });
-  } catch (err) {
-    return res.status(500).send({ message: err.message });
-  }
-};
-
-export const exportCampaignRecipientsCsvController = async (req, res) => {
-  const { campaign_id } = req.params;
-  const tenant_id = req.user.tenant_id;
-  const { recipient_status } = req.query;
-
-  try {
-    const result = await exportCampaignRecipientsCsvService(
-      campaign_id,
-      tenant_id,
-      recipient_status,
-    );
-
-    res.setHeader("Content-Type", "text/csv; charset=utf-8");
-    res.setHeader(
-      "Content-Disposition",
-      `attachment; filename="${result.fileName}"`,
-    );
-
-    return res.status(200).send(result.csv);
-  } catch (err) {
-    if (err.message === "Campaign not found") {
-      return res.status(404).send({ message: err.message });
-    }
-    return res.status(500).send({ message: err.message });
-  }
-};
-
-export const triggerCampaignExecutionController = async (req, res) => {
-  const { campaign_id } = req.params;
-  const tenant_id = req.user.tenant_id;
-  const { default: db } = await import("../../database/index.js");
-
-  const campaign = await db.WhatsappCampaigns.findOne({
-    where: { campaign_id, tenant_id, is_deleted: false },
-    attributes: ["id", "campaign_id", "status"],
-  });
-
-  if (!campaign) {
-    return res.status(404).send({ message: "Campaign not found" });
-  }
-
-  if (["completed", "cancelled"].includes(campaign.status)) {
-    return res.status(422).send({
-      message: `Campaign cannot be executed from ${campaign.status} state`,
-    });
-  }
-
-  if (campaign.status === "paused") {
-    return res.status(422).send({
-      message: "Paused campaigns must be resumed before execution.",
-    });
-  }
-
-  if (campaign.status !== "active") {
-    await campaign.update({ status: "active" });
-  }
-
-  // Prefer queue-based dispatch for immediate execution reliability.
-  if (isCampaignQueueAvailable()) {
-    try {
-      const dispatchQueue = getCampaignDispatchQueue();
-      await dispatchQueue.add(
-        "campaign-dispatch",
-        {
-          campaign_id,
-          tenant_id,
-          after_id: 0,
-        },
-        {
-          // Unique manual trigger ID avoids stale dedupe collisions.
-          jobId: `dispatch:${campaign_id}:manual:${Date.now()}`,
-        },
-      );
-
-      return res.status(202).send({ message: "Campaign execution queued" });
-    } catch (queueErr) {
-      console.error(
-        `[Campaign Trigger] Queue enqueue failed for campaign ${campaign_id}:`,
-        queueErr.message,
-      );
-    }
-  }
-
-  // Fallback path when queue is unavailable or enqueue fails.
-  setImmediate(async () => {
-    try {
-      await executeCampaignBatchService(campaign_id, tenant_id, 15);
-    } catch (err) {
-      console.error(
-        `[Campaign Trigger] Error for campaign ${campaign_id}:`,
-        err.message,
-      );
-    }
-  });
-  return res.status(202).send({ message: "Batch execution triggered" });
-};
-
-export const softDeleteCampaignController = async (req, res) => {
-  const { campaign_id } = req.params;
-  const tenant_id = req.user.tenant_id;
-  try {
-    const result = await softDeleteCampaignService(campaign_id, tenant_id);
-    return res.status(200).send(result);
-  } catch (err) {
-    if (err.message === "Campaign not found") {
-      return res.status(404).send({ message: err.message });
-    }
-    return res.status(500).send({ message: err.message });
-  }
-};
-
-export const permanentDeleteCampaignController = async (req, res) => {
-  const { campaign_id } = req.params;
-  const tenant_id = req.user.tenant_id;
-  try {
-    const result = await permanentDeleteCampaignService(campaign_id, tenant_id);
-    return res.status(200).send(result);
-  } catch (err) {
-    if (err.message === "Campaign not found") {
-      return res.status(404).send({ message: err.message });
-    }
-    return res.status(500).send({ message: err.message });
-  }
-};
-
-export const uploadCampaignMediaController = async (req, res) => {
-  const tenant_id = req.user?.tenant_id;
-  const userId =
-    req.user?.unique_id || req.user?.tenant_user_id || req.user?.id;
-  try {
-    if (!tenant_id) {
-      return res.status(400).json({ message: "Invalid tenant context" });
-    }
-    if (!req.files || !req.files.media) {
-      return res.status(400).json({ message: "No media file uploaded" });
-    }
-
-    const whatsappAccount = await getWhatsappAccountByTenantService(tenant_id);
-    if (!whatsappAccount || whatsappAccount.status !== "active") {
-      return res.status(400).json({ message: "WhatsApp account not active" });
-    }
-
-    const media = await uploadMediaService(
-      req.files.media,
-      tenant_id,
-      userId,
-      whatsappAccount.access_token,
-      whatsappAccount.app_id || process.env.META_APP_ID,
-      { folder: "campaign-header", tags: ["campaign"] },
-    );
-
-    return res.status(200).json({
-      message: "Media uploaded successfully",
-      url: media.preview_url,
-      media_handle: media.media_handle,
-      media_asset_id: media.media_asset_id,
-    });
-  } catch (err) {
-    return res.status(500).json({ message: err.message });
+    return res.status(500).json({ success: false, message: err.message });
   }
 };

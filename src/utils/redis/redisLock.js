@@ -41,11 +41,16 @@ export class RedisLock {
         if (isReleased) return;
 
         try {
-          // Check if we still own the lock and extend it
-          const currentToken = await this.redis.get(lockKey);
-          if (currentToken === token) {
-            await this.redis.expire(lockKey, ttl);
-          } else {
+          // Atomic renewal: only extend if we still own the lock
+          const script = `
+            if redis.call("get", KEYS[1]) == ARGV[1] then
+              return redis.call("expire", KEYS[1], ARGV[2])
+            else
+              return 0
+            end
+          `;
+          const renewed = await this.redis.eval(script, 1, lockKey, token, ttl);
+          if (renewed === 0) {
             // Lock stolen or expired, stop renewal
             clearInterval(renewalTimer);
             renewalTimer = null;
@@ -166,14 +171,23 @@ export class RedisLock {
 
 // Export singleton instance
 let redisLockInstance = null;
+let redisLockClient = null;
 
 export const getRedisLock = (redisClient) => {
-  if (!redisLockInstance && redisClient) {
+  if (!redisClient) return null;
+
+  if (!redisLockInstance || redisLockClient !== redisClient) {
     redisLockInstance = new RedisLock(redisClient, {
       defaultTTL: 120, // 2 minutes for campaign dispatch
       retryDelay: 200,
       maxRetries: 2,
     });
+    redisLockClient = redisClient;
   }
   return redisLockInstance;
+};
+
+export const resetRedisLock = () => {
+  redisLockInstance = null;
+  redisLockClient = null;
 };

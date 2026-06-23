@@ -135,7 +135,6 @@ export const WhatsappTemplateTable = (sequelize, Sequelize) => {
       },
       // ──────────────────────────────────────────────────────────────────────
 
-
       createdAt: {
         type: Sequelize.DATE,
         allowNull: false,

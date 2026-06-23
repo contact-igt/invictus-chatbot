@@ -135,10 +135,68 @@ export const buildNoManageAppointmentsPayload = (to) =>
 
 export const buildManageAppointmentActionsPayload = (to, detailsText) =>
   buildManageButtonPayload(to, detailsText, [
-    { id: "manage_appt_edit", title: "Edit Appointment" },
-    { id: "manage_appt_reschedule", title: "Re-schedule" },
-    { id: "manage_appt_cancel", title: "Cancel Appointment" },
+    { id: "manage_appt_edit", title: "Update Appointments" },
+    { id: "manage_appt_reschedule", title: "Reschedule Appt" },
+    { id: "manage_appt_cancel", title: "Cancel Appointments" },
   ]);
+
+export const buildStaleBookingManagePromptPayload = (to) =>
+  buildManageListPayload(
+    to,
+    "This appointment request has already been submitted.\nTo make changes, please use Manage Appointment.",
+    "Manage",
+    [
+      {
+        title: "Manage Appointment",
+        rows: [
+          {
+            id: "view_my_appointments",
+            title: "View Appointment",
+            description: "See appointment details",
+          },
+          {
+            id: "manage_appt_reschedule",
+            title: "Reschedule Appointment",
+            description: "Choose another date or time",
+          },
+          {
+            id: "manage_appt_cancel",
+            title: "Cancel Appointment",
+            description: "Cancel an existing appointment",
+          },
+        ],
+      },
+    ],
+  );
+
+export const buildManageSessionExpiredPayload = (to) =>
+  buildManageListPayload(
+    to,
+    "Your Manage Appointment session has expired.\nPlease choose an option to continue.",
+    "Manage",
+    [
+      {
+        title: "Manage Appointment",
+        rows: [
+          {
+            id: "view_my_appointments",
+            title: "View Appointment",
+            description: "See appointment details",
+          },
+          {
+            id: "manage_appt_book_new",
+            title: "Book Appointment",
+            description: "Start a new booking",
+          },
+          {
+            id: "manage_appt_main_menu",
+            title: "Main Menu",
+            description: "Return to the main menu",
+          },
+        ],
+      },
+    ],
+  );
 
 export const formatManageAppointmentDetails = async ({ tenantId, appointment }) => {
   const timeRange = await getAppointmentTimeRange({ tenantId, appointment });
@@ -149,17 +207,17 @@ export const formatManageAppointmentDetails = async ({ tenantId, appointment }) 
     : "-";
 
   return (
-    `📌 Your Appointment Details\n\n` +
-    `👤 Patient Name: ${appointment.patient_name || "-"}\n` +
-    `📞 Phone: ${getAppointmentPhone(appointment)}\n` +
-    `📧 Email: ${appointment.email || appointment.contact?.email || "-"}\n` +
-    `🩺 Doctor: ${doctorName}\n` +
-    `🏥 Service: ${serviceName}\n` +
-    `📅 Date: ${String(appointment.appointment_date || "-").slice(0, 10)}\n` +
-    `🕒 Time: ${timeRange.start} - ${timeRange.end}\n` +
-    `📍 Branch: ${branchName || "-"}\n` +
-    `📝 Reason: ${appointment.notes || "-"}\n` +
-    `✅ Status: ${String(appointment.status || "-").toUpperCase()}`
+    `Your Appointment Details\n\n` +
+    `Patient: ${appointment.patient_name || "-"}\n` +
+    `Phone: ${getAppointmentPhone(appointment)}\n` +
+    `Email: ${appointment.email || appointment.contact?.email || "-"}\n` +
+    `Doctor: ${doctorName}\n` +
+    `Service: ${serviceName}\n` +
+    `Date: ${String(appointment.appointment_date || "-").slice(0, 10)}\n` +
+    `Time: ${timeRange.start} - ${timeRange.end}\n` +
+    `Branch: ${branchName || "-"}\n` +
+    `Reason: ${appointment.notes || "-"}\n` +
+    `Status: ${String(appointment.status || "-").toUpperCase()}`
   );
 };
 
@@ -211,17 +269,57 @@ export const buildManageAppointmentSelectionPayload = ({ to, appointments, page 
   );
 };
 
-export const buildManageEditMenuPayload = (to) =>
+export const DEFAULT_MANAGE_EDIT_MENU_ROWS = [
+  { id: "manage_appt_edit_name", title: "Patient Name", description: "Update patient name" },
+  { id: "manage_appt_edit_email", title: "Email", description: "Update email address" },
+  { id: "manage_appt_edit_reason", title: "Reason for Visit", description: "Update visit reason" },
+  { id: "manage_appt_edit_service", title: "Service", description: "Select service/reason" },
+  { id: "manage_appt_edit_doctor", title: "Doctor", description: "Choose another doctor" },
+  { id: "manage_appt_edit_date", title: "Date", description: "Choose a new date" },
+  { id: "manage_appt_edit_time", title: "Time Slot", description: "Choose a new time" },
+  { id: "manage_appt_back_details", title: "Back", description: "Return to details" },
+];
+
+export const buildManageEditMenuPayload = (to, rows = DEFAULT_MANAGE_EDIT_MENU_ROWS) =>
   buildManageListPayload(to, "What would you like to edit?", "Edit", [
     {
       title: "Appointment details",
-      rows: [
-        { id: "manage_appt_edit_name", title: "Patient Name", description: "Update patient name" },
-        { id: "manage_appt_edit_phone", title: "Phone Number", description: "Update phone number" },
-        { id: "manage_appt_edit_email", title: "Email", description: "Update email address" },
-        { id: "manage_appt_edit_reason", title: "Reason for Visit", description: "Update visit reason" },
-        { id: "manage_appt_back_details", title: "Back", description: "Return to details" },
-      ],
+      rows,
+    },
+  ]);
+
+export const buildManageReasonServiceListPayload = (
+  to,
+  services,
+  bodyText = "Please select the updated service/reason for visit.",
+) =>
+  buildManageListPayload(to, bodyText, "Select Services", [
+    {
+      title: "Services",
+      rows: services.map((service) => ({
+        id: `manage_appt_reason_${service.specialization_id || service.id}`,
+        title: service.name,
+        description: service.description || "Reason for visit",
+      })),
+    },
+  ]);
+
+export const buildManageDoctorListPayload = (
+  to,
+  doctors,
+  bodyText = "Please choose a doctor for this appointment.",
+) =>
+  buildManageListPayload(to, bodyText, "View doctors", [
+    {
+      title: "Available doctors",
+      rows: doctors.map((doctor) => ({
+        id: `manage_appt_doctor_${doctor.doctor_id}`,
+        title: `Dr. ${doctor.name}`,
+        description:
+          (doctor.specializations || []).map((item) => item.name).join(", ") ||
+          doctor.qualification ||
+          "Available",
+      })),
     },
   ]);
 

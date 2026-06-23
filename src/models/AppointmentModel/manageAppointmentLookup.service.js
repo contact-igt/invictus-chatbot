@@ -63,11 +63,22 @@ const minutesToAmPm = (minutes) => {
   return formatTimeToAMPM(`${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`);
 };
 
-const getDurationFromAvailabilityRow = (row, fallbackDuration = 30) => {
+const normalizeDurationValue = (value, min, max) => {
+  const duration = Number(value);
+  if (!Number.isInteger(duration)) return null;
+  if (duration < min || duration > max) return null;
+  return duration;
+};
+
+const getDurationFromAvailabilityRow = (
+  row,
+  fallbackDuration = 30,
+  daySlotDurationOverride = null,
+) => {
   if (!row) return fallbackDuration;
-  const start = timeToMinutes(row.start_time);
-  const end = timeToMinutes(row.end_time);
-  return end > start ? end - start : fallbackDuration;
+  const override = normalizeDurationValue(daySlotDurationOverride, 5, 480);
+  if (override !== null) return override;
+  return fallbackDuration;
 };
 
 const appointmentInclude = [
@@ -181,12 +192,38 @@ export const getDoctorAvailabilityForAppointment = async ({ tenantId, appointmen
   );
 };
 
+const getDaySlotDurationOverrideForAppointment = async ({ tenantId, appointment }) => {
+  if (!appointment?.doctor_id || !appointment?.appointment_date) return null;
+  const day = getDayOfWeek(appointment.appointment_date);
+  const dayConfig = await db.DoctorAvailabilityDays.findOne({
+    where: {
+      tenant_id: tenantId,
+      doctor_id: appointment.doctor_id,
+      day_of_week: day,
+    },
+    attributes: ["slot_duration", "use_default_duration", "enabled"],
+  });
+  if (!dayConfig || dayConfig.enabled === false) return null;
+  if (dayConfig.use_default_duration === true) return null;
+  return normalizeDurationValue(dayConfig.slot_duration, 5, 480);
+};
+
 export const getAppointmentTimeRange = async ({ tenantId, appointment }) => {
   const start = appointment?.appointment_time || "-";
   if (!appointment?.appointment_time) return { start, end: "-" };
   const availability = await getDoctorAvailabilityForAppointment({ tenantId, appointment });
-  const fallbackDuration = appointment?.doctor?.consultation_duration || 30;
-  const duration = getDurationFromAvailabilityRow(availability, fallbackDuration);
+  const fallbackDuration =
+    normalizeDurationValue(appointment?.doctor?.consultation_duration, 5, 240) ||
+    30;
+  const daySlotDurationOverride = await getDaySlotDurationOverrideForAppointment({
+    tenantId,
+    appointment,
+  });
+  const duration = getDurationFromAvailabilityRow(
+    availability,
+    fallbackDuration,
+    daySlotDurationOverride,
+  );
   const end = minutesToAmPm(timeToMinutes(start) + duration);
   return { start, end };
 };

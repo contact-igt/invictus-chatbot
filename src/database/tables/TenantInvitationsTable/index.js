@@ -100,4 +100,3 @@ export const TenantInvitationsTable = (sequelize, Sequelize) => {
   );
 };
 
-

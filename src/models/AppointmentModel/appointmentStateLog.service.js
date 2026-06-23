@@ -12,6 +12,7 @@ export const logAppointmentStateTransition = async ({
 }) => {
   try {
     if (!db.AppointmentStateLogs) return null;
+    
     return await db.AppointmentStateLogs.create({
       tenant_id: tenantId,
       user_phone: userPhone,

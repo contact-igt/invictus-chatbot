@@ -19,7 +19,7 @@ export const getDashboardController = async (req, res) => {
         const { startDate, endDate } = req.query;
 
         // Debug: log every incoming request so date-filter issues are immediately visible in server logs
-        console.log("[Dashboard] Incoming request:", { tenantId, startDate, endDate });
+        
 
         // Validate YYYY-MM-DD format when provided
         const datePattern = /^\d{4}-\d{2}-\d{2}$/;
@@ -223,17 +223,7 @@ export const getDashboardController = async (req, res) => {
         };
 
         // Debug: confirm what values are going back so silent filter-bypass is caught early
-        console.log("[Dashboard] Response summary:", {
-            period:           responseData.period,
-            isLiveMode:       responseData.isLiveMode,
-            totalLeads:       responseData.kpis?.totalLeads?.value,
-            totalCampaigns:   responseData.kpis?.totalCampaigns,
-            billingTotal:     responseData.billingSummary?.totalSpent,
-            aiAutoResolved:   responseData.kpis?.aiAutoResolved?.value,
-            knowledgeSources: responseData.kpis?.knowledgeSources?.value,
-            totalContacts:    responseData.kpis?.totalContacts?.value,
-            totalGroups:      responseData.kpis?.totalGroups?.value,
-        });
+        
 
         return res.status(200).send({ status: "success", data: responseData });
 

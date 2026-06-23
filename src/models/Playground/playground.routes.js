@@ -1,6 +1,7 @@
 import express from "express";
 import {
   playgroundChat,
+  playgroundInbound,
   getPlaygroundKnowledgeSources,
 } from "./playground.controller.js";
 import {
@@ -10,9 +11,7 @@ import {
 import { requireAiAccess } from "../../middlewares/billing/billingAccessGuard.js";
 
 const Router = express.Router();
-
-// [DOCTOR ROLE UNWIRED – 2026-05-13] "doctor" removed from all tenant route access.
-const tenantRoles = ["tenant_admin", /* "doctor", */ "staff"];
+const tenantRoles = ["tenant_admin", "staff"];
 
 Router.post(
   "/playground/chat",
@@ -20,6 +19,14 @@ Router.post(
   authorize({ user_type: "tenant", roles: tenantRoles }),
   requireAiAccess,
   playgroundChat,
+);
+
+Router.post(
+  "/playground/inbound",
+  authenticate,
+  authorize({ user_type: "tenant", roles: tenantRoles }),
+  requireAiAccess,
+  playgroundInbound,
 );
 
 Router.get(

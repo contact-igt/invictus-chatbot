@@ -13,7 +13,6 @@ import {
   normalizeMobile,
   cleanCountryCode,
 } from "../../utils/helpers/normalizeMobile.js";
-import { findTenantUserByEmailOrMobileGloballyService } from "../TenantUserModel/tenantuser.service.js";
 import db from "../../database/index.js";
 import { tableNames } from "../../database/tableName.js";
 
@@ -46,7 +45,7 @@ export const createDoctorController = async (req, res) => {
       : consultationDuration;
   const finalTitle = (title || "").replace(".", "");
 
-  const requiredFields = { name, mobile, email };
+  const requiredFields = { name };
   const missing = await missingFieldsChecker(requiredFields);
   if (missing.length > 0) {
     return res
@@ -77,9 +76,9 @@ export const createDoctorController = async (req, res) => {
     const result = await createDoctorService(tenant_id, {
       title: finalTitle,
       name,
-      country_code: cleanedCC,
-      mobile: normalizedMobile,
-      email,
+      country_code: normalizedMobile ? cleanedCC : null,
+      mobile: normalizedMobile || null,
+      email: email || null,
       status: finalStatus,
       consultation_duration: finalConsultationDuration,
       specializations,
@@ -186,25 +185,36 @@ export const updateDoctorController = async (req, res) => {
       req.body.mobile = normalizeMobile(req.body.country_code, req.body.mobile);
     }
 
-    // Check for duplicate mobile/email (excluding current doctor)
+    // Check duplicate email/mobile against active doctors (excluding current doctor)
     if (req.body.mobile || req.body.email) {
-      const existingUser = await findTenantUserByEmailOrMobileGloballyService(
-        req.body.email || '',
-        req.body.mobile || '',
+      const email = req.body.email || null;
+      const mobile = req.body.mobile || null;
+      const [duplicateRows] = await db.sequelize.query(
+        `SELECT doctor_id, email, mobile
+           FROM ${tableNames.DOCTORS}
+          WHERE is_deleted = false
+            AND doctor_id <> ?
+            AND (
+              (? IS NOT NULL AND email = ?)
+              OR
+              (? IS NOT NULL AND mobile = ?)
+            )
+          LIMIT 1`,
+        {
+          replacements: [doctor_id, email, email, mobile, mobile],
+        },
       );
-      if (existingUser) {
-        // Get current doctor's tenant_user_id to exclude self
-        const [[currentDoctor]] = await db.sequelize.query(
-          `SELECT tenant_user_id FROM ${tableNames.DOCTORS} WHERE doctor_id = ? AND tenant_id = ?`,
-          { replacements: [doctor_id, tenant_id] },
-        );
-        if (currentDoctor && existingUser.tenant_user_id !== currentDoctor.tenant_user_id) {
-          if (req.body.email && existingUser.email === req.body.email) {
-            return res.status(409).send({ message: 'User with this email already exists in the system.' });
-          }
-          if (req.body.mobile && existingUser.mobile === req.body.mobile) {
-            return res.status(409).send({ message: 'User with this mobile number already exists in the system.' });
-          }
+      const duplicate = duplicateRows?.[0];
+      if (duplicate) {
+        if (email && duplicate.email === email) {
+          return res
+            .status(409)
+            .send({ message: "User with this email already exists in the system." });
+        }
+        if (mobile && duplicate.mobile === mobile) {
+          return res.status(409).send({
+            message: "User with this mobile number already exists in the system.",
+          });
         }
       }
     }

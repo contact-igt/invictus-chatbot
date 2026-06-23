@@ -12,7 +12,7 @@ Router.get(
   authenticate,
   authorize({
     user_type: "tenant",
-    roles: ["tenant_admin", "doctor", "staff", "agent"],
+    roles: ["tenant_admin", "staff", "agent"],
   }),
   getTenantFeaturesController,
 );

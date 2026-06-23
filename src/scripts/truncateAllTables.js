@@ -1,7 +1,7 @@
 import db from "../database/index.js";
 
 async function truncateAllTables() {
-    console.log("⚠️  WARNING: This will delete ALL data in ALL tables!");
+    
 
     try {
         // 1. Get all table names

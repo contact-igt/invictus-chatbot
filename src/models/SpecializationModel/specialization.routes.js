@@ -16,9 +16,7 @@ import { authenticate, authorize } from "../../middlewares/auth/authMiddlewares.
 import { checkFeatureAccess } from "../../middlewares/feature/checkFeatureAccess.js";
 
 const Router = express.Router();
-
-// [DOCTOR ROLE UNWIRED – 2026-05-13] "doctor" removed from all tenant route access.
-const tenantRoles = ["tenant_admin", /* "doctor", */ "staff"];
+const tenantRoles = ["tenant_admin", "staff"];
 const managerRoles = ["tenant_admin", "staff"];
 
 // List all specializations (all roles can view)

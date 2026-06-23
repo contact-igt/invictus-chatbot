@@ -575,9 +575,9 @@ export const sendTemplateMessageController = async (req, res) => {
 // ─── Send Test Message ───
 export const sendTestMessageController = async (req, res) => {
   const { phone, message_type, message, template_id, components } = req.body;
-  console.log("req.body", JSON.stringify(req.body, null, 2));
+  
   const tenant_id = req.user.tenant_id;
-  console.log("components", JSON.stringify(components, null, 2));
+  
   if (!tenant_id) {
     return res.status(400).send({ message: "Invalid tenant context" });
   }
@@ -594,12 +594,7 @@ export const sendTestMessageController = async (req, res) => {
 
   try {
     const formattedPhone = formatPhoneNumber(phone);
-    console.log("[TEST-MSG] Starting test message flow:", {
-      tenant_id,
-      phone,
-      formattedPhone,
-      message_type,
-    });
+    
 
     // ── Text Message ──
     if (message_type === "text") {
@@ -612,14 +607,14 @@ export const sendTestMessageController = async (req, res) => {
         formattedPhone,
         message,
       );
-      console.log("[TEST-MSG] WhatsApp response:", msgResponse);
+      
 
       // Contact & Chat management
       let contact = await getContactByPhoneAndTenantIdService(
         tenant_id,
         formattedPhone,
       );
-      console.log("[TEST-MSG] Contact lookup (before create):", contact);
+      
 
       if (!contact) {
         await createContactService(
@@ -632,7 +627,7 @@ export const sendTestMessageController = async (req, res) => {
           tenant_id,
           formattedPhone,
         );
-        console.log("[TEST-MSG] Contact lookup (after create):", contact);
+        
       }
 
       const livelist = await getLivechatByIdService(
@@ -658,7 +653,7 @@ export const sendTestMessageController = async (req, res) => {
         null,
         "sent",
       );
-      console.log("[TEST-MSG] Saved message result:", savedMsg);
+      
 
       const io = getIO();
       io.to(`tenant-${tenant_id}`).emit("new-message", {
@@ -806,7 +801,7 @@ export const sendTestMessageController = async (req, res) => {
     const metaErrorMsg = isMetaError
       ? err.message
       : `Failed to send test message: ${err.message}`;
-    console.log(metaErrorMsg);
+    
     return res.status(isMetaError ? 400 : 500).send({ message: metaErrorMsg });
   }
 };

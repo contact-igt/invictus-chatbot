@@ -46,6 +46,13 @@ export const MonthlyInvoiceTable = (sequelize, Sequelize) => {
         comment: "Message billing sub-total for this cycle (INR)",
       },
 
+      total_messages: {
+        type: Sequelize.INTEGER,
+        allowNull: false,
+        defaultValue: 0,
+        comment: "Count of billed message events in this cycle",
+      },
+
       total_ai_cost_inr: {
         type: Sequelize.DECIMAL(15, 4),
         allowNull: false,

@@ -73,6 +73,14 @@ export const hardDeleteDoctor = async (doctorId, tenant_id) => {
       `DELETE FROM ${tableNames.DOCTOR_AVAILABILITY} WHERE doctor_id = ? AND tenant_id = ?`,
       { replacements: [doctorId, tenant_id], transaction: t },
     );
+    await db.sequelize.query(
+      `DELETE FROM ${tableNames.DOCTOR_AVAILABILITY_DAYS} WHERE doctor_id = ? AND tenant_id = ?`,
+      { replacements: [doctorId, tenant_id], transaction: t },
+    );
+    await db.sequelize.query(
+      `DELETE FROM ${tableNames.DOCTOR_BRANCHES} WHERE doctor_id = ? AND tenant_id = ?`,
+      { replacements: [doctorId, tenant_id], transaction: t },
+    );
     // Nullify doctor_id on appointments rather than deleting (preserve patient records)
     await db.sequelize.query(
       `UPDATE ${tableNames.APPOINTMENTS}

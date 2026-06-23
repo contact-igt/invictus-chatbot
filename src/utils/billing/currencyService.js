@@ -7,6 +7,7 @@ import { recordBillingHealthEvent } from "../healthEventService.js";
 let rateCache = new Map();
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 const currencyHealthThrottle = new Map();
+const defaultFallbackLogged = new Set();
 
 const reportCurrencyHealthEvent = async (key, message, metadata = {}) => {
   const now = Date.now();
@@ -103,6 +104,8 @@ export const getConversionRate = async (from = "USD", to = "INR") => {
 
   // 4. Ultimate fallback to config default
   if (from === "USD" && to === "INR") {
+    if (!defaultFallbackLogged.has(cacheKey)) {
+      defaultFallbackLogged.add(cacheKey);
     logger.warn(
       `[CURRENCY] No rate found for USD→INR, using default: ${DEFAULT_USD_TO_INR}`,
     );
@@ -114,6 +117,7 @@ export const getConversionRate = async (from = "USD", to = "INR") => {
         fallbackRate: DEFAULT_USD_TO_INR,
       },
     );
+    }
     return { rate: DEFAULT_USD_TO_INR, source: "default", updatedAt: null };
   }
 

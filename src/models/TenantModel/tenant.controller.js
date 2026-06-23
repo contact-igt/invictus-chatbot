@@ -1,4 +1,4 @@
-import db from "../../database/index.js";
+﻿import db from "../../database/index.js";
 import { tableNames } from "../../database/tableName.js";
 import { generateReadableIdFromLast } from "../../utils/helpers/generateReadableIdFromLast.js";
 import { missingFieldsChecker } from "../../utils/helpers/missingFields.js";

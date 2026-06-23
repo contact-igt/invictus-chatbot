@@ -57,7 +57,6 @@ export const ContactGroupTable = (sequelize, Sequelize) => {
             },
         },
 
-
         {
             tableName: tableNames.CONTACT_GROUPS,
             timestamps: true,

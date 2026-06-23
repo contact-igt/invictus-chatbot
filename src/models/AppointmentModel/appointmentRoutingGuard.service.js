@@ -49,6 +49,7 @@ const APPOINTMENT_REPLY_PREFIXES = [
 
 const APPOINTMENT_REPLY_IDS = new Set([
   "create_appointment",
+  "book_appointment",
   "confirm_booking",
   "edit_details",
   "continue_appointment",
@@ -229,7 +230,9 @@ export const getAdvancedAppointmentStartReason = ({
   interactiveReplyId = null,
   chatHistory = [],
 } = {}) => {
-  if (interactiveReplyId === "create_appointment") return "interactive_create_appointment";
+  if (interactiveReplyId === "create_appointment" || interactiveReplyId === "book_appointment") {
+    return "interactive_create_appointment";
+  }
   if (intent !== "APPOINTMENT_ACTION") return null;
   if (hasAppointmentStartSignal(message)) return "direct_start_signal";
   if (isContextualPositiveBookingReply({ message, chatHistory })) {

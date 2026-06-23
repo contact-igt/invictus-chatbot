@@ -7,12 +7,15 @@ import {
   listIndustriesController,
   createIndustryController,
   patchIndustryController,
+  deleteIndustryController,
   listSaaSModulesController,
   createSaaSModuleController,
   patchSaaSModuleController,
+  deleteSaaSModuleController,
   listPlansController,
   createPlanController,
   patchPlanController,
+  deletePlanController,
   getIndustrySaaSModulesController,
   patchIndustrySaaSModulesController,
   getPlanSaaSModulesController,
@@ -34,14 +37,17 @@ const managementAuth = [
 Router.get("/industries", ...managementAuth, listIndustriesController);
 Router.post("/industries", ...managementAuth, createIndustryController);
 Router.patch("/industries/:industryId", ...managementAuth, patchIndustryController);
+Router.delete("/industries/:industryId", ...managementAuth, deleteIndustryController);
 
 Router.get("/saas-modules", ...managementAuth, listSaaSModulesController);
 Router.post("/saas-modules", ...managementAuth, createSaaSModuleController);
 Router.patch("/saas-modules/:moduleId", ...managementAuth, patchSaaSModuleController);
+Router.delete("/saas-modules/:moduleId", ...managementAuth, deleteSaaSModuleController);
 
 Router.get("/plans", ...managementAuth, listPlansController);
 Router.post("/plans", ...managementAuth, createPlanController);
 Router.patch("/plans/:planId", ...managementAuth, patchPlanController);
+Router.delete("/plans/:planId", ...managementAuth, deletePlanController);
 
 Router.get(
   "/industries/:industryId/saas-modules",

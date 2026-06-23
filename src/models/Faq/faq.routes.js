@@ -19,10 +19,7 @@ import {
 } from "../../middlewares/auth/authMiddlewares.js";
 
 const router = express.Router();
-
-// [DOCTOR ROLE UNWIRED – 2026-05-13] "doctor" removed from manager access.
-// Was: ["tenant_admin", "staff", "doctor"]
-const managerRoles = ["tenant_admin", "staff" /* , "doctor" */];
+const managerRoles = ["tenant_admin", "staff"];
 
 // GET  /faq-reviews
 router.get(

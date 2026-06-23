@@ -9,6 +9,7 @@ import { ManagementTable } from "./tables/ManagementTable/index.js";
 import { ProcessedMessagesTable } from "./tables/ProcessedMessagesTable/index.js";
 import { ChatLocksTable } from "./tables/ChatLocksTable/index.js";
 import { TenantsTable } from "./tables/TenantsTable/index.js";
+import { BranchesTable } from "./tables/BranchesTable/index.js";
 import { LeadsTable } from "./tables/LeadsTable/index.js";
 import { MessageUnderstandingTable } from "./tables/MessageUnderstandingTable/index.js";
 import { LeadScoreHistoryTable } from "./tables/LeadScoreHistoryTable/index.js";
@@ -33,6 +34,7 @@ import { DoctorAvailabilityTable } from "./tables/DoctorAvailabilityTable/index.
 import { DoctorAvailabilityDayTable } from "./tables/DoctorAvailabilityDayTable/index.js";
 import { SpecializationsTable } from "./tables/SpecializationsTable/index.js";
 import { DoctorSpecializationsTable } from "./tables/DoctorSpecializationsTable/index.js";
+import { DoctorBranchesTable } from "./tables/DoctorBranchesTable/index.js";
 import { PricingTable } from "./tables/PricingTableTable/index.js";
 import { MessageUsageTable } from "./tables/MessageUsageTable/index.js";
 import { BillingLedgerTable } from "./tables/BillingLedgerTable/index.js";
@@ -68,6 +70,7 @@ import { MentorsTable } from "./tables/MentorsTable/index.js";
 import { CoursesTable } from "./tables/CoursesTable/index.js";
 import { TenantFeatureAccessTable } from "./tables/TenantFeatureAccessTable/index.js";
 import { ScheduledMessageTable } from "./tables/ScheduledMessageTable/index.js";
+import { AppointmentReminderRulesTable } from "./tables/AppointmentReminderRulesTable/index.js";
 import { IndustriesTable } from "./tables/IndustriesTable/index.js";
 import { SaaSModulesTable } from "./tables/SaaSModulesTable/index.js";
 import { IndustrySaaSModulesTable } from "./tables/IndustrySaaSModulesTable/index.js";
@@ -75,6 +78,11 @@ import { PlansTable } from "./tables/PlansTable/index.js";
 import { PlanSaaSModulesTable } from "./tables/PlanSaaSModulesTable/index.js";
 import { TenantSaaSModuleOverridesTable } from "./tables/TenantSaaSModuleOverridesTable/index.js";
 import { NavigationItemsTable } from "./tables/NavigationItemsTable/index.js";
+import { SidebarSectionsTable } from "./tables/SidebarSectionsTable/index.js";
+import { SidebarSectionIndustriesTable } from "./tables/SidebarSectionIndustriesTable/index.js";
+import { SidebarSectionPlansTable } from "./tables/SidebarSectionPlansTable/index.js";
+import { SidebarSectionTenantsTable } from "./tables/SidebarSectionTenantsTable/index.js";
+import { ApiRequestLogsTable } from "./tables/ApiRequestLogsTable/index.js";
 
 const dbconfig =
   ServerEnvironmentConfig?.server?.line === "production"
@@ -123,6 +131,7 @@ db.sequelize = sequelize;
 
 db.Management = ManagementTable(sequelize, Sequelize);
 db.Tenants = TenantsTable(sequelize, Sequelize);
+db.Branches = BranchesTable(sequelize, Sequelize);
 db.TenantUsers = TenantUsersTable(sequelize, Sequelize);
 db.TenantInvitations = TenantInvitationsTable(sequelize, Sequelize);
 db.WhatsappTemplates = WhatsappTemplateTable(sequelize, Sequelize);
@@ -167,6 +176,7 @@ db.DoctorAvailability = DoctorAvailabilityTable(sequelize, Sequelize);
 db.DoctorAvailabilityDays = DoctorAvailabilityDayTable(sequelize, Sequelize);
 db.Specializations = SpecializationsTable(sequelize, Sequelize);
 db.DoctorSpecializations = DoctorSpecializationsTable(sequelize, Sequelize);
+db.DoctorBranches = DoctorBranchesTable(sequelize, Sequelize);
 db.PricingTable = PricingTable(sequelize, Sequelize);
 db.MessageUsage = MessageUsageTable(sequelize, Sequelize);
 db.BillingLedger = BillingLedgerTable(sequelize, Sequelize);
@@ -192,7 +202,10 @@ db.BookingSessions = BookingSessionTable(sequelize, Sequelize);
 db.AppointmentSlots = AppointmentSlotTable(sequelize, Sequelize);
 db.AppointmentStateLogs = AppointmentStateLogTable(sequelize, Sequelize);
 db.AppointmentAuditLogs = AppointmentAuditLogTable(sequelize, Sequelize);
-db.ManageAppointmentSessions = ManageAppointmentSessionTable(sequelize, Sequelize);
+db.ManageAppointmentSessions = ManageAppointmentSessionTable(
+  sequelize,
+  Sequelize,
+);
 db.SavedPaymentMethod = SavedPaymentMethodTable(sequelize, Sequelize);
 db.TaxSettings = TaxSettingsTable(sequelize, Sequelize);
 db.TenantSecrets = TenantSecretsTable(sequelize, Sequelize);
@@ -201,6 +214,10 @@ db.Mentors = MentorsTable(sequelize, Sequelize);
 db.Courses = CoursesTable(sequelize, Sequelize);
 db.TenantFeatureAccess = TenantFeatureAccessTable(sequelize, Sequelize);
 db.ScheduledMessages = ScheduledMessageTable(sequelize, Sequelize);
+db.AppointmentReminderRules = AppointmentReminderRulesTable(
+  sequelize,
+  Sequelize,
+);
 db.Industries = IndustriesTable(sequelize, Sequelize);
 db.SaaSModules = SaaSModulesTable(sequelize, Sequelize);
 db.IndustrySaaSModules = IndustrySaaSModulesTable(sequelize, Sequelize);
@@ -211,6 +228,14 @@ db.TenantSaaSModuleOverrides = TenantSaaSModuleOverridesTable(
   Sequelize,
 );
 db.NavigationItems = NavigationItemsTable(sequelize, Sequelize);
+db.SidebarSections = SidebarSectionsTable(sequelize, Sequelize);
+db.SidebarSectionIndustries = SidebarSectionIndustriesTable(
+  sequelize,
+  Sequelize,
+);
+db.SidebarSectionPlans = SidebarSectionPlansTable(sequelize, Sequelize);
+db.SidebarSectionTenants = SidebarSectionTenantsTable(sequelize, Sequelize);
+db.ApiRequestLogs = ApiRequestLogsTable(sequelize, Sequelize);
 
 defineAssociations(db);
 

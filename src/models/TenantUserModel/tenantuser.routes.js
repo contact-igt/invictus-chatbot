@@ -42,8 +42,7 @@ Router.get(
   authenticate,
   authorize({
     user_type: "tenant",
-    // [DOCTOR ROLE UNWIRED – 2026-05-13] "doctor" removed
-    roles: ["tenant_admin", /* "doctor", */ "staff"],
+    roles: ["tenant_admin" , "staff"],
   }),
   getLoggedTenantUserController,
 );
@@ -53,8 +52,7 @@ Router.get(
   authenticate,
   authorize({
     user_type: "tenant",
-    // [DOCTOR ROLE UNWIRED – 2026-05-13] "doctor" removed
-    roles: ["tenant_admin", /* "doctor", */ "staff"],
+    roles: ["tenant_admin" , "staff"],
   }),
   getLoggedTenantUserPreferencesController,
 );
@@ -64,8 +62,7 @@ Router.put(
   authenticate,
   authorize({
     user_type: "tenant",
-    // [DOCTOR ROLE UNWIRED – 2026-05-13] "doctor" removed
-    roles: ["tenant_admin", /* "doctor", */ "staff"],
+    roles: ["tenant_admin" , "staff"],
   }),
   updateLoggedTenantUserPreferencesController,
 );
@@ -75,8 +72,7 @@ Router.put(
   authenticate,
   authorize({
     user_type: "tenant",
-    // [DOCTOR ROLE UNWIRED – 2026-05-13] "doctor" removed
-    roles: ["tenant_admin", /* "doctor", */ "staff"],
+    roles: ["tenant_admin" , "staff"],
   }),
   updateLoggedTenantProfileController,
 );
@@ -96,8 +92,7 @@ Router.get(
   authenticate,
   authorize({
     user_type: "tenant",
-    // [DOCTOR ROLE UNWIRED – 2026-05-13] "doctor" removed
-    roles: ["tenant_admin", /* "doctor", */ "staff"],
+    roles: ["tenant_admin" , "staff"],
   }),
   getAllTenantUsersController,
 );
@@ -107,8 +102,7 @@ Router.get(
   authenticate,
   authorize({
     user_type: "tenant",
-    // [DOCTOR ROLE UNWIRED – 2026-05-13] "doctor" removed
-    roles: ["tenant_admin", /* "doctor", */ "staff"],
+    roles: ["tenant_admin" , "staff"],
   }),
   getTenantUserByIdController,
 );
@@ -118,8 +112,7 @@ Router.put(
   authenticate,
   authorize({
     user_type: "tenant",
-    // [DOCTOR ROLE UNWIRED – 2026-05-13] "doctor" removed
-    roles: ["tenant_admin", /* "doctor", */ "staff"],
+    roles: ["tenant_admin" , "staff"],
   }),
   updateTenantUserByIdController,
 );
@@ -139,8 +132,7 @@ Router.get(
   authenticate,
   authorize({
     user_type: "tenant",
-    // [DOCTOR ROLE UNWIRED – 2026-05-13] "doctor" removed
-    roles: ["tenant_admin", /* "doctor", */ "staff"],
+    roles: ["tenant_admin" , "staff"],
   }),
   getDeletedTenantUserListController,
 );
@@ -165,8 +157,6 @@ Router.delete(
   }),
   permanentDeleteTenantUserController,
 );
-
-
 
 Router.post("/user/forgot-password", forgotTenantPasswordController);
 Router.post("/user/verify-otp", verifyTenantOTPController);

@@ -8,7 +8,7 @@ export const ADVANCED_SESSION_STATUS = {
   EXPIRED: "EXPIRED",
 };
 
-export const SESSION_TTL_MS = 10 * 60 * 1000;
+export const SESSION_TTL_MS = 5 * 60 * 1000;
 
 export const addSessionTtl = (base = new Date()) =>
   new Date(base.getTime() + SESSION_TTL_MS);
@@ -83,7 +83,10 @@ export const getOrCreateAppointmentSession = async ({
   draft = {},
 }) => {
   const active = await getActiveAppointmentSession({ tenantId, contactId, userPhone });
-  if (active) return { session: active, created: false };
+  if (active) {
+    
+    return { session: active, created: false };
+  }
 
   const now = new Date();
   const session = await db.BookingSessions.create({
@@ -98,6 +101,7 @@ export const getOrCreateAppointmentSession = async ({
     status: ADVANCED_SESSION_STATUS.IN_PROGRESS,
     expires_at: addSessionTtl(now),
   });
+  
 
   return { session, created: true };
 };

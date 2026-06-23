@@ -13,11 +13,12 @@ import {
 import { checkFeatureAccess } from "../../middlewares/feature/checkFeatureAccess.js";
 
 const router = express.Router();
+const tenantRoles = ["tenant_admin", "staff"];
 
-// [DOCTOR ROLE UNWIRED – 2026-05-13] "doctor" removed from all tenant route access.
-const tenantRoles = ["tenant_admin", /* "doctor", */ "staff"];
-
-const tenantAuth = [authenticate, authorize({ user_type: "tenant", roles: tenantRoles })];
+const tenantAuth = [
+  authenticate,
+  authorize({ user_type: "tenant", roles: tenantRoles }),
+];
 
 router.post(
   "/appointment",
@@ -91,6 +92,30 @@ router.put(
   checkFeatureAccess("appointments"),
   AppointmentController.updateAppointment,
 );
+router.get(
+  "/appointment/:appointment_id/reminders",
+  ...tenantAuth,
+  checkFeatureAccess("appointments"),
+  AppointmentController.getAppointmentReminders,
+);
+router.get(
+  "/reminders",
+  ...tenantAuth,
+  checkFeatureAccess("appointments"),
+  AppointmentController.getAppointmentRemindersListController,
+);
+router.get(
+  "/reminders/:id",
+  ...tenantAuth,
+  checkFeatureAccess("appointments"),
+  AppointmentController.getAppointmentReminderDetailController,
+);
+router.put(
+  "/appointment/:appointment_id/reminders",
+  ...tenantAuth,
+  checkFeatureAccess("appointments"),
+  AppointmentController.updateAppointmentReminders,
+);
 router.delete(
   "/appointment/:appointment_id",
   ...tenantAuth,
@@ -127,6 +152,20 @@ router.get(
   getDeletedAppointmentsController,
 );
 
+// ── Appointment Reminder Rules ────────────────────────────────────────────
+router.get(
+  "/appointment-reminder-rules",
+  ...tenantAuth,
+  checkFeatureAccess("appointments"),
+  AppointmentController.getReminderRules,
+);
+router.put(
+  "/appointment-reminder-rules",
+  ...tenantAuth,
+  checkFeatureAccess("appointments"),
+  AppointmentController.upsertReminderRules,
+);
+
 // ── Follow-up Hub ──────────────────────────────────────────────────────────
 router.get(
   "/followup-hub",
@@ -139,6 +178,12 @@ router.get(
   ...tenantAuth,
   checkFeatureAccess("appointments"),
   AppointmentController.getPendingFollowUpCount,
+);
+router.get(
+  "/followup-hub/:id",
+  ...tenantAuth,
+  checkFeatureAccess("appointments"),
+  AppointmentController.getFollowUpHubDetail,
 );
 router.patch(
   "/followup-hub/:id/retry",

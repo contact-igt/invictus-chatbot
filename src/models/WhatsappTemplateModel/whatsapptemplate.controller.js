@@ -348,7 +348,7 @@ export const syncAllWhatsappTemplatesController = async (req, res) => {
     }
 
     const result = await pullTemplatesFromMetaService(tenant_id);
-    console.log("result", result);
+    
     return res.status(200).json({
       message: "Templates synced successfully (Imported & Updated)",
       data: result,

@@ -32,8 +32,20 @@ export const ScheduledMessageTable = (sequelize, Sequelize) => {
         allowNull: false,
         comment: "Full E.164-style phone: country_code + contact_number",
       },
+      header_media_url: {
+        type: Sequelize.TEXT,
+        allowNull: true,
+        comment:
+          "Optional media URL for template header (image/video/document) used at send time",
+      },
+      header_file_name: {
+        type: Sequelize.STRING,
+        allowNull: true,
+        comment:
+          "Optional filename for document header when sending template messages",
+      },
       send_type: {
-        type: Sequelize.ENUM("follow_up", "noshow"),
+        type: Sequelize.ENUM("follow_up", "noshow", "appointment_reminder"),
         allowNull: false,
       },
       scheduled_at: {
@@ -44,6 +56,11 @@ export const ScheduledMessageTable = (sequelize, Sequelize) => {
         type: Sequelize.ENUM("pending", "sent", "failed"),
         allowNull: false,
         defaultValue: "pending",
+      },
+      meta_message_id: {
+        type: Sequelize.STRING,
+        allowNull: true,
+        comment: "WhatsApp wamid returned by Meta for the sent follow-up message",
       },
       sent_at: {
         type: Sequelize.DATE,

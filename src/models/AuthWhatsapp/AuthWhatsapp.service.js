@@ -1,4 +1,4 @@
-import axios from "axios";
+﻿import axios from "axios";
 import https from "https";
 import FormData from "form-data";
 import db from "../../database/index.js";
@@ -17,11 +17,8 @@ import { getIO } from "../../middlewares/socket/socket.js";
 import { classifyIntent } from "../../utils/ai/intentClassifier.js";
 import {
   buildAvailableDoctorListAppointmentResponse,
-  handleAdvancedAppointmentBooking,
 } from "../AppointmentModel/Advanced_Appointment_Booking.service.js";
-import { handleManageBookedAppointments } from "../AppointmentModel/Manage_Booked_Appointments.service.js";
 import {
-  getAdvancedAppointmentStartReason,
   hasAppointmentStartSignal,
   isContextualPositiveBookingReply,
   isDoctorListRequest,
@@ -29,17 +26,45 @@ import {
 } from "../AppointmentModel/appointmentRoutingGuard.service.js";
 import {
   hasManageAppointmentStartSignal,
-  shouldStartManageAppointmentsFlow,
 } from "../AppointmentModel/manageAppointmentRoutingGuard.service.js";
+import {
+  APPOINTMENT_OPERATION_ROUTES,
+  APPOINTMENT_OPERATION_SOURCES,
+  getAppointmentOperationRouterMode,
+  isAppointmentOperationSafetyEnabled,
+} from "../AppointmentModel/appointmentOperationRouter.service.js";
 
 const httpsAgent = new https.Agent({
   family: 4,
   keepAlive: true,
 });
 
-const FIXED_MISSING_INFO_FALLBACK = MISSING_INFO_FALLBACK_REPLY;
+const META_GRAPH_BASE_URL = "https://graph.facebook.com";
+const DEFAULT_META_REQUEST_TIMEOUT_MS = 30000;
 
-const ENABLE_APPOINTMENT_FLOW = true;
+const buildMetaMessagesUrl = (apiVersion, phoneNumberId) =>
+  `${META_GRAPH_BASE_URL}/${apiVersion}/${phoneNumberId}/messages`;
+
+const buildMetaSendRequestConfig = (accessToken) => ({
+  headers: {
+    Authorization: `Bearer ${accessToken}`,
+    "Content-Type": "application/json",
+  },
+  httpsAgent,
+  proxy: false,
+  timeout: Number(process.env.META_REQUEST_TIMEOUT_MS || DEFAULT_META_REQUEST_TIMEOUT_MS),
+});
+
+const sanitizeMetaErrorBody = (body) => {
+  if (!body || typeof body !== "object") return body || null;
+  return JSON.parse(
+    JSON.stringify(body, (key, value) =>
+      String(key).toLowerCase().includes("token") ? "[redacted]" : value,
+    ),
+  );
+};
+
+const FIXED_MISSING_INFO_FALLBACK = MISSING_INFO_FALLBACK_REPLY;
 
 const FACTUAL_KEYWORD_PATTERN =
   /\b(price|cost|fee|fees|timing|timings|hours|open|close|policy|policies|service|services|treatment|treatments|procedure|procedures|operation|surgery|medication|medicine|diet|drink|drinks|food|before|after|insurance|package|offer|facility|facilities|address|location|contact|refund|payment|emi|warranty|guarantee|side effects?)\b/i;
@@ -456,6 +481,7 @@ export const sendWhatsAppTemplate = async (
   templateName,
   languageCode,
   components,
+  sendContext = {},
 ) => {
   const [rows] = await db.sequelize.query(
     `SELECT phone_number_id FROM ${tableNames.WHATSAPP_ACCOUNT}
@@ -468,7 +494,6 @@ export const sendWhatsAppTemplate = async (
   const { phone_number_id } = rows[0];
   const access_token = await getSecret(tenant_id, "whatsapp");
   if (!access_token) throw new Error("WhatsApp access token not found");
-  console.log("components", JSON.stringify(components, null, 2));
 
   // Guard against null/empty language code — default to "en" as safe fallback
   const resolvedLanguageCode = languageCode || "en";
@@ -490,33 +515,44 @@ export const sendWhatsAppTemplate = async (
       components: components || [],
     },
   };
-  console.log("Full Payload:", JSON.stringify(payload, null, 2));
   const META_API_VERSION = process.env.META_API_VERSION || "v23.0";
-  console.log(
-    `[SEND-TEMPLATE] Using Meta API version: ${META_API_VERSION}, phone_number_id: ${phone_number_id}, to: ${to}`,
-  );
+  const requestUrl = buildMetaMessagesUrl(META_API_VERSION, phone_number_id);
+  console.log("[SEND-TEMPLATE] Meta send request", {
+    campaign_id: sendContext.campaign_id || null,
+    recipient_id: sendContext.recipient_id || null,
+    phone: to,
+    phone_number_id,
+    template_name: templateName,
+    request_url: requestUrl,
+  });
 
   try {
     const response = await axios.post(
-      `https://graph.facebook.com/${META_API_VERSION}/${phone_number_id}/messages`,
+      requestUrl,
       payload,
-      {
-        headers: {
-          Authorization: `Bearer ${access_token}`,
-          "Content-Type": "application/json",
-        },
-        httpsAgent,
-      },
+      buildMetaSendRequestConfig(access_token),
     );
 
     const meta_message_id = response.data?.messages?.[0]?.id;
 
     return { phone_number_id, meta_message_id };
   } catch (error) {
+    console.error("[SEND-TEMPLATE] Meta send failed", {
+      campaign_id: sendContext.campaign_id || null,
+      recipient_id: sendContext.recipient_id || null,
+      phone: to,
+      phone_number_id,
+      template_name: templateName,
+      request_url: requestUrl,
+      error_code: error.code || null,
+      error_message: error.message,
+      meta_status: error.response?.status || null,
+      meta_error_body: sanitizeMetaErrorBody(error.response?.data),
+    });
     if (error.response) {
       console.error(
         "Meta API Error Details:",
-        JSON.stringify(error.response.data, null, 2),
+        JSON.stringify(sanitizeMetaErrorBody(error.response.data), null, 2),
       );
       const metaErr = error.response.data?.error || {};
       const message = metaErr.message || error.message;
@@ -524,7 +560,12 @@ export const sendWhatsAppTemplate = async (
       const subcode = metaErr.error_subcode
         ? ` (Subcode: ${metaErr.error_subcode})`
         : "";
-      throw new Error(`Meta API Error: ${message}${code}${subcode}`);
+      const metaError = new Error(`Meta API Error: ${message}${code}${subcode}`);
+      metaError.meta_response_status = error.response.status;
+      metaError.meta_error_code = metaErr.code || null;
+      metaError.meta_error_subcode = metaErr.error_subcode || null;
+      metaError.meta_error_body = sanitizeMetaErrorBody(error.response.data);
+      throw metaError;
     }
     throw error;
   }
@@ -657,6 +698,35 @@ export const markMessageProcessed = async (
   }
 };
 
+export const getProcessedMessageInsertCount = (result, metadata = null) => {
+  const candidates = [result, metadata].flat().filter(Boolean);
+  for (const candidate of candidates) {
+    if (typeof candidate === "number") return candidate;
+    if (typeof candidate?.affectedRows === "number") return candidate.affectedRows;
+    if (typeof candidate?.rowCount === "number") return candidate.rowCount;
+  }
+  return 0;
+};
+
+export const tryMarkMessageProcessed = async (
+  tenant_id,
+  phone_number_id,
+  message_id,
+  phone,
+) => {
+  try {
+    const [result, metadata] = await db.sequelize.query(
+      `INSERT IGNORE INTO ${tableNames.PROCESSEDMESSAGE}
+     (tenant_id, phone_number_id, message_id, phone)
+     VALUES (?, ?, ? , ?)`,
+      { replacements: [tenant_id, phone_number_id, message_id, phone] },
+    );
+    return getProcessedMessageInsertCount(result, metadata) > 0;
+  } catch (err) {
+    throw err;
+  }
+};
+
 /**
  * Atomic lock acquisition — combines check + acquire + stale cleanup in one operation.
  * Returns true if lock was acquired, false if already locked by another process.
@@ -769,6 +839,7 @@ export const getOpenAIReply = async (
   phone_number_id = null,
   cachedData = {},
   messageId = null,
+  routingContext = {},
 ) => {
   try {
     if (!userMessage) return null;
@@ -811,17 +882,20 @@ export const getOpenAIReply = async (
     });
 
     // ── Phase 1.5: Intent Classification — what data does this message need? ──
-    let intentResult = isPureSmallTalkMessage(cleanMessage) && !hasContextualBookingShortcut
-      ? {
-          intent: "GENERAL_QUESTION",
-          requires: { knowledge: false, doctors: false, appointments: false },
-          lead_intelligence: null,
-        }
-      : await classifyIntent(
-          cleanMessage,
-          chatHistory,
-          tenant_id,
-        );
+    let intentResult =
+      routingContext?.classifierResult ||
+      routingContext?.intentResult ||
+      (isPureSmallTalkMessage(cleanMessage) && !hasContextualBookingShortcut
+        ? {
+            intent: "GENERAL_QUESTION",
+            requires: { knowledge: false, doctors: false, appointments: false },
+            lead_intelligence: null,
+          }
+        : await classifyIntent(
+            cleanMessage,
+            chatHistory,
+            tenant_id,
+          ));
     if (hasManageAppointmentStartSignal(cleanMessage)) {
       intentResult = {
         ...intentResult,
@@ -845,89 +919,50 @@ export const getOpenAIReply = async (
       });
     }
 
-    console.log(
-      "[AI FLOW]",
-      "Appointment flow enabled:",
-      ENABLE_APPOINTMENT_FLOW,
-    );
-
     faqTrace("[AI-FLOW] intent classified", { intent: intentResult.intent, requires: intentResult.requires, msg: cleanMessage.substring(0, 60) });
 
+    const routerMode =
+      routingContext?.routerMode || getAppointmentOperationRouterMode();
+    console.log("[AI FLOW]", "Appointment router mode:", routerMode);
     if (
-      ENABLE_APPOINTMENT_FLOW &&
-      shouldStartManageAppointmentsFlow({
-        intent: intentResult.intent,
-        message: cleanMessage,
-      })
+      isAppointmentOperationSafetyEnabled(routerMode) &&
+      (intentResult.intent === "APPOINTMENT_ACTION" ||
+        intentResult.intent === "MANAGE_APPOINTMENTS_ACTION")
     ) {
-      const contactObj = {
-        contact_id,
-        phone_number: phone,
-        phone,
-        ...(cachedData?.contact || {}),
+      const route =
+        intentResult.intent === "MANAGE_APPOINTMENTS_ACTION"
+          ? APPOINTMENT_OPERATION_ROUTES.MANAGE_APPOINTMENT
+          : APPOINTMENT_OPERATION_ROUTES.BOOK_APPOINTMENT;
+      const envelope = {
+        shouldHandle: true,
+        route,
+        action: "unknown",
+        source: APPOINTMENT_OPERATION_SOURCES.CLASSIFIER_INTENT,
+        confidence: 0.78,
+        reason: `Normal AI blocked because intent is ${intentResult.intent}.`,
+        entities: {},
       };
-      const manageAppointmentResult = await handleManageBookedAppointments({
-        tenantId: tenant_id,
-        userPhone: phone,
-        contact: contactObj,
-        message: cleanMessage,
-        interactiveReplyId: null,
-        intent: intentResult.intent,
-      });
-      if (!manageAppointmentResult?.handoverToNormalRouter) {
-        return {
-          message: manageAppointmentResult.message,
-          tagDetected: null,
-          tagPayload: null,
-          intent: intentResult.intent,
-          requires: intentResult.requires,
-          lead_intelligence: intentResult.lead_intelligence || null,
-          _manageAppointmentResult: manageAppointmentResult,
-        };
-      }
-    }
-
-    const advancedStartReason = ENABLE_APPOINTMENT_FLOW
-      ? getAdvancedAppointmentStartReason({
-          intent: intentResult.intent,
+      console.log(
+        "[AI_APPOINTMENT_BLOCKED]",
+        JSON.stringify({
+          tenantId: tenant_id,
+          phone,
           message: cleanMessage,
-          chatHistory,
-        })
-      : null;
-    if (intentResult.intent === "APPOINTMENT_ACTION") {
-      faqTrace("[AI-FLOW] advanced start gate", {
-        allowed: Boolean(advancedStartReason),
-        reason: advancedStartReason || "blocked",
-        msg: cleanMessage.substring(0, 60),
-      });
+          intent: intentResult.intent,
+          route,
+          mode: routerMode,
+        }),
+      );
+      return {
+        message: null,
+        tagDetected: null,
+        tagPayload: null,
+        intent: intentResult.intent,
+        requires: intentResult.requires,
+        lead_intelligence: intentResult.lead_intelligence || null,
+        _appointmentRoute: envelope,
+      };
     }
-
-    // NEW: Route appointment intents directly — skip heavy AI call and knowledge search
-    if (advancedStartReason) { // NEW
-      const contactObj = { // NEW
-        contact_id, // NEW
-        phone_number: phone, // NEW
-        phone, // NEW
-        ...(cachedData?.contact || {}), // NEW
-      }; // NEW
-      const advancedApptResult = await handleAdvancedAppointmentBooking({
-        tenantId: tenant_id,
-        userPhone: phone,
-        contact: contactObj,
-        message: cleanMessage,
-        interactiveReplyId: null,
-        whatsappMessageId: messageId || null,
-      });
-      if (!advancedApptResult?.handoverToNormalRouter) {
-        return { // NEW
-          message: advancedApptResult.message, // NEW
-          tagDetected: null, // NEW
-          tagPayload: null, // NEW
-          intent: intentResult.intent, // NEW
-          _appointmentResult: advancedApptResult,
-        }; // NEW
-      }
-    } // NEW
 
     const factualKnowledgeNeeded = isLikelyFactualQuestion(cleanMessage);
     if (!intentResult.requires.knowledge && factualKnowledgeNeeded) {

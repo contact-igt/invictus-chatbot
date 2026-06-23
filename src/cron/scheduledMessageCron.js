@@ -1,42 +1,27 @@
 import { Op } from "sequelize";
 import db from "../database/index.js";
 import { sendWhatsAppTemplate } from "../models/AuthWhatsapp/AuthWhatsapp.service.js";
+import {
+  buildFollowUpTemplateComponentsService,
+  persistFollowUpSentMessageService,
+} from "../models/AppointmentModel/appointment.service.js";
 
-// Build Meta API body components from appointment data for templates that have variables.
-// Convention: {{1}} = patient name, {{2}} = appointment date, {{3}} = doctor name.
-async function buildFollowUpComponents(templateId, appointmentId) {
-  const varCount = await db.WhatsappTemplateVariables.count({
-    where: { template_id: templateId },
-  });
-  if (!varCount) return [];
-
-  const appointment = await db.Appointments.findOne({
-    where: { appointment_id: appointmentId },
-    attributes: ["patient_name", "appointment_date", "doctor_id"],
-  });
-  if (!appointment) return [];
-
-  let doctorName = "";
-  if (appointment.doctor_id) {
-    const doctor = await db.Doctors.findOne({
-      where: { doctor_id: appointment.doctor_id },
-      attributes: ["name"],
-    });
-    doctorName = doctor?.name || "";
+const stringifyMetaError = (err) => {
+  if (err?.meta_error_response) {
+    try {
+      return JSON.stringify(err.meta_error_response);
+    } catch {
+      return String(err?.message || "Unknown error");
+    }
   }
+  return String(err?.message || "Unknown error");
+};
 
-  const allValues = [
-    appointment.patient_name || "",
-    appointment.appointment_date || "",
-    doctorName,
-  ];
-
-  const parameters = allValues
-    .slice(0, varCount)
-    .map((v) => ({ type: "text", text: String(v) }));
-
-  return [{ type: "body", parameters }];
-}
+const APPOINTMENT_REMINDER_ACTIVE_STATUSES = new Set([
+  "Pending",
+  "Confirmed",
+  "Rescheduled",
+]);
 
 export const runScheduledMessageCron = async () => {
   const now = new Date();
@@ -53,6 +38,48 @@ export const runScheduledMessageCron = async () => {
 
   for (const msg of pending) {
     try {
+      if (msg.send_type === "appointment_reminder") {
+        const appointment = await db.Appointments.findOne({
+          where: {
+            tenant_id: msg.tenant_id,
+            appointment_id: msg.appointment_id,
+          },
+          attributes: ["appointment_id", "status", "is_deleted"],
+          raw: true,
+        });
+
+        const shouldSkipReminder =
+          !appointment ||
+          appointment.is_deleted === true ||
+          !APPOINTMENT_REMINDER_ACTIVE_STATUSES.has(appointment.status);
+
+        if (shouldSkipReminder) {
+          await msg.update({
+            status: "failed",
+            error_log: appointment
+              ? `Skipped appointment_reminder: appointment status=${appointment.status}, is_deleted=${appointment.is_deleted}`
+              : "Skipped appointment_reminder: appointment not found",
+          });
+          continue;
+        }
+      }
+
+      if (msg.meta_message_id) {
+        const existingByWamid = await db.Messages.findOne({
+          where: { wamid: msg.meta_message_id },
+          attributes: ["id"],
+          raw: true,
+        });
+        if (existingByWamid?.id) {
+          await msg.update({
+            status: "sent",
+            sent_at: msg.sent_at || new Date(),
+            error_log: null,
+          });
+          continue;
+        }
+      }
+
       const template = await db.WhatsappTemplates.findOne({
         where: { template_id: msg.template_id, tenant_id: msg.tenant_id },
         attributes: ["template_name", "language"],
@@ -70,24 +97,40 @@ export const runScheduledMessageCron = async () => {
       // Strip leading + so Meta API receives E.164 without the plus sign
       const toPhone = msg.to_phone.replace(/^\+/, "");
 
-      // Build body components from appointment data if the template has variables
-      const components = await buildFollowUpComponents(msg.template_id, msg.appointment_id);
+      const components = await buildFollowUpTemplateComponentsService({
+        tenant_id: msg.tenant_id,
+        template_id: msg.template_id,
+        appointment_id: msg.appointment_id,
+        header_media_url: msg.header_media_url || null,
+        header_file_name: msg.header_file_name || null,
+      });
 
-      await sendWhatsAppTemplate(
+      const sendResult = await sendWhatsAppTemplate(
         msg.tenant_id,
         toPhone,
         template.template_name,
         template.language,
         components,
       );
-
-      await msg.update({ status: "sent", sent_at: new Date() });
+      
+      await persistFollowUpSentMessageService({
+        tenant_id: msg.tenant_id,
+        scheduledMessage: msg,
+        template,
+        components,
+        meta_message_id: sendResult?.meta_message_id || null,
+        phone_number_id: sendResult?.phone_number_id || null,
+      });
     } catch (err) {
       await msg.update({
         status: "failed",
-        error_log: err.message,
-        sent_at: new Date(),
+        error_log: stringifyMetaError(err),
+        // sent_at intentionally NOT set — only written on successful delivery
       });
+      console.error(
+        `[FOLLOWUP-CRON] Send failed for scheduled_message=${msg.id}:`,
+        stringifyMetaError(err),
+      );
     }
   }
 };

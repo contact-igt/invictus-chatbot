@@ -94,7 +94,6 @@ export const getSpecializationByIdController = async (req, res) => {
     }
 };
 
-
 // Toggle Active Status
 export const toggleActiveStatusController = async (req, res) => {
     const tenant_id = req.user.tenant_id;

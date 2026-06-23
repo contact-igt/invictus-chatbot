@@ -15,7 +15,7 @@ export const execute = async (payload, context) => {
     const { tenant_id, contact_id } = context;
 
     if (!payload || !tenant_id || !contact_id) {
-        console.log("[LEAD_SOURCE] Missing payload or context, skipping.");
+        
         return;
     }
     

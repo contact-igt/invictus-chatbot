@@ -60,10 +60,20 @@ export const normalizeAvailabilityForPersistence = (availability = []) => {
 
     const rawSlots = getRawSlots(item);
     const enabled = Boolean(item?.enabled ?? rawSlots.length > 0);
-    const slotDuration = normalizeSlotDuration(
-      item?.slotDuration ?? item?.slot_duration,
-      day,
-    );
+    const rawDuration = item?.slotDuration ?? item?.slot_duration;
+    const explicitUseDefault =
+      item?.useDefaultDuration ?? item?.use_default_duration;
+    const hasCustomDuration =
+      rawDuration !== undefined &&
+      rawDuration !== null &&
+      String(rawDuration).trim() !== "";
+    const useDefaultDuration =
+      explicitUseDefault !== undefined
+        ? Boolean(explicitUseDefault)
+        : !hasCustomDuration;
+    const slotDuration = useDefaultDuration
+      ? null
+      : normalizeSlotDuration(rawDuration, day);
 
     const slots = rawSlots
       .map((slot) => ({
@@ -100,6 +110,7 @@ export const normalizeAvailabilityForPersistence = (availability = []) => {
     daysByName.set(day, {
       day,
       enabled,
+      useDefaultDuration,
       slotDuration,
       slots: enabled
         ? normalizedSlots.map(({ start_time, end_time }) => ({ start_time, end_time }))

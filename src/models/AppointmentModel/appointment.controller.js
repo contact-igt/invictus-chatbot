@@ -1,4 +1,9 @@
 import * as AppointmentService from "./appointment.service.js";
+import {
+  getReminderRulesService,
+  upsertReminderRulesService,
+  validateReminderRulesPayload,
+} from "./appointmentReminder.service.js";
 
 const VALID_STATUSES = [
   "Pending",
@@ -12,7 +17,6 @@ const VALID_STATUSES = [
 
 const parseBooleanQueryFlag = (value) =>
   value === true || value === "true" || value === "1";
-
 
 export const createAppointment = async (req, res) => {
   try {
@@ -56,7 +60,8 @@ export const createAppointment = async (req, res) => {
 
 export const getAllAppointments = async (req, res) => {
   try {
-    const { search, status, date, doctor_id, lead_id, include_lead } = req.query;
+    const { search, status, date, doctor_id, lead_id, include_lead } =
+      req.query;
     const appointments = await AppointmentService.getAllAppointmentsService(
       req.user.tenant_id,
       {
@@ -207,6 +212,8 @@ export const completeWithOutcome = async (req, res) => {
       follow_up_type,
       follow_up_reason,
       template_id,
+      header_media_url,
+      header_file_name,
     } = req.body;
 
     if (!appointment_id) {
@@ -223,8 +230,8 @@ export const completeWithOutcome = async (req, res) => {
       });
     }
 
-    const result = await AppointmentService.completeAppointmentWithOutcomeService(
-      {
+    const result =
+      await AppointmentService.completeAppointmentWithOutcomeService({
         tenant_id: req.user.tenant_id,
         appointment_id,
         notes,
@@ -234,8 +241,9 @@ export const completeWithOutcome = async (req, res) => {
         follow_up_type,
         follow_up_reason,
         template_id,
-      },
-    );
+        header_media_url,
+        header_file_name,
+      });
 
     return res.status(200).json({
       success: true,
@@ -249,7 +257,16 @@ export const completeWithOutcome = async (req, res) => {
 
 export const noShowWithAction = async (req, res) => {
   try {
-    const { appointment_id, mode, follow_up_date, follow_up_time, follow_up_type, template_id } = req.body;
+    const {
+      appointment_id,
+      mode,
+      follow_up_date,
+      follow_up_time,
+      follow_up_type,
+      template_id,
+      header_media_url,
+      header_file_name,
+    } = req.body;
 
     if (!appointment_id) {
       return res.status(400).json({
@@ -266,6 +283,8 @@ export const noShowWithAction = async (req, res) => {
       follow_up_time,
       follow_up_type,
       template_id,
+      header_media_url,
+      header_file_name,
     });
 
     return res.status(200).json({
@@ -338,12 +357,143 @@ export const getFollowUpHub = async (req, res) => {
   }
 };
 
+export const getFollowUpHubDetail = async (req, res) => {
+  try {
+    const followup_id = req.params.id;
+    if (!followup_id) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Follow-up ID is required" });
+    }
+
+    const result = await AppointmentService.getFollowUpHubDetailService(
+      req.user.tenant_id,
+      followup_id,
+    );
+
+    if (!result) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Follow-up not found" });
+    }
+
+    return res.status(200).json({ success: true, data: result });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+export const getAppointmentReminders = async (req, res) => {
+  try {
+    const { appointment_id } = req.params;
+    if (!appointment_id) {
+      return res
+        .status(400)
+        .json({ success: false, message: "appointment_id is required" });
+    }
+    const result = await AppointmentService.getAppointmentRemindersService(
+      req.user.tenant_id,
+      appointment_id,
+    );
+    return res.status(200).json({ success: true, data: result });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+export const getAppointmentRemindersListController = async (req, res) => {
+  try {
+    const tenant_id = req.user?.tenant_id;
+    if (!tenant_id) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized",
+      });
+    }
+
+    const result = await AppointmentService.getAppointmentRemindersListService(
+      tenant_id,
+      req.query || {},
+    );
+
+    return res.status(200).json({
+      message: "success",
+      data: result,
+    });
+  } catch (err) {
+    return res.status(500).json({
+      success: false,
+      message: err.message || "Failed to fetch appointment reminders.",
+    });
+  }
+};
+
+export const getAppointmentReminderDetailController = async (req, res) => {
+  try {
+    const tenant_id = req.user?.tenant_id;
+    if (!tenant_id) {
+      return res.status(401).json({ success: false, message: "Unauthorized" });
+    }
+    const { id } = req.params;
+    if (!id) {
+      return res.status(400).json({ success: false, message: "id is required" });
+    }
+    const result = await AppointmentService.getAppointmentReminderDetailService(tenant_id, id);
+    if (!result) {
+      return res.status(404).json({ success: false, message: "Reminder not found" });
+    }
+    return res.status(200).json({ success: true, data: result });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message || "Failed to fetch reminder detail." });
+  }
+};
+
+export const updateAppointmentReminders = async (req, res) => {
+  try {
+    const { appointment_id } = req.params;
+    const { reminder_mode, custom_reminders } = req.body;
+
+    if (!appointment_id) {
+      return res
+        .status(400)
+        .json({ success: false, message: "appointment_id is required" });
+    }
+
+    if (!reminder_mode) {
+      return res
+        .status(400)
+        .json({ success: false, message: "reminder_mode is required" });
+    }
+
+    const result = await AppointmentService.updateAppointmentRemindersService({
+      tenant_id: req.user.tenant_id,
+      appointment_id,
+      reminder_mode,
+      custom_reminders,
+    });
+    return res
+      .status(200)
+      .json({ success: true, data: result, message: "Reminders updated" });
+  } catch (err) {
+    if (err.code === 404 || err.message === "Appointment not found") {
+      return res.status(404).json({ success: false, message: err.message });
+    }
+    // validation errors thrown by validateCustomRemindersForAppointment
+    if (err.message && /reminder/.test(err.message)) {
+      return res.status(400).json({ success: false, message: err.message });
+    }
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
 export const getPendingFollowUpCount = async (req, res) => {
   try {
     const result = await AppointmentService.getPendingFollowUpCountService(
       req.user.tenant_id,
     );
-    return res.status(200).json({ success: true, data: { count: result.count } });
+    return res
+      .status(200)
+      .json({ success: true, data: { count: result.count } });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }
@@ -353,13 +503,19 @@ export const retryFollowUp = async (req, res) => {
   try {
     const scheduled_message_id = req.params.id;
     if (!scheduled_message_id) {
-      return res.status(400).json({ success: false, message: "Scheduled message ID is required" });
+      return res
+        .status(400)
+        .json({ success: false, message: "Scheduled message ID is required" });
     }
     const result = await AppointmentService.retryFollowUpService(
       req.user.tenant_id,
       scheduled_message_id,
     );
-    return res.status(200).json({ success: true, message: "Follow-up queued for retry", data: result });
+    return res.status(200).json({
+      success: true,
+      message: "Follow-up queued for retry",
+      data: result,
+    });
   } catch (err) {
     if (err.message === "Scheduled message not found") {
       return res.status(404).json({ success: false, message: err.message });
@@ -376,14 +532,18 @@ export const rescheduleFollowUp = async (req, res) => {
     const scheduled_message_id = req.params.id;
     const { scheduled_at: new_scheduled_at } = req.body;
     if (!new_scheduled_at) {
-      return res.status(400).json({ success: false, message: "New scheduled time is required" });
+      return res
+        .status(400)
+        .json({ success: false, message: "New scheduled time is required" });
     }
     const result = await AppointmentService.rescheduleFollowUpService(
       req.user.tenant_id,
       scheduled_message_id,
       new_scheduled_at,
     );
-    return res.status(200).json({ success: true, message: "Follow-up rescheduled", data: result });
+    return res
+      .status(200)
+      .json({ success: true, message: "Follow-up rescheduled", data: result });
   } catch (err) {
     if (err.message === "Scheduled message not found") {
       return res.status(404).json({ success: false, message: err.message });
@@ -399,11 +559,43 @@ export const rescheduleFollowUp = async (req, res) => {
   }
 };
 
+export const getReminderRules = async (req, res) => {
+  try {
+    const rules = await getReminderRulesService(req.user.tenant_id);
+    return res.status(200).json({ success: true, data: rules });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+export const upsertReminderRules = async (req, res) => {
+  try {
+    const { rules } = req.body;
+    validateReminderRulesPayload(rules);
+    const saved = await upsertReminderRulesService(req.user.tenant_id, rules);
+    return res
+      .status(200)
+      .json({ success: true, data: saved, message: "Reminder rules saved." });
+  } catch (err) {
+    // validateReminderRulesPayload throws plain Error with a message starting "Rule N:" or "rules must be"
+    const isValidation =
+      typeof err.message === "string" &&
+      (/^Rule \d+:/.test(err.message) ||
+        err.message === "rules must be an array.");
+    return res.status(isValidation ? 400 : 500).json({
+      success: false,
+      message: err.message || "Failed to update reminder rules.",
+    });
+  }
+};
+
 export const sendNowFollowUp = async (req, res) => {
   try {
     const scheduled_message_id = req.params.id;
     if (!scheduled_message_id) {
-      return res.status(400).json({ success: false, message: "Scheduled message ID is required" });
+      return res
+        .status(400)
+        .json({ success: false, message: "Scheduled message ID is required" });
     }
     const result = await AppointmentService.sendNowFollowUpService(
       req.user.tenant_id,
@@ -412,7 +604,11 @@ export const sendNowFollowUp = async (req, res) => {
     if (!result.success) {
       return res.status(400).json({ success: false, message: result.error });
     }
-    return res.status(200).json({ success: true, message: "Message sent successfully", data: result });
+    return res.status(200).json({
+      success: true,
+      message: "Message sent successfully",
+      data: result,
+    });
   } catch (err) {
     if (err.message === "Scheduled message not found") {
       return res.status(404).json({ success: false, message: err.message });

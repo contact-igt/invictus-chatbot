@@ -315,7 +315,7 @@ export const suggestReplyService = async (tenant_id, phone) => {
       "smart_reply",
     );
 
-    console.log("[AI-RAW-RESPONSE]", rawReply);
+    
 
     // Step 1: Process tags (Self-Tagging) and extract metadata
     const processed = await processResponse(rawReply, {
@@ -328,7 +328,7 @@ export const suggestReplyService = async (tenant_id, phone) => {
 
     const cleanReply = processed.message;
 
-    console.log("[AI-CLEAN-RESPONSE]", cleanReply);
+    
 
     return cleanReply;
   } catch (err) {

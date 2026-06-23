@@ -16,7 +16,6 @@ export const DoctorsTable = (sequelize, Sequelize) => {
                 allowNull: false,
             },
 
-
             tenant_id: {
                 type: Sequelize.STRING,
                 allowNull: false,
@@ -52,7 +51,15 @@ export const DoctorsTable = (sequelize, Sequelize) => {
             email: {
                 type: Sequelize.STRING,
                 allowNull: true,
-                validate: { isEmail: true },
+                validate: {
+                    isEmailOrEmpty(value) {
+                        if (value !== null && value !== '' && value !== undefined) {
+                            if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
+                                throw new Error('Invalid email address');
+                            }
+                        }
+                    }
+                },
             },
 
             bio: {

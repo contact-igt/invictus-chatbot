@@ -46,6 +46,12 @@ export const DoctorAvailabilityDayTable = (sequelize, Sequelize) => {
         defaultValue: 15,
       },
 
+      use_default_duration: {
+        type: Sequelize.BOOLEAN,
+        allowNull: false,
+        defaultValue: true,
+      },
+
       createdAt: {
         type: Sequelize.DATE,
         allowNull: false,

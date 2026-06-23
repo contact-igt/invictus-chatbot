@@ -220,6 +220,27 @@ export const patchIndustryService = async (industryId, payload = {}) => {
   return ensureIndustryExists(industry_id);
 };
 
+export const deleteIndustryService = async (industryId) => {
+  const industry_id = assertStringRequired(industryId, "industryId");
+  await ensureIndustryExists(industry_id);
+
+  const [tenantCount, mappingCount] = await Promise.all([
+    db.Tenants.count({ where: { industry_id } }),
+    db.IndustrySaaSModules.count({ where: { industry_id } }),
+  ]);
+
+  if (tenantCount > 0 || mappingCount > 0) {
+    const error = new Error(
+      "Cannot delete this industry because it is assigned to tenants or module mappings.",
+    );
+    error.statusCode = 400;
+    throw error;
+  }
+
+  await db.Industries.destroy({ where: { industry_id } });
+  return { industry_id };
+};
+
 export const listSaaSModulesService = async () => {
   return db.SaaSModules.findAll({
     order: [
@@ -382,6 +403,35 @@ export const patchSaaSModuleService = async (moduleId, payload = {}) => {
   return ensureModuleExists(module_id);
 };
 
+export const deleteSaaSModuleService = async (moduleId) => {
+  const module_id = assertStringRequired(moduleId, "moduleId");
+  await ensureModuleExists(module_id);
+
+  const [industryMappingCount, planMappingCount, overrideCount, navigationCount] =
+    await Promise.all([
+      db.IndustrySaaSModules.count({ where: { module_id } }),
+      db.PlanSaaSModules.count({ where: { module_id } }),
+      db.TenantSaaSModuleOverrides.count({ where: { module_id } }),
+      db.NavigationItems.count({ where: { module_id } }),
+    ]);
+
+  if (
+    industryMappingCount > 0 ||
+    planMappingCount > 0 ||
+    overrideCount > 0 ||
+    navigationCount > 0
+  ) {
+    const error = new Error(
+      "Cannot delete this SaaS module because it is already used in mappings, tenant overrides, or navigation items.",
+    );
+    error.statusCode = 400;
+    throw error;
+  }
+
+  await db.SaaSModules.destroy({ where: { module_id } });
+  return { module_id };
+};
+
 export const listPlansService = async () => {
   return db.Plans.findAll({
     order: [
@@ -502,6 +552,27 @@ export const patchPlanService = async (planId, payload = {}) => {
 
   await db.Plans.update(updates, { where: { plan_id } });
   return ensurePlanExists(plan_id);
+};
+
+export const deletePlanService = async (planId) => {
+  const plan_id = assertStringRequired(planId, "planId");
+  await ensurePlanExists(plan_id);
+
+  const [tenantCount, mappingCount] = await Promise.all([
+    db.Tenants.count({ where: { plan_id } }),
+    db.PlanSaaSModules.count({ where: { plan_id } }),
+  ]);
+
+  if (tenantCount > 0 || mappingCount > 0) {
+    const error = new Error(
+      "Cannot delete this plan because it is assigned to tenants or module mappings.",
+    );
+    error.statusCode = 400;
+    throw error;
+  }
+
+  await db.Plans.destroy({ where: { plan_id } });
+  return { plan_id };
 };
 
 export const getIndustrySaaSModulesService = async (industryId) => {

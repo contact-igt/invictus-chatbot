@@ -1,4 +1,8 @@
 import db from "../../database/index.js";
+import {
+  scheduleAppointmentRemindersService,
+  validateCustomRemindersForAppointment,
+} from "./appointmentReminder.service.js";
 import { Op } from "sequelize";
 import { generateReadableIdFromLast } from "../../utils/helpers/generateReadableIdFromLast.js";
 import {
@@ -18,6 +22,14 @@ import {
   formatAppointmentDate,
 } from "../../utils/email/appointmentEmailTemplate.js";
 import { sendWhatsAppTemplate } from "../AuthWhatsapp/AuthWhatsapp.service.js";
+import { renderTemplateContent } from "../../utils/whatsapp/templateRenderer.js";
+import {
+  createLiveChatService,
+  getLivechatByIdService,
+  updateLiveChatTimestampService,
+} from "../LiveChatModel/livechat.service.js";
+import { getTenantSettingsService } from "../TenantModel/tenant.service.js";
+import { getIO } from "../../middlewares/socket/socket.js";
 
 // Normalize time to consistent "HH:MM AM/PM" format for reliable comparisons
 const normalizeTimeFormat = (time) => {
@@ -181,11 +193,50 @@ const getAvailabilityRowsForDate = async ({
   });
 };
 
-const getDurationFromAvailabilityRow = (row, fallbackDuration = 30) => {
+const normalizeDurationValue = (value, min, max) => {
+  const duration = Number(value);
+  if (!Number.isInteger(duration)) return null;
+  if (duration < min || duration > max) return null;
+  return duration;
+};
+
+const getDoctorDefaultConsultationDuration = (doctor) => {
+  const duration = normalizeDurationValue(doctor?.consultation_duration, 5, 240);
+  return duration ?? 30;
+};
+
+const getDoctorDaySlotDurationOverride = async ({
+  tenant_id,
+  doctor_id,
+  date,
+  transaction = null,
+}) => {
+  const day_of_week = getDayOfWeekFromDate(date);
+  const dayConfig = await db.DoctorAvailabilityDays.findOne({
+    where: {
+      tenant_id,
+      doctor_id,
+      day_of_week,
+    },
+    attributes: ["slot_duration", "use_default_duration", "enabled"],
+    transaction,
+  });
+
+  if (!dayConfig || dayConfig.enabled === false) return null;
+  if (dayConfig.use_default_duration === true) return null;
+
+  return normalizeDurationValue(dayConfig.slot_duration, 5, 480);
+};
+
+const getDurationFromAvailabilityRow = (
+  row,
+  fallbackDuration = 30,
+  daySlotDurationOverride = null,
+) => {
   if (!row) return fallbackDuration;
-  const start = timeToMinutes(row.start_time);
-  const end = timeToMinutes(row.end_time);
-  return end > start ? end - start : fallbackDuration;
+  const override = normalizeDurationValue(daySlotDurationOverride, 5, 480);
+  if (override !== null) return override;
+  return fallbackDuration;
 };
 
 const findAvailabilityRowForTime = (availabilityRows = [], time) => {
@@ -199,9 +250,14 @@ const getDurationForAppointmentTime = ({
   availabilityRows = [],
   appointmentTime,
   fallbackDuration = 30,
+  daySlotDurationOverride = null,
 }) => {
   const row = findAvailabilityRowForTime(availabilityRows, appointmentTime);
-  return getDurationFromAvailabilityRow(row, fallbackDuration);
+  return getDurationFromAvailabilityRow(
+    row,
+    fallbackDuration,
+    daySlotDurationOverride,
+  );
 };
 
 export const createAppointmentService = async (data) => {
@@ -258,15 +314,19 @@ export const createAppointmentService = async (data) => {
   // Normalize time to consistent format (e.g. "09:00 AM" not "9:00 AM")
   appointment_time = normalizeTimeFormat(appointment_time);
   appointment_date = normalizeDateOnly(appointment_date, "appointment_date");
-  if (isAppointmentsDebugEnabled) {
-    console.log("[APPOINTMENT-CREATE] normalized payload:", {
-      tenant_id,
-      contact_id,
-      doctor_id,
+
+  // Validate custom reminders synchronously — must throw before the transaction opens.
+  // Always validate when mode=custom so empty-array case also surfaces an error.
+  if (data.reminder_mode === "custom") {
+    validateCustomRemindersForAppointment(
+      data.custom_reminders || [],
       appointment_date,
-      appointment_date_midnight_utc: toUtcMidnightIso(appointment_date),
       appointment_time,
-    });
+    );
+  }
+
+  if (isAppointmentsDebugEnabled) {
+    
   }
 
   let doctor = null;
@@ -316,9 +376,16 @@ export const createAppointmentService = async (data) => {
       throw new Error("Selected time is not available for this doctor.");
     }
 
+    const fallbackDuration = getDoctorDefaultConsultationDuration(doctor);
+    const daySlotDurationOverride = await getDoctorDaySlotDurationOverride({
+      tenant_id,
+      doctor_id,
+      date: appointment_date,
+    });
     doctorDuration = getDurationFromAvailabilityRow(
       selectedAvailability,
-      doctor.consultation_duration || 30,
+      fallbackDuration,
+      daySlotDurationOverride,
     );
   }
 
@@ -487,6 +554,20 @@ export const createAppointmentService = async (data) => {
       );
     }
 
+    scheduleAppointmentRemindersService({
+      tenant_id,
+      appointment_id: appointment.appointment_id,
+      appointment_date,
+      appointment_time,
+      contact_id: appointment.contact_id,
+      country_code,
+      contact_number,
+      reminder_mode: data.reminder_mode || "default",
+      custom_reminders: data.custom_reminders || [],
+    }).catch((err) =>
+      console.error("[REMINDER] Schedule failed:", err.message),
+    );
+
     return appointment;
   } catch (err) {
     await transaction.rollback();
@@ -547,7 +628,9 @@ export const getRecentAppointmentsForAIService = async (
           // Active appointments
           {
             is_deleted: false,
-            status: { [Op.in]: ["Pending", "Confirmed", "Rescheduled", "Completed"] },
+            status: {
+              [Op.in]: ["Pending", "Confirmed", "Rescheduled", "Completed"],
+            },
             appointment_date: {
               [Op.gte]: new Date(today.getTime() - 3 * 24 * 60 * 60 * 1000),
             },
@@ -668,6 +751,8 @@ export const completeAppointmentWithOutcomeService = async ({
   follow_up_type = null,
   follow_up_reason = null,
   template_id = null,
+  header_media_url = null,
+  header_file_name = null,
 }) => {
   return db.sequelize.transaction(async (transaction) => {
     const appointment = await db.Appointments.findOne({
@@ -718,6 +803,23 @@ export const completeAppointmentWithOutcomeService = async ({
       throw new Error(
         "WhatsApp template is required when follow-up type is WhatsApp.",
       );
+    }
+
+    let resolvedHeaderMediaUrl = null;
+    let resolvedHeaderFileName = null;
+    if (requiresFollowUp && safeFollowUpType === "WhatsApp" && safeTemplateId) {
+      const headerMeta = await getTemplateHeaderMetaService(
+        tenant_id,
+        safeTemplateId,
+        transaction,
+      );
+      const headerMedia = resolveFollowUpHeaderMediaForTemplate({
+        headerMeta,
+        header_media_url,
+        header_file_name,
+      });
+      resolvedHeaderMediaUrl = headerMedia.header_media_url;
+      resolvedHeaderFileName = headerMedia.header_file_name;
     }
 
     const existingOutcome = await db.AppointmentOutcomes.findOne({
@@ -1186,6 +1288,108 @@ export const sendNowFollowUpService = async (
     await msg.update({ status: "failed", error_log: err.message });
     return { success: false, error: err.message };
   }
+};
+
+export const buildFollowUpTemplateComponentsService = async ({
+  template_id,
+  appointment_id,
+  header_media_url = null,
+  header_file_name = null,
+}) => {
+  const components = [];
+  const varCount = await db.WhatsappTemplateVariables.count({
+    where: { template_id },
+  });
+
+  if (header_media_url) {
+    components.push({
+      type: "header",
+      parameters: [
+        {
+          type: header_file_name ? "document" : "image",
+          [header_file_name ? "document" : "image"]: header_file_name
+            ? { link: header_media_url, filename: header_file_name }
+            : { link: header_media_url },
+        },
+      ],
+    });
+  }
+
+  if (varCount > 0) {
+    const appointment = await db.Appointments.findOne({
+      where: { appointment_id },
+      attributes: [
+        "patient_name",
+        "appointment_date",
+        "appointment_time",
+        "doctor_id",
+      ],
+    });
+
+    if (appointment) {
+      let doctorName = "";
+      if (appointment.doctor_id) {
+        const doctor = await db.Doctors.findOne({
+          where: { doctor_id: appointment.doctor_id },
+          attributes: ["name"],
+        });
+        doctorName = doctor?.name || "";
+      }
+
+      const values = [
+        appointment.patient_name || "",
+        appointment.appointment_date || "",
+        appointment.appointment_time || "",
+        doctorName,
+      ];
+      components.push({
+        type: "body",
+        parameters: values
+          .slice(0, varCount)
+          .map((value) => ({ type: "text", text: String(value) })),
+      });
+    }
+  }
+
+  return components;
+};
+
+export const persistFollowUpSentMessageService = async ({
+  tenant_id,
+  scheduledMessage,
+  template,
+  components = [],
+  meta_message_id = null,
+  phone_number_id = null,
+}) => {
+  const renderedMessage = await renderTemplateContent(
+    scheduledMessage.template_id,
+    components,
+  ).catch(() => template?.template_name || "Template message");
+
+  if (meta_message_id) {
+    await db.Messages.create({
+      tenant_id,
+      contact_id: scheduledMessage.contact_id,
+      phone_number_id,
+      phone: scheduledMessage.to_phone,
+      wamid: meta_message_id,
+      name: null,
+      sender: "bot",
+      sender_id: null,
+      message: renderedMessage,
+      message_type: "template",
+      status: "sent",
+      template_name: template?.template_name || null,
+    });
+  }
+
+  await scheduledMessage.update({
+    status: "sent",
+    sent_at: new Date(),
+    meta_message_id,
+    error_log: null,
+  });
 };
 
 export const getPendingFollowUpCountService = async (tenant_id) => {

@@ -27,8 +27,16 @@ export const softDeleteAppointment = async (appointmentId, tenant_id) => {
     if (row.is_deleted) throw new Error("Appointment is already deleted");
     await db.sequelize.query(
       `UPDATE ${tableNames.APPOINTMENTS}
-       SET is_deleted = true, deleted_at = NOW(), status = 'cancelled', updated_at = NOW()
+       SET is_deleted = true, deleted_at = NOW(), status = 'Cancelled', updated_at = NOW()
        WHERE appointment_id = ? AND tenant_id = ?`,
+      { replacements: [appointmentId, tenant_id], transaction: t },
+    );
+    // Remove only pending reminders so cancelled/deleted appointments are not messaged.
+    await db.sequelize.query(
+      `DELETE FROM ${tableNames.SCHEDULED_MESSAGES}
+       WHERE appointment_id = ? AND tenant_id = ?
+         AND send_type = 'appointment_reminder'
+         AND status = 'pending'`,
       { replacements: [appointmentId, tenant_id], transaction: t },
     );
     // Cancel related booking sessions
@@ -49,7 +57,7 @@ export const restoreAppointment = async (appointmentId, tenant_id) => {
     if (!isRestoreEligible(row.deleted_at)) throw new RestoreExpiredError();
     await db.sequelize.query(
       `UPDATE ${tableNames.APPOINTMENTS}
-       SET is_deleted = false, deleted_at = NULL, status = 'scheduled', updated_at = NOW()
+       SET is_deleted = false, deleted_at = NULL, status = 'Pending', updated_at = NOW()
        WHERE appointment_id = ? AND tenant_id = ?`,
       { replacements: [appointmentId, tenant_id], transaction: t },
     );
@@ -61,6 +69,14 @@ export const hardDeleteAppointment = async (appointmentId, tenant_id) => {
   return db.sequelize.transaction(async (t) => {
     const row = await fetchAppointment(appointmentId, tenant_id, t);
     if (!row) throw new NotFoundError("Appointment not found");
+    // Remove pending reminders before hard delete to avoid orphaned queued sends.
+    await db.sequelize.query(
+      `DELETE FROM ${tableNames.SCHEDULED_MESSAGES}
+       WHERE appointment_id = ? AND tenant_id = ?
+         AND send_type = 'appointment_reminder'
+         AND status = 'pending'`,
+      { replacements: [appointmentId, tenant_id], transaction: t },
+    );
     await db.sequelize.query(
       `DELETE FROM ${tableNames.BOOKING_SESSIONS}
        WHERE appointment_id = ? AND tenant_id = ?`,

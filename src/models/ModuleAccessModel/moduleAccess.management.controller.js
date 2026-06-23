@@ -2,12 +2,15 @@ import {
   listIndustriesService,
   createIndustryService,
   patchIndustryService,
+  deleteIndustryService,
   listSaaSModulesService,
   createSaaSModuleService,
   patchSaaSModuleService,
+  deleteSaaSModuleService,
   listPlansService,
   createPlanService,
   patchPlanService,
+  deletePlanService,
   getIndustrySaaSModulesService,
   patchIndustrySaaSModulesService,
   getPlanSaaSModulesService,
@@ -49,6 +52,16 @@ export const patchIndustryController = async (req, res) => {
   }
 };
 
+export const deleteIndustryController = async (req, res) => {
+  try {
+    const { industryId } = req.params;
+    const data = await deleteIndustryService(industryId);
+    return res.status(200).json({ message: "Industry deleted successfully", data });
+  } catch (err) {
+    return handleError(res, err);
+  }
+};
+
 export const listSaaSModulesController = async (req, res) => {
   try {
     const data = await listSaaSModulesService();
@@ -77,6 +90,16 @@ export const patchSaaSModuleController = async (req, res) => {
   }
 };
 
+export const deleteSaaSModuleController = async (req, res) => {
+  try {
+    const { moduleId } = req.params;
+    const data = await deleteSaaSModuleService(moduleId);
+    return res.status(200).json({ message: "SaaS module deleted successfully", data });
+  } catch (err) {
+    return handleError(res, err);
+  }
+};
+
 export const listPlansController = async (req, res) => {
   try {
     const data = await listPlansService();
@@ -100,6 +123,16 @@ export const patchPlanController = async (req, res) => {
     const { planId } = req.params;
     const data = await patchPlanService(planId, req.body);
     return res.status(200).json({ message: "success", data });
+  } catch (err) {
+    return handleError(res, err);
+  }
+};
+
+export const deletePlanController = async (req, res) => {
+  try {
+    const { planId } = req.params;
+    const data = await deletePlanService(planId);
+    return res.status(200).json({ message: "Plan deleted successfully", data });
   } catch (err) {
     return handleError(res, err);
   }

@@ -34,6 +34,7 @@ export const expireOldSlotLocks = async () => {
 
 export const releaseLockedSlots = async (sessionId) => {
   if (!sessionId) return 0;
+  
   const [count] = await db.AppointmentSlots.update(
     {
       status: SLOT_STATUS.EXPIRED,
@@ -86,6 +87,7 @@ export const lockAppointmentSlot = async ({
   await expireOldSlotLocks();
   const sessionId = session.session_id;
   const lockedUntil = normalizeLockUntil(session);
+  
 
   return db.sequelize.transaction(async (transaction) => {
     const existing = await db.AppointmentSlots.findOne({
@@ -149,6 +151,7 @@ export const markSlotBooked = async ({
 }) => {
   const sessionId = session.session_id;
   await expireOldSlotLocks();
+  
   const slot = await db.AppointmentSlots.findOne({
     where: {
       tenant_id: tenantId,

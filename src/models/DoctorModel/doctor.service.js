@@ -28,7 +28,8 @@ const fetchDoctorAvailability = async (tenant_id, doctor_id) => {
   const [availability] = await db.sequelize.query(
     `SELECT da.id, da.day_of_week, da.start_time, da.end_time,
             COALESCE(dad.enabled, 1) AS enabled,
-            COALESCE(dad.slot_duration, 15) AS slot_duration
+            dad.slot_duration AS slot_duration,
+            COALESCE(dad.use_default_duration, 1) AS use_default_duration
        FROM ${tableNames.DOCTOR_AVAILABILITY} da
        LEFT JOIN ${tableNames.DOCTOR_AVAILABILITY_DAYS} dad
          ON dad.tenant_id = da.tenant_id
@@ -39,27 +40,38 @@ const fetchDoctorAvailability = async (tenant_id, doctor_id) => {
     { replacements: [doctor_id, tenant_id] },
   );
 
-  return (availability || []).map((slot) => ({
-    ...slot,
-    slotDuration: slot.slot_duration,
-  }));
+  return (availability || []).map((slot) => {
+    const useDefaultDuration = Boolean(slot.use_default_duration);
+    return {
+      ...slot,
+      slot_duration: useDefaultDuration ? null : slot.slot_duration,
+      slotDuration: useDefaultDuration ? null : slot.slot_duration,
+      use_default_duration: useDefaultDuration,
+      useDefaultDuration,
+    };
+  });
 };
 
 const fetchDoctorAvailabilityDays = async (tenant_id, doctor_id) => {
   const [days] = await db.sequelize.query(
-    `SELECT day_of_week, enabled, slot_duration
+    `SELECT day_of_week, enabled, slot_duration, use_default_duration
        FROM ${tableNames.DOCTOR_AVAILABILITY_DAYS}
        WHERE doctor_id = ? AND tenant_id = ?
        ORDER BY FIELD(day_of_week, 'monday','tuesday','wednesday','thursday','friday','saturday','sunday')`,
     { replacements: [doctor_id, tenant_id] },
   );
 
-  return (days || []).map((day) => ({
-    day_of_week: day.day_of_week,
-    enabled: Boolean(day.enabled),
-    slot_duration: day.slot_duration,
-    slotDuration: day.slot_duration,
-  }));
+  return (days || []).map((day) => {
+    const useDefaultDuration = Boolean(day.use_default_duration);
+    return {
+      day_of_week: day.day_of_week,
+      enabled: Boolean(day.enabled),
+      slot_duration: useDefaultDuration ? null : day.slot_duration,
+      slotDuration: useDefaultDuration ? null : day.slot_duration,
+      use_default_duration: useDefaultDuration,
+      useDefaultDuration,
+    };
+  });
 };
 
 const replaceDoctorAvailability = async ({
@@ -87,7 +99,9 @@ const replaceDoctorAvailability = async ({
         tenant_id,
         day_of_week: day.day,
         enabled: day.enabled,
-        slot_duration: day.slotDuration,
+        slot_duration:
+          day.useDefaultDuration === false ? day.slotDuration : 15,
+        use_default_duration: day.useDefaultDuration !== false,
       },
       { transaction },
     );
@@ -402,8 +416,8 @@ export const updateDoctorService = async (doctor_id, tenant_id, data) => {
     if (data.name !== undefined) updateFields.name = data.name;
     if (data.country_code !== undefined)
       updateFields.country_code = data.country_code;
-    if (data.mobile !== undefined) updateFields.mobile = data.mobile;
-    if (data.email !== undefined) updateFields.email = data.email;
+    if (data.mobile !== undefined) updateFields.mobile = data.mobile || null;
+    if (data.email !== undefined) updateFields.email = data.email || null;
     if (data.status !== undefined) updateFields.status = data.status;
     if (data.consultation_duration !== undefined)
       updateFields.consultation_duration = data.consultation_duration;

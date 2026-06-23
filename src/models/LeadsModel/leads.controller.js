@@ -1,8 +1,4 @@
 import {
-  getContactByContactIdAndTenantIdService,
-  getContactByIdAndTenantIdService,
-} from "../ContactsModel/contacts.service.js";
-import {
   deleteLeadService,
   permanentDeleteLeadService,
   getLeadListService,
@@ -82,27 +78,14 @@ export const getLeadSummaryController = async (req, res) => {
     if (!lead) {
       return res.status(404).send({ message: "Lead not found" });
     }
-    const contactDetails = await getContactByContactIdAndTenantIdService(
-      lead.contact_id,
-      tenant_id,
-    );
 
-    const { mode, date, start_date, end_date, force } = req.query;
-    console.log(
-      `Smart Summary Req - Lead: ${lead_id}, Mode: ${mode}, Date: ${date}, Range: ${start_date} to ${end_date}, Force: ${force}`,
-    );
-
-    const response = await getLeadSummaryService(
-      tenant_id,
-      contactDetails?.phone,
-      lead_id,
-      mode,
-      date,
-      start_date,
-      end_date,
-      lead.contact_id,
-      { force: force === 'true' },
-    );
+    const response = await getLeadSummaryService(tenant_id, lead_id, {
+      mode: req.query.mode,
+      date: req.query.date,
+      start_date: req.query.start_date,
+      end_date: req.query.end_date,
+      force: req.query.force,
+    });
 
     return res.status(200).send({
       message: "success",
@@ -119,7 +102,7 @@ export const getBulkLeadSummaryController = async (req, res) => {
   const tenant_id = req.user.tenant_id;
   const { lead_ids, mode, date, start_date, end_date } = req.body;
 
-  console.log("ssss", lead_ids);
+  
 
   if (!tenant_id) {
     return res.status(400).send({ message: "Tenant id missing" });
@@ -132,23 +115,10 @@ export const getBulkLeadSummaryController = async (req, res) => {
   }
 
   try {
-    console.log(
-      `Bulk Smart Summary Req - Leads: ${lead_ids.length}, Mode: ${mode}`,
-    );
-
-    // Call service
-    const results = await getBulkLeadSummaryService(
-      tenant_id,
-      lead_ids,
-      mode,
-      date,
-      start_date,
-      end_date,
-    );
-
+    const response = await getBulkLeadSummaryService(tenant_id, lead_ids);
     return res.status(200).send({
       message: "success",
-      data: results,
+      data: response,
     });
   } catch (err) {
     return res.status(500).send({

@@ -6,6 +6,10 @@ import {
   updateDoctorController,
 } from "./doctor.controller.js";
 import {
+  getDoctorBranchesController,
+  replaceDoctorBranchesController,
+} from "./doctorBranch.controller.js";
+import {
   softDeleteDoctorController,
   hardDeleteDoctorController,
   restoreDoctorController,
@@ -60,6 +64,15 @@ Router.get(
   getDoctorByIdController,
 );
 
+// Get branches mapped to a doctor
+Router.get(
+  "/doctor/:doctor_id/branches",
+  authenticate,
+  authorize({ user_type: "tenant", roles: tenantRoles }),
+  checkFeatureAccess("doctors"),
+  getDoctorBranchesController,
+);
+
 // Update doctor
 Router.put(
   "/doctor/:doctor_id",
@@ -67,6 +80,15 @@ Router.put(
   authorize({ user_type: "tenant", roles: managerRoles }),
   checkFeatureAccess("doctors"),
   updateDoctorController,
+);
+
+// Replace doctor branch mappings (atomic)
+Router.put(
+  "/doctor/:doctor_id/branches",
+  authenticate,
+  authorize({ user_type: "tenant", roles: managerRoles }),
+  checkFeatureAccess("doctors"),
+  replaceDoctorBranchesController,
 );
 
 // Soft delete

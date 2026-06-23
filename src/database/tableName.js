@@ -1,6 +1,7 @@
 export const tableNames = {
   MANAGEMENT: "managements",
   TENANTS: "tenants",
+  BRANCHES: "branches",
   TENANT_USERS: "tenant_users",
   TENANT_INVITATIONS: "tenant_invitations",
   WHATSAPP_TEMPLATE: "whatsapp_templates",
@@ -33,6 +34,7 @@ export const tableNames = {
   DOCTOR_AVAILABILITY_DAYS: "doctor_availability_days",
   SPECIALIZATIONS: "specializations",
   DOCTOR_SPECIALIZATIONS: "doctor_specializations",
+  DOCTOR_BRANCHES: "doctor_branches",
   APPOINTMENTS: "appointments",
   MESSAGE_USAGE: "message_usage",
   PRICING_TABLE: "pricing_table",
@@ -65,6 +67,7 @@ export const tableNames = {
   COURSES: "courses",
   TENANT_FEATURE_ACCESS: "tenant_feature_access",
   SCHEDULED_MESSAGES: "scheduled_messages",
+  APPOINTMENT_REMINDER_RULES: "appointment_reminder_rules",
   INDUSTRIES: "industries",
   SAAS_MODULES: "saas_modules",
   INDUSTRY_SAAS_MODULES: "industry_saas_modules",
@@ -72,4 +75,9 @@ export const tableNames = {
   PLAN_SAAS_MODULES: "plan_saas_modules",
   TENANT_SAAS_MODULE_OVERRIDES: "tenant_saas_module_overrides",
   NAVIGATION_ITEMS: "navigation_items",
+  SIDEBAR_SECTIONS: "sidebar_sections",
+  SIDEBAR_SECTION_INDUSTRIES: "sidebar_section_industries",
+  SIDEBAR_SECTION_PLANS: "sidebar_section_plans",
+  SIDEBAR_SECTION_TENANTS: "sidebar_section_tenants",
+  API_REQUEST_LOGS: "api_request_logs",
 };

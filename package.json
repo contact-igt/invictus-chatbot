@@ -7,11 +7,11 @@
     "build": "npm install",
     "start:dev": "nodemon src/app.js",
     "seed:superadmin": "node src/scripts/seedSuperAdmin.js",
-    "migrate:appointment-lead-id": "node src/scripts/add_appointment_lead_id.js",
-    "migrate:appointment-lead-latest-index": "node src/scripts/add_appointment_latest_lookup_index.js",
-    "migrate:appointment-lead-status-latest-index": "node src/scripts/add_appointment_lead_status_latest_index.js",
     "db:truncate": "node src/scripts/truncateAllTables.js",
-    "seed:allprice": "node src/scripts/seed_all_pricing.js"
+    "seed:allprice": "node src/scripts/seed_all_pricing.js",
+    "debug:campaign": "node src/scripts/debugCampaign.js",
+    "debug:campaign:failed": "node src/scripts/debugCampaignFailed.js",
+    "start:campaign-workers": "node src/scripts/startCampaignWorkers.js"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1026.0",
@@ -30,6 +30,7 @@
     "form-data": "^4.0.5",
     "fs": "^0.0.1-security",
     "generate-password": "^1.7.1",
+    "geoip-lite": "^1.4.10",
     "google-libphonenumber": "^3.2.44",
     "groq-sdk": "^0.37.0",
     "handlebars": "^4.7.8",
@@ -51,7 +52,8 @@
     "sequelize": "^6.37.7",
     "sharp": "^0.34.5",
     "socket.io": "^4.8.3",
-    "socket.io-client": "^4.8.3"
+    "socket.io-client": "^4.8.3",
+    "ua-parser-js": "^2.0.10"
   },
   "devDependencies": {
     "jest": "^29.7.0",

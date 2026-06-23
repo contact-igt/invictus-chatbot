@@ -16,6 +16,7 @@ const UP = `
     day_of_week ENUM('monday','tuesday','wednesday','thursday','friday','saturday','sunday') NOT NULL,
     enabled TINYINT(1) NOT NULL DEFAULT 0,
     slot_duration INT NOT NULL DEFAULT 15,
+    use_default_duration TINYINT(1) NOT NULL DEFAULT 1,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (id),
@@ -25,13 +26,14 @@ const UP = `
   );
 
   INSERT INTO doctor_availability_days
-    (tenant_id, doctor_id, day_of_week, enabled, slot_duration, created_at, updated_at)
+    (tenant_id, doctor_id, day_of_week, enabled, slot_duration, use_default_duration, created_at, updated_at)
   SELECT
     da.tenant_id,
     da.doctor_id,
     da.day_of_week,
     1,
     15,
+    1,
     NOW(),
     NOW()
   FROM doctor_availability da
@@ -39,6 +41,7 @@ const UP = `
   ON DUPLICATE KEY UPDATE
     enabled = VALUES(enabled),
     slot_duration = COALESCE(slot_duration, VALUES(slot_duration)),
+    use_default_duration = COALESCE(use_default_duration, VALUES(use_default_duration)),
     updated_at = NOW();
 `;
 

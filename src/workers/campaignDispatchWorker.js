@@ -33,6 +33,7 @@ import { getCampaignBillingService } from "../services/campaignBillingService.js
 import db from "../database/index.js";
 import { ensureTenantSendWorker } from "./campaignSendWorker.js";
 import { recordCampaignDiagnosticEvent } from "../utils/campaignDiagnosticsEvents.js";
+import { getIO } from "../middlewares/socket/socket.js";
 import * as dispatchCampaign from "./dispatchCampaign.js";
 const enqueueSendJobs =
   dispatchCampaign.enqueueSendJobs ||
@@ -46,6 +47,23 @@ if (!enqueueSendJobs) {
 
 const PAGE_SIZE = parseInt(process.env.CAMPAIGN_DISPATCH_PAGE_SIZE || "500");
 const LOCK_TTL = parseInt(process.env.CAMPAIGN_DISPATCH_LOCK_TTL || "120"); // seconds
+const BILLING_RESERVATION_TTL = parseInt(
+  process.env.CAMPAIGN_BILLING_RESERVATION_TTL || "1800",
+  10,
+);
+
+const emitCampaignPaused = (tenant_id, campaign_id, paused_reason) => {
+  try {
+    const io = getIO();
+    const payload = { campaign_id, status: "paused", paused_reason };
+    io.to(`tenant-${tenant_id}`).emit("campaign_paused", payload);
+    io.to(`tenant-${tenant_id}`).emit("campaign-status-update", payload);
+  } catch (err) {
+    logger.warn(
+      `[DISPATCH-WORKER] Failed to emit campaign_paused for ${campaign_id}: ${err.message}`,
+    );
+  }
+};
 
 // ── Core processor ────────────────────────────────────────────────────────────
 
@@ -180,9 +198,6 @@ async function processDispatchJob(job) {
     let perRecipientCost = 0;
     if (recipients.length > 0) {
       if (isPerfTestCampaign) {
-        console.log(
-          "[DISPATCH-WORKER] Skipping billing for perf/e2e test campaign",
-        );
       } else {
         try {
           const template = await db.WhatsappTemplates.findOne({
@@ -209,14 +224,22 @@ async function processDispatchJob(job) {
           const reservationResult = await billingService.createReservation(
             tenant_id,
             batchCost,
-            300,
+            BILLING_RESERVATION_TTL,
+            campaign_id,
           ); // 5 min TTL
 
           if (!reservationResult.success) {
             logger.warn(
               `[DISPATCH-WORKER] Campaign ${campaign_id} billing reservation failed — ${reservationResult.reason}`,
             );
-            await campaign.update({ status: "paused" });
+            const pausedReason =
+              reservationResult.reason ||
+              `Insufficient wallet balance - required INR ${batchCost}`;
+            await campaign.update({
+              status: "paused",
+              paused_reason: pausedReason,
+            });
+            emitCampaignPaused(tenant_id, campaign_id, pausedReason);
             return;
           }
 
@@ -268,6 +291,24 @@ async function processDispatchJob(job) {
       return;
     }
 
+    // Re-check status after loading the page. This catches campaigns paused
+    // while the worker was building the page and prevents additional sends.
+    const latestCampaignStatus = await db.WhatsappCampaigns.findOne({
+      where: { campaign_id, tenant_id, is_deleted: false },
+      attributes: ["status"],
+      raw: true,
+    });
+
+    if (
+      !latestCampaignStatus ||
+      ["paused", "cancelled", "completed"].includes(latestCampaignStatus.status)
+    ) {
+      logger.info(
+        `[DISPATCH-WORKER] Campaign ${campaign_id} is ${latestCampaignStatus?.status || "missing"} — stopping before enqueue`,
+      );
+      return;
+    }
+
     // ── Enqueue send jobs using addBulk with chunking and fallback ─────────
     const { totalEnqueued, totalFailed, durationMs } = await enqueueSendJobs(
       sendQueue,
@@ -278,6 +319,22 @@ async function processDispatchJob(job) {
 
     const enqueued = totalEnqueued;
     if (billingReservation) {
+      const statusBeforeFanOut = await db.WhatsappCampaigns.findOne({
+        where: { campaign_id, tenant_id, is_deleted: false },
+        attributes: ["status"],
+        raw: true,
+      });
+
+      if (
+        !statusBeforeFanOut ||
+        ["paused", "cancelled", "completed"].includes(statusBeforeFanOut.status)
+      ) {
+        logger.info(
+          `[DISPATCH-WORKER] Campaign ${campaign_id} is ${statusBeforeFanOut?.status || "missing"} — skipping fan-out`,
+        );
+        return;
+      }
+
       consumedBillingAmount = Number((perRecipientCost * enqueued).toFixed(6));
       billingSettlement = consumedBillingAmount > 0 ? "confirm" : "release";
     }
@@ -311,6 +368,8 @@ async function processDispatchJob(job) {
           // Unique per cursor position — cron re-uses jobId "dispatch:X:0"
           // for the initial page; fan-out pages use the cursor id.
           jobId: `dispatch:${campaign_id}:${nextAfterId}`,
+          removeOnComplete: true,
+          removeOnFail: true,
         },
       );
       logger.info(
@@ -333,13 +392,18 @@ async function processDispatchJob(job) {
               `[DISPATCH-WORKER] Billing reservation confirmed: ${billingReservation} (consumed ₹${consumedBillingAmount})`,
             );
           } else {
-            await billingService.releaseReservation(
+            logger.error(
+              `[DISPATCH-WORKER] ALERT billing reservation confirmation failed for ${billingReservation} campaign=${campaign_id} tenant=${tenant_id} consumed=${consumedBillingAmount}. Attempting release.`,
+            );
+            const released = await billingService.releaseReservation(
               tenant_id,
               billingReservation,
             );
-            logger.warn(
-              `[DISPATCH-WORKER] Billing reservation confirmation failed, released instead: ${billingReservation}`,
-            );
+            if (!released) {
+              logger.error(
+                `[DISPATCH-WORKER] ALERT billing reservation ${billingReservation} could not be confirmed or released; wallet discrepancy requires reconciliation.`,
+              );
+            }
           }
         } else {
           await billingService.releaseReservation(
@@ -351,8 +415,8 @@ async function processDispatchJob(job) {
           );
         }
       } catch (err) {
-        logger.warn(
-          `[DISPATCH-WORKER] Failed to settle billing reservation ${billingReservation}: ${err.message}`,
+        logger.error(
+          `[DISPATCH-WORKER] ALERT failed to settle billing reservation ${billingReservation} campaign=${campaign_id} tenant=${tenant_id}: ${err.message}`,
         );
       }
     }
@@ -439,10 +503,8 @@ if (isDirectRun) {
       }
 
       startCampaignDispatchWorker();
-      console.log("Dispatch worker is running and waiting for jobs...");
 
       process.on("SIGINT", async () => {
-        console.log("Shutting down dispatch worker...");
         await closeDispatchWorker();
         process.exit(0);
       });

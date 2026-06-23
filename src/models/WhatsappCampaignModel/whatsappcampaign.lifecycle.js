@@ -58,12 +58,31 @@ export const restoreCampaign = async (campaignId, tenant_id) => {
     if (!row.is_deleted) throw new Error("Campaign is not deleted");
     if (!isRestoreEligible(row.deleted_at)) throw new RestoreExpiredError();
 
-    // Preserve original campaign status; restore should only clear lifecycle flags.
+    const restoreStatus = row.status === "active" ? "paused" : row.status;
+    const pausedReason =
+      row.status === "active"
+        ? "Campaign restored from trash after being active; review pending recipients before resuming."
+        : null;
+
+    // Active campaigns restore paused so recovery cron cannot re-dispatch them implicitly.
     await db.sequelize.query(
       `UPDATE ${tableNames.WHATSAPP_CAMPAIGN}
-       SET is_deleted = false, deleted_at = NULL, updated_at = NOW()
+       SET is_deleted = false,
+           deleted_at = NULL,
+           status = ?,
+           paused_reason = CASE WHEN ? IS NULL THEN paused_reason ELSE ? END,
+           updated_at = NOW()
        WHERE campaign_id = ? AND tenant_id = ?`,
-      { replacements: [campaignId, tenant_id], transaction: t },
+      {
+        replacements: [
+          restoreStatus,
+          pausedReason,
+          pausedReason,
+          campaignId,
+          tenant_id,
+        ],
+        transaction: t,
+      },
     );
 
     // Restore recipients that were soft-deleted together with the campaign

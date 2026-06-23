@@ -269,14 +269,8 @@ export const getDashboardStatsService = async (tenantId, startDate, endDate) => 
       : 0;
 
     // Debug: log resolved period and core metrics for each request
-    console.log("[Dashboard] Period resolved:", {
-      periodLabel, periodStart: pISO, periodEnd: pEISO, isLiveMode,
-    });
-    console.log("[Dashboard] Phase-1 metrics:", {
-      totalLeads: newLeadsCount, totalCampaigns: totalCampaignsCount,
-      billingTotal: parseFloat(billingKpi?.total_spent || 0),
-      aiHandledPct, aiHandledChatsCount, agentHandledChatsCount,
-    });
+    
+    
 
     // ─── PHASE 2: Live-mode queries (only when endDate >= today) ─────────────
     let liveData = null;

@@ -59,5 +59,3 @@ export const WhatsappTemplateVariableTable = (sequelize, Sequelize) => {
   );
 };
 
-
-

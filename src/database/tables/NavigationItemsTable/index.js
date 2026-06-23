@@ -51,6 +51,11 @@ export const NavigationItemsTable = (sequelize, Sequelize) => {
         allowNull: true,
       },
 
+      sidebar_section_id: {
+        type: Sequelize.STRING,
+        allowNull: true,
+      },
+
       is_visible: {
         type: Sequelize.BOOLEAN,
         allowNull: false,
@@ -115,6 +120,10 @@ export const NavigationItemsTable = (sequelize, Sequelize) => {
           fields: ["menu_group"],
         },
         {
+          name: "idx_navigation_items_sidebar_section",
+          fields: ["sidebar_section_id"],
+        },
+        {
           name: "idx_navigation_items_visible",
           fields: ["is_visible"],
         },
@@ -125,6 +134,14 @@ export const NavigationItemsTable = (sequelize, Sequelize) => {
         {
           name: "idx_navigation_items_module_sort",
           fields: ["module_id", "sort_order"],
+        },
+        {
+          name: "idx_navigation_items_sidebar_section_sort",
+          fields: ["sidebar_section_id", "sort_order"],
+        },
+        {
+          name: "idx_navigation_items_tenant_sidebar_section_sort",
+          fields: ["tenant_id", "sidebar_section_id", "sort_order"],
         },
       ],
     },

@@ -164,13 +164,7 @@ export const syncWabaMetaInfoService = async (tenant_id) => {
     // whatsapp_business_manager_messaging_limit returns values like TIER_NOT_SET, TIER_2K, TIER_10K, etc.
     const tierRaw = whatsapp_business_manager_messaging_limit || "TIER_NOT_SET";
     const tierLabel = META_TIER_CONFIG[tierRaw] ? tierRaw : "TIER_NOT_SET";
-    console.log(`[WABA Sync] tier=${tierLabel} (raw: ${tierRaw}), quality=${qualityForDb}`);
-
-    // 4. Update the WhatsappAccount row
-    await db.Whatsappaccount.update(
-      { quality: qualityForDb, tier: tierLabel },
-      { where: { id: account.id } },
-    );
+    
 
     return {
       quality: qualityForDb,
@@ -205,11 +199,10 @@ export const createOrUpdateWhatsappAccountService = async (
 
     if (existingAccounts.length > 0) {
       const existing = existingAccounts[0];
-      if (existing.tenant_id === tenant_id) {
-        throw new Error("This WhatsApp account is already linked to your profile.");
-      } else {
+      if (existing.tenant_id !== tenant_id) {
         throw new Error("This WhatsApp number or Phone ID is already registered by another user.");
       }
+      // Same tenant — fall through to the ON DUPLICATE KEY UPDATE upsert below
     }
 
     // Insert or update account row — access_token is never stored in this table

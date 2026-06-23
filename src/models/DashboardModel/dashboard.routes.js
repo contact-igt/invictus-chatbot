@@ -22,8 +22,7 @@ Router.get(
   authenticate,
   authorize({
     user_type: "tenant",
-    // [DOCTOR ROLE UNWIRED – 2026-05-13] "doctor" removed
-    roles: ["tenant_admin", /* "doctor", */ "staff"],
+    roles: ["tenant_admin" , "staff"],
   }),
   getDashboardController,
 );
@@ -38,8 +37,7 @@ Router.get(
   authenticate,
   authorize({
     user_type: "tenant",
-    // [DOCTOR ROLE UNWIRED – 2026-05-13] "doctor" removed
-    roles: ["tenant_admin", /* "doctor", */ "staff"],
+    roles: ["tenant_admin" , "staff"],
   }),
   requireAiAccess,
   getWeeklySummaryController,
@@ -56,8 +54,7 @@ Router.get(
   authenticate,
   authorize({
     user_type: "tenant",
-    // [DOCTOR ROLE UNWIRED – 2026-05-13] "doctor" removed
-    roles: ["tenant_admin", /* "doctor", */ "staff"],
+    roles: ["tenant_admin" , "staff"],
   }),
   requireAiAccess,
   getContactWeeklySummaryController,

@@ -5,7 +5,6 @@ import db from "../database/index.js";
 
 const { AdminAuditLog } = db;
 
-
 async function downloadInvoicePdf(req, res, next) {
   try {
     const invoiceId = req.params.id;
