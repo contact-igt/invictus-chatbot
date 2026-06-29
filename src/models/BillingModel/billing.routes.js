@@ -44,7 +44,7 @@ import {
   adminDeleteGSTRateController,
   adminUpdateGSTRateController,
 } from "./gstAdmin.controller.js";
-import { downloadInvoicePdf } from "../../controllers/invoice.controller.js";
+import { downloadInvoicePdf, downloadReceiptPdf } from "../../controllers/invoice.controller.js";
 import {
   authenticate,
   authorize,
@@ -186,6 +186,17 @@ router.get(
   authenticateAdmin,
   adminBillingRateLimiter,
   downloadInvoicePdf,
+);
+
+// Receipt PDF download (tenant)
+router.get("/billing/payments/:id/receipt-pdf", ...tenantAuth, downloadReceiptPdf);
+
+// Receipt PDF download (SuperAdmin)
+router.get(
+  "/admin/payments/:id/receipt-pdf",
+  authenticateAdmin,
+  adminBillingRateLimiter,
+  downloadReceiptPdf,
 );
 
 router.get("/billing/kpi", ...tenantAuth, getBillingKpiController);
