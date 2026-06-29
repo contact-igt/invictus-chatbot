@@ -100,7 +100,7 @@ async function generateInvoicePdf(invoiceId, tenantId) {
   if (!invoice)
     throw { code: "NOT_FOUND", message: "Invoice not found", statusCode: 404 };
 
-  const tenant = await Tenant.findOne({ where: { id: invoice.tenant_id } });
+  const tenant = await Tenant.findOne({ where: { tenant_id: invoice.tenant_id } });
   if (!tenant)
     throw { code: "NOT_FOUND", message: "Tenant not found", statusCode: 404 };
 
@@ -108,7 +108,7 @@ async function generateInvoicePdf(invoiceId, tenantId) {
     where: { id: invoice.billing_cycle_id },
   });
   const payment = await PaymentHistory.findOne({
-    where: { invoice_id: invoiceId },
+    where: { invoice_number: invoice.invoice_number },
   });
 
   // Company details from env
@@ -126,9 +126,9 @@ async function generateInvoicePdf(invoiceId, tenantId) {
     return rate % 1 === 0
       ? rate.toFixed(0)
       : rate
-          .toFixed(2)
-          .replace(/\.0+$/, "")
-          .replace(/(\.\d*[1-9])0+$/, "$1");
+        .toFixed(2)
+        .replace(/\.0+$/, "")
+        .replace(/(\.\d*[1-9])0+$/, "$1");
   };
 
   // Create PDF document
