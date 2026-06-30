@@ -18,7 +18,7 @@ async function downloadInvoicePdf(req, res, next) {
     // Log to AdminAuditLog
     await AdminAuditLog.create({
       action_type: "invoice_download",
-      user_id: userId,
+      admin_id: userId,
       tenant_id: tenantId,
       entity_id: invoiceId,
       before_state: null,
@@ -51,7 +51,7 @@ async function downloadReceiptPdf(req, res, next) {
     // Log to AdminAuditLog
     await AdminAuditLog.create({
       action_type: "receipt_download",
-      user_id: userId,
+      admin_id: userId,
       tenant_id: tenantId,
       entity_id: paymentId,
       before_state: null,
