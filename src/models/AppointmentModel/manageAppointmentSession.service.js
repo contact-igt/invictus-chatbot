@@ -71,12 +71,11 @@ export const getSessionAppointmentIds = (session) =>
 export const getSessionPendingValue = (session) =>
   parseJson(session?.pending_edit_value, null);
 
-const generateSessionId = async (tenantId) => {
+const generateSessionId = async () => {
   const [rows] = await db.sequelize.query(
     `SELECT session_id FROM manage_appointment_sessions
-     WHERE tenant_id = ? AND session_id LIKE 'MS%'
+     WHERE session_id LIKE 'MS%'
      ORDER BY session_id DESC LIMIT 1`,
-    { replacements: [tenantId] },
   );
   const last = rows?.[0]?.session_id ? String(rows[0].session_id) : null;
   const lastNum = last ? parseInt(last.replace(/^MS/i, ""), 10) : 0;
@@ -108,7 +107,7 @@ export const createManageAppointmentSession = async ({
 }) => {
   const now = new Date();
   return db.ManageAppointmentSessions.create({
-    session_id: await generateSessionId(tenantId),
+    session_id: await generateSessionId(),
     tenant_id: tenantId,
     user_phone: userPhone,
     contact_id: contactId,

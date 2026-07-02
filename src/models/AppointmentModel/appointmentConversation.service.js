@@ -180,9 +180,8 @@ export const getOrCreateSession = async (contactId, tenantId, flowType = "book")
   try {
     const [rows] = await db.sequelize.query(
       `SELECT session_id FROM booking_sessions
-       WHERE tenant_id = ? AND session_id LIKE 'SS%'
+       WHERE session_id LIKE 'SS%'
        ORDER BY session_id DESC LIMIT 1`,
-      { replacements: [tenantId] },
     );
     const lastId = rows?.[0]?.session_id ? String(rows[0].session_id) : null;
     const lastNum = lastId ? parseInt(lastId.replace(/^SS/i, ""), 10) : 0;

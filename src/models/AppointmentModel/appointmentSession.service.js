@@ -37,12 +37,11 @@ const clearSlotSelection = (session) => {
   return draft;
 };
 
-const generateSessionId = async (tenantId) => {
+const generateSessionId = async () => {
   const [rows] = await db.sequelize.query(
     `SELECT session_id FROM booking_sessions
-     WHERE tenant_id = ? AND session_id LIKE 'AS%'
+     WHERE session_id LIKE 'AS%'
      ORDER BY session_id DESC LIMIT 1`,
-    { replacements: [tenantId] },
   );
   const last = rows?.[0]?.session_id ? String(rows[0].session_id) : null;
   const lastNum = last ? parseInt(last.replace(/^AS/i, ""), 10) : 0;
@@ -90,7 +89,7 @@ export const getOrCreateAppointmentSession = async ({
 
   const now = new Date();
   const session = await db.BookingSessions.create({
-    session_id: await generateSessionId(tenantId),
+    session_id: await generateSessionId(),
     tenant_id: tenantId,
     contact_id: contactId,
     user_phone: userPhone,
