@@ -18,6 +18,7 @@ const TOKEN_LIMITS = {
   whatsapp: 1200,
   whatsapp_retry: 1600,
   whatsapp_vision: 1500,
+  appointment_agent: 1200,
 };
 
 /**
