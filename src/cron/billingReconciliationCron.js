@@ -2,6 +2,7 @@ import cron from "node-cron";
 import { logger } from "../utils/logger.js";
 import { getRedisConnection } from "../queues/campaignQueue.js";
 import db from "../database/index.js";
+import { releaseBillingHold } from "../services/billingHold.service.js";
 
 /**
  * B-2: Reconciliation cron for orphaned Redis reservation keys.
@@ -26,7 +27,44 @@ const ABANDONED_THRESHOLD_MS = 30 * 60 * 1000; // 30 minutes
  * Scans Redis for all reservation:* keys and reconciles them against
  * campaign finalization status in the database.
  */
+const reconcileDatabaseHolds = async () => {
+  const expired = await db.BillingHolds.findAll({
+    where: { status: "active", expires_at: { [db.Sequelize.Op.lte]: new Date() } },
+    attributes: ["hold_id"],
+    limit: 500,
+    raw: true,
+  });
+  const orphanCandidates = await db.BillingHolds.findAll({
+    where: {
+      status: "active",
+      createdAt: { [db.Sequelize.Op.lte]: new Date(Date.now() - ABANDONED_THRESHOLD_MS) },
+    },
+    attributes: ["hold_id", "tenant_id", "campaign_id"],
+    limit: 500,
+    raw: true,
+  });
+  for (const hold of orphanCandidates) {
+    if (!hold.campaign_id) continue;
+    const campaign = await db.WhatsappCampaigns.findOne({
+      where: { campaign_id: hold.campaign_id, tenant_id: hold.tenant_id, is_deleted: false },
+      attributes: ["status"],
+      raw: true,
+    });
+    if (!campaign || ["cancelled", "failed"].includes(campaign.status)) {
+      await releaseBillingHold(hold.hold_id, "campaign_orphaned");
+    }
+  }
+  let released = 0;
+  for (const hold of expired) {
+    if (await releaseBillingHold(hold.hold_id, "expired_or_orphaned")) released++;
+  }
+  if (released > 0) {
+    logger.info(`[BILLING-RECONCILIATION] Released ${released} expired database billing hold(s)`);
+  }
+};
 const reconcileOrphanedReservations = async () => {
+  await reconcileDatabaseHolds();
+
   const redis = getRedisConnection();
   if (!redis) {
     logger.warn(

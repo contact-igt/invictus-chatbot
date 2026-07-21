@@ -1,4 +1,6 @@
 import db from "../../database/index.js";
+import { checkBillingAccess } from "../../services/billingAccess.service.js";
+export { checkBillingAccess };
 import {
   estimateMetaCost,
   estimateAiCost,
@@ -27,108 +29,6 @@ const handleBillingGuardFailure = async (res, guardName, tenant_id, error) => {
     reason:
       "Billing validation is temporarily unavailable. Please try again shortly.",
   });
-};
-
-/**
- * Core billing access check. estimated_cost is REQUIRED — never defaults to 0.
- *
- * @param {string} tenant_id
- * @param {number} estimated_cost - Must be computed by caller
- * @returns {Promise<{ allowed: boolean, billing_mode: string, reason?: string, required?: number, available?: number, shortfall?: number }>}
- */
-export const checkBillingAccess = async (tenant_id, estimated_cost) => {
-  const tenant = await db.Tenants.findOne({
-    where: { tenant_id },
-    attributes: ["billing_mode", "postpaid_credit_limit"],
-    raw: true,
-  });
-  const billing_mode = tenant?.billing_mode || "prepaid";
-
-  if (billing_mode === "prepaid") {
-    const wallet = await db.Wallets.findOne({
-      where: { tenant_id },
-      attributes: ["balance"],
-      raw: true,
-    });
-    const balance = wallet ? parseFloat(wallet.balance) || 0 : 0;
-
-    if (balance >= estimated_cost) {
-      return { allowed: true, billing_mode };
-    }
-
-    return {
-      allowed: false,
-      blocked: true,
-      billing_mode,
-      reason: `Insufficient balance. Required: ₹${estimated_cost.toFixed(2)}, Available: ₹${balance.toFixed(2)}`,
-      required: estimated_cost,
-      available: balance,
-      shortfall: estimated_cost - balance,
-    };
-  }
-
-  // Postpaid
-  // Check overdue invoices AND unpaid invoices past due date (real-time check)
-  const overdueInvoice = await db.MonthlyInvoices.findOne({
-    where: {
-      tenant_id,
-      [db.Sequelize.Op.or]: [
-        { status: "overdue" },
-        {
-          status: "unpaid",
-          due_date: { [db.Sequelize.Op.lt]: new Date() },
-        },
-      ],
-    },
-    attributes: ["invoice_number"],
-    raw: true,
-  });
-
-  if (overdueInvoice) {
-    return {
-      allowed: false,
-      blocked: true,
-      billing_mode,
-      reason: "You have an unpaid overdue invoice. Please pay to continue.",
-    };
-  }
-
-  // Check credit limit
-  const creditLimit = parseFloat(tenant?.postpaid_credit_limit) || 5000;
-  const activeCycle = await db.BillingCycles.findOne({
-    where: { tenant_id, status: "active" },
-    attributes: ["total_cost_inr"],
-    raw: true,
-  });
-  const currentUsage = activeCycle
-    ? parseFloat(activeCycle.total_cost_inr) || 0
-    : 0;
-
-  if (currentUsage + estimated_cost > creditLimit) {
-    return {
-      allowed: false,
-      blocked: true,
-      billing_mode,
-      reason: `Monthly credit limit of ₹${creditLimit.toFixed(2)} would be exceeded.`,
-      required: estimated_cost,
-      available: creditLimit - currentUsage,
-    };
-  }
-
-  // Emit 80% credit warning (but still allow)
-  if (currentUsage >= creditLimit * 0.8) {
-    try {
-      const { getIO } = await import("../../middlewares/socket/socket.js");
-      const io = getIO();
-      io.to(`tenant-${tenant_id}`).emit("credit-limit-warning", {
-        usage: currentUsage,
-        limit: creditLimit,
-        percent: Math.round((currentUsage / creditLimit) * 100),
-      });
-    } catch (_) {}
-  }
-
-  return { allowed: true, billing_mode };
 };
 
 /**

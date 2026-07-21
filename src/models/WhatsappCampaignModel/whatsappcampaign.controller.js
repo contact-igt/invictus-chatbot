@@ -65,23 +65,14 @@ export const estimateCampaignCostController = async (req, res) => {
     const perMessageCostInr = cost.totalCostInr;
     const totalCostInr = perMessageCostInr * recipientCount;
 
-    // Get wallet balance for comparison
-    const wallet = await db.Wallets.findOne({
-      where: { tenant_id },
-      attributes: ["balance"],
-      raw: true,
-    });
-    const walletBalance = wallet ? parseFloat(wallet.balance) || 0 : 0;
+    const access = await checkBillingAccess(tenant_id, totalCostInr);
 
     return res.status(200).json({
       success: true,
       category,
       recipient_count: recipientCount,
       per_message_cost_inr: perMessageCostInr,
-      total_cost_inr: totalCostInr,
-      wallet_balance: walletBalance,
-      is_sufficient: walletBalance >= totalCostInr,
-      shortfall: Math.max(0, totalCostInr - walletBalance),
+      ...access,
       base_rate_usd: cost.baseRate,
       markup_percent: cost.markupPercent,
       conversion_rate: cost.conversionRate,
@@ -235,7 +226,13 @@ export const createCampaignController = async (req, res) => {
           "[CAMPAIGN-CREATE] Billing check error:",
           billingErr.message,
         );
-        // Fail open on billing check error — don't block campaign creation
+        return res.status(503).json({
+          success: false,
+          blocked: true,
+          blocked_reason:
+            "Billing validation is temporarily unavailable. Please try again.",
+          message: "Billing validation is temporarily unavailable. Please try again.",
+        });
       }
     }
 
@@ -328,7 +325,11 @@ export const updateCampaignStatusController = async (req, res) => {
     );
     return res.status(200).json({ success: true, data: result });
   } catch (err) {
-    return res.status(500).json({ success: false, message: err.message });
+    return res.status(err.statusCode || 500).json({
+      success: false,
+      message: err.message,
+      ...(err.billingAccess || {}),
+    });
   }
 };
 

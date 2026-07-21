@@ -29,7 +29,7 @@ import {
 } from "../queues/campaignQueue.js";
 import { estimateMetaCost } from "../utils/billing/costEstimator.js";
 import { getRedisLock } from "../utils/redis/redisLock.js";
-import { getCampaignBillingService } from "../services/campaignBillingService.js";
+import { createBillingHold, releaseBillingHold } from "../services/billingHold.service.js";
 import db from "../database/index.js";
 import { ensureTenantSendWorker } from "./campaignSendWorker.js";
 import { recordCampaignDiagnosticEvent } from "../utils/campaignDiagnosticsEvents.js";
@@ -47,9 +47,9 @@ if (!enqueueSendJobs) {
 
 const PAGE_SIZE = parseInt(process.env.CAMPAIGN_DISPATCH_PAGE_SIZE || "500");
 const LOCK_TTL = parseInt(process.env.CAMPAIGN_DISPATCH_LOCK_TTL || "120"); // seconds
-const BILLING_RESERVATION_TTL = parseInt(
-  process.env.CAMPAIGN_BILLING_RESERVATION_TTL || "1800",
-  10,
+const BILLING_HOLD_TTL = Math.max(
+  3600,
+  parseInt(process.env.CAMPAIGN_BILLING_HOLD_TTL || "86400", 10),
 );
 
 const emitCampaignPaused = (tenant_id, campaign_id, paused_reason) => {
@@ -85,9 +85,9 @@ async function processDispatchJob(job) {
   const redis = getRedisConnection();
   const dispatchQueue = getCampaignDispatchQueue();
   let sendQueue = null;
-  let billingReservation = null;
+  let billingHoldId = null;
   let billingSettlement = "none";
-  let consumedBillingAmount = 0;
+  let authorizedBillingMode = null;
 
   if (!redis || !dispatchQueue) {
     logger.warn(
@@ -107,7 +107,6 @@ async function processDispatchJob(job) {
   }
 
   const redisLock = getRedisLock(redis);
-  const billingService = getCampaignBillingService(redis);
 
   // ── Acquire improved distributed Redis lock ─────────────────────────────────
   const lockKey = `campaign:dispatch:${campaign_id}`;
@@ -221,20 +220,19 @@ async function processDispatchJob(job) {
           perRecipientCost = Number(cost.totalCostInr) || 0;
           const batchCost = perRecipientCost * recipients.length;
 
-          const reservationResult = await billingService.createReservation(
-            tenant_id,
-            batchCost,
-            BILLING_RESERVATION_TTL,
-            campaign_id,
-          ); // 5 min TTL
-
-          if (!reservationResult.success) {
-            logger.warn(
-              `[DISPATCH-WORKER] Campaign ${campaign_id} billing reservation failed — ${reservationResult.reason}`,
-            );
+          const holdResult = await createBillingHold({
+            tenantId: tenant_id,
+            amount: batchCost,
+            ttlSeconds: BILLING_HOLD_TTL,
+            campaignId: campaign_id,
+            metadata: {
+              recipient_count: recipients.length,
+              per_recipient_cost: perRecipientCost,
+            },
+          });
+          if (!holdResult.success) {
             const pausedReason =
-              reservationResult.reason ||
-              `Insufficient wallet balance - required INR ${batchCost}`;
+              holdResult.access?.blocked_reason || "Billing access denied";
             await campaign.update({
               status: "paused",
               paused_reason: pausedReason,
@@ -242,16 +240,24 @@ async function processDispatchJob(job) {
             emitCampaignPaused(tenant_id, campaign_id, pausedReason);
             return;
           }
-
-          billingReservation = reservationResult.reservationId;
-          billingSettlement = "release";
+          billingHoldId = holdResult.hold?.hold_id || null;
+          authorizedBillingMode = holdResult.access.billing_mode;
+          billingSettlement = billingHoldId ? "release" : "none";
           logger.info(
-            `[DISPATCH-WORKER] Billing reservation created: ${billingReservation} for ₹${batchCost}`,
+            `[DISPATCH-WORKER] Billing authorized mode=${authorizedBillingMode} hold=${billingHoldId || "none"} amount=INR ${batchCost}`,
           );
         } catch (billingErr) {
-          logger.error(
-            `[DISPATCH-WORKER] Billing check error for ${campaign_id}: ${billingErr.message}`,
-          );
+          const pausedReason = `Billing validation failed internally: ${billingErr.message}`;
+          logger.error(`[DISPATCH-WORKER] ${pausedReason} campaign=${campaign_id}`);
+          await campaign.update({ status: "paused", paused_reason: pausedReason });
+          recordCampaignDiagnosticEvent({
+            source: "dispatch-worker",
+            type: "error",
+            level: "error",
+            message: pausedReason,
+            meta: { campaign_id, tenant_id, billing_error: billingErr.message },
+          });
+          emitCampaignPaused(tenant_id, campaign_id, pausedReason);
           return;
         }
       }
@@ -310,6 +316,22 @@ async function processDispatchJob(job) {
     }
 
     // ── Enqueue send jobs using addBulk with chunking and fallback ─────────
+    if (authorizedBillingMode) {
+      await db.WhatsappCampaignRecipients.update(
+        {
+          billing_hold_id: billingHoldId,
+          authorized_billing_mode: authorizedBillingMode,
+          authorized_cost_inr: perRecipientCost,
+        },
+        {
+          where: {
+            id: {
+              [db.Sequelize.Op.in]: recipients.map((recipient) => recipient.id),
+            },
+          },
+        },
+      );
+    }
     const { totalEnqueued, totalFailed, durationMs } = await enqueueSendJobs(
       sendQueue,
       campaign.campaign_id || campaign_id,
@@ -318,7 +340,8 @@ async function processDispatchJob(job) {
     );
 
     const enqueued = totalEnqueued;
-    if (billingReservation) {
+    if (billingHoldId) {
+      billingSettlement = enqueued > 0 ? "hold" : "release";
       const statusBeforeFanOut = await db.WhatsappCampaigns.findOne({
         where: { campaign_id, tenant_id, is_deleted: false },
         attributes: ["status"],
@@ -334,9 +357,6 @@ async function processDispatchJob(job) {
         );
         return;
       }
-
-      consumedBillingAmount = Number((perRecipientCost * enqueued).toFixed(6));
-      billingSettlement = consumedBillingAmount > 0 ? "confirm" : "release";
     }
 
     logger.info(
@@ -377,46 +397,13 @@ async function processDispatchJob(job) {
       );
     }
   } finally {
-    // Settle billing reservation if it exists
-    if (billingReservation) {
+    // Holds remain active after enqueue and are consumed by pricing webhooks.
+    if (billingHoldId && billingSettlement === "release") {
       try {
-        if (billingSettlement === "confirm") {
-          const confirmed = await billingService.confirmReservation(
-            tenant_id,
-            billingReservation,
-            consumedBillingAmount,
-          );
-
-          if (confirmed) {
-            logger.debug(
-              `[DISPATCH-WORKER] Billing reservation confirmed: ${billingReservation} (consumed ₹${consumedBillingAmount})`,
-            );
-          } else {
-            logger.error(
-              `[DISPATCH-WORKER] ALERT billing reservation confirmation failed for ${billingReservation} campaign=${campaign_id} tenant=${tenant_id} consumed=${consumedBillingAmount}. Attempting release.`,
-            );
-            const released = await billingService.releaseReservation(
-              tenant_id,
-              billingReservation,
-            );
-            if (!released) {
-              logger.error(
-                `[DISPATCH-WORKER] ALERT billing reservation ${billingReservation} could not be confirmed or released; wallet discrepancy requires reconciliation.`,
-              );
-            }
-          }
-        } else {
-          await billingService.releaseReservation(
-            tenant_id,
-            billingReservation,
-          );
-          logger.debug(
-            `[DISPATCH-WORKER] Billing reservation released: ${billingReservation}`,
-          );
-        }
+        await releaseBillingHold(billingHoldId, "dispatch_not_enqueued");
       } catch (err) {
         logger.error(
-          `[DISPATCH-WORKER] ALERT failed to settle billing reservation ${billingReservation} campaign=${campaign_id} tenant=${tenant_id}: ${err.message}`,
+          `[DISPATCH-WORKER] Failed to release billing hold ${billingHoldId}: ${err.message}`,
         );
       }
     }

@@ -47,10 +47,11 @@ export const createUserMessageService = async (
   media_url,
   media_mime_type,
   status,
+  billing_mode_snapshot,
   template_name,
   interactive_payload,
   media_filename )
-   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) `;
+   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) `;
 
   try {
     let cleanPhone = phone ? phone.toString().replace(/\D/g, "") : "";
@@ -63,6 +64,15 @@ export const createUserMessageService = async (
       // It's already 10 digits, keep default cc or retrieve from contact
     }
 
+    let billingModeSnapshot = null;
+    if (sender !== "user" && wamid) {
+      const tenant = await db.Tenants.findOne({
+        where: { tenant_id },
+        attributes: ["billing_mode"],
+        raw: true,
+      });
+      billingModeSnapshot = tenant?.billing_mode || "prepaid";
+    }
     const values = [
       tenant_id,
       contact_id,
@@ -78,6 +88,7 @@ export const createUserMessageService = async (
       media_url,
       media_mime_type,
       status,
+      billingModeSnapshot,
       template_name,
       interactive_payload,
       media_filename,
