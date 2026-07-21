@@ -20,6 +20,7 @@ import {
 import cron from "node-cron";
 import { generateWhatsAppOTPService } from "../OtpVerificationModel/otpverification.service.js";
 import { estimateMetaCost } from "../../utils/billing/costEstimator.js";
+import { checkBillingAccess } from "../../services/billingAccess.service.js";
 import {
   isCampaignQueueAvailable,
   getCampaignDispatchQueue,
@@ -1149,6 +1150,40 @@ export const updateCampaignStatusService = async (
   const normalizedStatus = String(status || "")
     .trim()
     .toLowerCase();
+  if (normalizedStatus === "active") {
+    const campaign = await db.WhatsappCampaigns.findOne({
+      where: { tenant_id, campaign_id, is_deleted: false },
+      include: [{ model: db.WhatsappTemplates, as: "template", attributes: ["category"] }],
+      attributes: ["campaign_id"],
+    });
+    if (!campaign) throw new Error("Campaign not found");
+
+    const pendingCount = await db.WhatsappCampaignRecipients.count({
+      where: { campaign_id, status: "pending", is_deleted: false },
+    });
+    const batchSize = Math.min(pendingCount, Number(process.env.CAMPAIGN_DISPATCH_PAGE_SIZE) || 500);
+    let estimatedCost = 0;
+    if (batchSize > 0) {
+      const tenant = await db.Tenants.findOne({
+        where: { tenant_id },
+        attributes: ["country", "owner_country_code", "timezone"],
+        raw: true,
+      });
+      const isIndia = tenant?.owner_country_code === "91" || tenant?.timezone === "Asia/Kolkata";
+      const cost = await estimateMetaCost(
+        (campaign.template?.category || "marketing").toLowerCase(),
+        tenant?.country || (isIndia ? "IN" : "Global"),
+      );
+      estimatedCost = (Number(cost.totalCostInr) || 0) * batchSize;
+    }
+    const access = await checkBillingAccess(tenant_id, estimatedCost);
+    if (!access.allowed) {
+      const error = new Error(access.blocked_reason || "Billing access denied");
+      error.statusCode = 403;
+      error.billingAccess = access;
+      throw error;
+    }
+  }
   const updateFields = { status };
   if (normalizedStatus === "active") {
     updateFields.paused_reason = null;

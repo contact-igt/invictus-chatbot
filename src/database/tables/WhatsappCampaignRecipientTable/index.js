@@ -45,6 +45,13 @@ export const WhatsappCampaignRecipientTable = (sequelize, Sequelize) => {
         allowNull: true,
       },
 
+      billing_hold_id: { type: Sequelize.STRING(96), allowNull: true },
+      authorized_billing_mode: {
+        type: Sequelize.ENUM("prepaid", "postpaid"),
+        allowNull: true,
+      },
+      authorized_cost_inr: { type: Sequelize.DECIMAL(15, 6), allowNull: true },
+
       error_message: {
         type: Sequelize.TEXT,
         allowNull: true,
@@ -128,6 +135,10 @@ export const WhatsappCampaignRecipientTable = (sequelize, Sequelize) => {
         {
           name: "idx_recipient_meta_id",
           fields: ["meta_message_id"],
+        },
+        {
+          name: "idx_recipient_billing_hold",
+          fields: ["billing_hold_id"],
         },
         {
           name: "idx_recipient_mobile",

@@ -1,4 +1,5 @@
 import db from "../../database/index.js";
+import { checkBillingAccess } from "../../services/billingAccess.service.js";
 import { getIO } from "../../middlewares/socket/socket.js";
 import { logger } from "../logger.js";
 
@@ -97,136 +98,12 @@ export const checkWalletStatus = async (tenant_id) => {
   }
 };
 
-/**
- * CORE PREPAID VALIDATION — check if tenant can afford a specific cost.
- * Rule: allowed = (balance >= required_cost)
- *
- * @param {string} tenant_id
- * @param {number} required_cost - Must be calculated by caller, NEVER defaults to 0
- * @returns {Promise<{ allowed: boolean, balance: number, required: number, shortfall: number }>}
- */
-export const canAfford = async (tenant_id, required_cost) => {
-  const wallet = await db.Wallets.findOne({ where: { tenant_id } });
-  const balance = wallet ? parseFloat(wallet.balance) || 0 : 0;
+/** Compatibility wrappers around the canonical billing-access service. */
+export const checkPostpaidAccess = async (tenant_id, estimated_cost = 0) =>
+  checkBillingAccess(tenant_id, estimated_cost);
 
-  if (balance >= required_cost) {
-    return { allowed: true, balance, required: required_cost, shortfall: 0 };
-  }
-
-  return {
-    allowed: false,
-    balance,
-    required: required_cost,
-    shortfall: required_cost - balance,
-  };
-};
-
-/**
- * Check postpaid access — overdue invoices OR credit limit exceeded blocks usage.
- *
- * @param {string} tenant_id
- * @param {number} estimated_cost - Estimated cost of the current operation
- * @returns {Promise<{ allowed: boolean, reason?: string, usage?: number, limit?: number }>}
- */
-export const checkPostpaidAccess = async (tenant_id, estimated_cost = 0) => {
-  // 1. Check overdue invoices AND unpaid invoices past due date (real-time check)
-  const overdueInvoice = await db.MonthlyInvoices.findOne({
-    where: {
-      tenant_id,
-      [db.Sequelize.Op.or]: [
-        { status: "overdue" },
-        {
-          status: "unpaid",
-          due_date: { [db.Sequelize.Op.lt]: new Date() },
-        },
-      ],
-    },
-  });
-
-  if (overdueInvoice) {
-    return {
-      allowed: false,
-      reason: "You have an unpaid overdue invoice. Please pay to continue.",
-      invoice_number: overdueInvoice.invoice_number,
-    };
-  }
-
-  // 2. Check credit limit
-  const tenant = await db.Tenants.findOne({
-    where: { tenant_id },
-    attributes: ["postpaid_credit_limit"],
-    raw: true,
-  });
-  const creditLimit = parseFloat(tenant?.postpaid_credit_limit) || 5000;
-
-  const activeCycle = await db.BillingCycles.findOne({
-    where: { tenant_id, status: "active" },
-    raw: true,
-  });
-
-  const currentUsage = activeCycle
-    ? parseFloat(activeCycle.total_cost_inr) || 0
-    : 0;
-
-  if (currentUsage + estimated_cost > creditLimit) {
-    return {
-      allowed: false,
-      reason: `Monthly credit limit of ₹${creditLimit.toFixed(2)} would be exceeded.`,
-      usage: currentUsage,
-      limit: creditLimit,
-    };
-  }
-
-  // Emit 80% warning (but still allow)
-  if (currentUsage >= creditLimit * 0.8) {
-    try {
-      const io = getIO();
-      io.to(`tenant-${tenant_id}`).emit("credit-limit-warning", {
-        usage: currentUsage,
-        limit: creditLimit,
-        percent: Math.round((currentUsage / creditLimit) * 100),
-      });
-    } catch (_) {}
-  }
-
-  return { allowed: true, usage: currentUsage, limit: creditLimit };
-};
-
-/**
- * Unified check — routes to prepaid or postpaid logic.
- *
- * @param {string} tenant_id
- * @param {number} estimated_cost - REQUIRED. Caller must compute this.
- * @returns {Promise<{ allowed: boolean, billing_mode: string, reason?: string, balance?: number, required?: number, shortfall?: number }>}
- */
-export const canSendMessage = async (tenant_id, estimated_cost) => {
-  const tenant = await db.Tenants.findOne({
-    where: { tenant_id },
-    attributes: ["billing_mode"],
-    raw: true,
-  });
-  const billing_mode = tenant?.billing_mode || "prepaid";
-
-  if (billing_mode === "postpaid") {
-    const result = await checkPostpaidAccess(tenant_id, estimated_cost);
-    return { ...result, billing_mode };
-  }
-
-  // Prepaid
-  const result = await canAfford(tenant_id, estimated_cost);
-  if (result.allowed) {
-    return { allowed: true, billing_mode, balance: result.balance };
-  }
-
-  return {
-    allowed: false,
-    billing_mode,
-    reason: `Insufficient balance. Required: ₹${estimated_cost.toFixed(2)}, Available: ₹${result.balance.toFixed(2)}`,
-    balance: result.balance,
-    required: result.required,
-    shortfall: result.shortfall,
-  };
-};
+export const canSendMessage = async (tenant_id, estimated_cost) =>
+  checkBillingAccess(tenant_id, estimated_cost);
 
 /**
  * Check if tenant can use AI features.

@@ -11,7 +11,8 @@
     "seed:allprice": "node src/scripts/seed_all_pricing.js",
     "debug:campaign": "node src/scripts/debugCampaign.js",
     "debug:campaign:failed": "node src/scripts/debugCampaignFailed.js",
-    "start:campaign-workers": "node src/scripts/startCampaignWorkers.js"
+    "start:campaign-workers": "node src/scripts/startCampaignWorkers.js",
+    "test:billing": "node --experimental-vm-modules node_modules/jest/bin/jest.js tests/billingAccess.service.test.js --runInBand"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1026.0",

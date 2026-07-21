@@ -37,6 +37,11 @@ export const MessageUsageTable = (sequelize, Sequelize) => {
         allowNull: false,
       },
 
+      billing_mode_snapshot: {
+        type: Sequelize.ENUM("prepaid", "postpaid"),
+        allowNull: true,
+      },
+
       status: {
         type: Sequelize.ENUM("sent", "delivered", "read", "failed"),
         allowNull: false,

@@ -39,6 +39,12 @@ export const BillingLedgerTable = (sequelize, Sequelize) => {
         comment: "Discriminator: message billing vs AI token billing",
       },
 
+      billing_mode_snapshot: {
+        type: Sequelize.ENUM("prepaid", "postpaid"),
+        allowNull: true,
+        comment: "Billing mode authorized when the send started",
+      },
+
       template_name: {
         type: Sequelize.STRING,
         allowNull: true,

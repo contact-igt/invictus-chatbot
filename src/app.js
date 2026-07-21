@@ -257,41 +257,6 @@ initBillingReconciliationCron();
 // enqueue BullMQ jobs on its very first tick.
 initCampaignQueues()
   .then(async () => {
-    // Sync wallet balances to Redis cache for atomic billing
-    try {
-      const { getCampaignBillingService } =
-        await import("./services/campaignBillingService.js");
-      const { getRedisConnection } = await import("./queues/campaignQueue.js");
-
-      const redis = getRedisConnection();
-      if (redis) {
-        const billingService = getCampaignBillingService(redis);
-
-        // Sync all active tenant wallets to Redis (fire and forget)
-        const tenants = await db.Tenants.findAll({
-          where: { is_deleted: false },
-          attributes: ["tenant_id"],
-          raw: true,
-        });
-
-        for (const tenant of tenants) {
-          billingService
-            .syncWalletBalance(tenant.tenant_id)
-            .catch((err) =>
-              logger.debug(
-                `[STARTUP] Failed to sync wallet for ${tenant.tenant_id}: ${err.message}`,
-              ),
-            );
-        }
-
-        logger.info(
-          `[STARTUP] Wallet balance sync initiated for ${tenants.length} tenants`,
-        );
-      }
-    } catch (syncErr) {
-      logger.warn(`[STARTUP] Wallet sync failed: ${syncErr.message}`);
-    }
-
     startCampaignDispatchWorker();
     await startCampaignSendWorker();
     logger.info(

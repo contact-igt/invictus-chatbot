@@ -115,6 +115,11 @@ export const MessagesTable = (sequelize, Sequelize) => {
         comment: "Delivery status for outgoing messages",
       },
 
+      billing_mode_snapshot: {
+        type: Sequelize.ENUM("prepaid", "postpaid"),
+        allowNull: true,
+        comment: "Billing mode authorized for an outbound message",
+      },
       billing_reconciliation_status: {
         type: Sequelize.ENUM("resolved", "unresolved_billing"),
         allowNull: true,
