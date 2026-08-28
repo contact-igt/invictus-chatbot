@@ -1,19 +1,120 @@
 import { callAI } from "../../utils/ai/coreAi.js";
-import { buildChatHistory } from "../../utils/chat/buildChatHistory.js";
 import { searchKnowledgeChunks } from "../Knowledge/knowledge.search.js";
 import { getConversationMemory } from "../Messages/messages.memory.js";
-import { getDoctorListService } from "../DoctorModel/doctor.service.js";
 import { getTenantSettingsService } from "../TenantModel/tenant.service.js";
 import { buildTextPayload } from "./whatsappAppointmentTemplates.service.js";
-import { createAppointmentService } from "./appointment.service.js";
 
 export const APPOINTMENT_BOOKING_TYPES = {
   STATE_MACHINE: "state_machine",
   AI_AGENT: "ai_agent",
 };
 
-const DEFAULT_APPOINTMENT_BOOKING_AI_PROMPT =
-  "Help patients book appointments for this organization. Ask for one missing detail at a time. Use the knowledge base and available doctor list only. Do not answer unrelated questions.";
+export const DEFAULT_APPOINTMENT_AI_INTAKE_PROMPT = `You are a friendly appointment assistant.
+
+Your role is only to collect an appointment request.
+Do not create, confirm, schedule, or reserve an appointment.
+
+By default, collect only:
+
+1. Name
+2. Email
+3. Reason for visit
+
+Ask only one missing question at a time.
+
+Keep every reply short, natural, and suitable for WhatsApp.
+
+Do not repeat information the patient already provided.
+
+Do not add unnecessary acknowledgements before every question.
+
+For example:
+
+Instead of:
+"Thank you for providing your name. Could you please provide your email address?"
+
+Say:
+"Please share your email address."
+
+Instead of:
+"Thank you for providing your email address. Could you please tell me the reason for your visit?"
+
+Say:
+"What is the reason for your visit?"
+
+Do not repeatedly mention that you are collecting appointment information.
+
+Do not say:
+- "the organization"
+- "the organization team"
+- "our organization"
+
+Always use:
+- "our team"
+- "we"
+- "us"
+
+Default conversation:
+
+Patient:
+I want to book an appointment.
+
+Assistant:
+Sure. May I know your name?
+
+Patient:
+Rahul
+
+Assistant:
+Please share your email address.
+
+Patient:
+rahul@example.com
+
+Assistant:
+What is the reason for your visit?
+
+Patient:
+Eye checkup
+
+Assistant:
+Thank you for sharing your details. Our team will contact you shortly regarding your appointment request.
+
+When all required details are collected, return \`intake_complete\`.
+
+Never say:
+- Your appointment is booked
+- Your appointment is confirmed
+- Your slot is reserved
+- Appointment ID
+- Token number
+
+Do not ask for doctor, date, time, or slot by default.
+
+If a tenant-specific Appointment Booking AI Agent Prompt is configured,
+follow that prompt for which questions to ask and how to ask them,
+while still following the hard rule that no real appointment is created.
+
+Never invent missing information.
+
+Return valid JSON only.`;
+
+export const DEFAULT_APPOINTMENT_INTAKE_COMPLETION_REPLY =
+  "Thank you for sharing your details. Our team will contact you shortly regarding your appointment request.";
+
+const VALID_APPOINTMENT_INTAKE_ACTIONS = new Set([
+  "ask_details",
+  "answer",
+  "intake_complete",
+  "out_of_scope",
+]);
+
+const MAX_APPOINTMENT_INTAKE_HISTORY = 40;
+const DEFAULT_REQUIRED_FIELDS = [
+  { key: "patient_name", label: "Name" },
+  { key: "email", label: "Email" },
+  { key: "reason", label: "Reason for visit" },
+];
 
 const parseAiSettings = (value) => {
   if (!value) return {};
@@ -32,6 +133,15 @@ const normalizeAppointmentBookingType = (value) =>
     ? APPOINTMENT_BOOKING_TYPES.AI_AGENT
     : APPOINTMENT_BOOKING_TYPES.STATE_MACHINE;
 
+export const selectAppointmentIntakeInstructions = (value) => {
+  const customPrompt = typeof value === "string" ? value.trim() : "";
+  return {
+    appointment_booking_ai_prompt:
+      customPrompt || DEFAULT_APPOINTMENT_AI_INTAKE_PROMPT,
+    uses_default_appointment_booking_ai_prompt: !customPrompt,
+  };
+};
+
 export const getAppointmentBookingAutomationSettings = async (tenantId) => {
   const tenantSettings = await getTenantSettingsService(tenantId).catch(
     () => null,
@@ -40,15 +150,13 @@ export const getAppointmentBookingAutomationSettings = async (tenantId) => {
   const appointmentBookingType = normalizeAppointmentBookingType(
     aiSettings.appointment_booking_type,
   );
-  const appointmentBookingAiPrompt =
-    typeof aiSettings.appointment_booking_ai_prompt === "string" &&
-    aiSettings.appointment_booking_ai_prompt.trim()
-      ? aiSettings.appointment_booking_ai_prompt.trim()
-      : DEFAULT_APPOINTMENT_BOOKING_AI_PROMPT;
+  const intakeInstructions = selectAppointmentIntakeInstructions(
+    aiSettings.appointment_booking_ai_prompt,
+  );
 
   return {
     appointment_booking_type: appointmentBookingType,
-    appointment_booking_ai_prompt: appointmentBookingAiPrompt,
+    ...intakeInstructions,
     tenantSettings,
   };
 };
@@ -79,105 +187,375 @@ const safeParseJson = (raw = "") => {
 const normalizeText = (value) =>
   typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
 
-const normalizeDateOnly = (value) => {
-  const text = normalizeText(value);
-  const match = text.match(/^(\d{4}-\d{2}-\d{2})/);
-  return match ? match[1] : "";
+const normalizeAdditionalFields = (value) =>
+  value && typeof value === "object" && !Array.isArray(value)
+    ? { ...value }
+    : {};
+
+const normalizeFieldKey = (value) => {
+  const key = normalizeText(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  const aliases = {
+    name: "patient_name",
+    full_name: "patient_name",
+    patient_full_name: "patient_name",
+    email_address: "email",
+    reason_for_visit: "reason",
+    visit_reason: "reason",
+    existing_patient_status: "existing_patient",
+    city: "city_location",
+    location: "city_location",
+    location_city: "city_location",
+  };
+  return aliases[key] || key;
 };
 
-const findDoctorForBooking = (doctors = [], booking = {}) => {
-  const doctorId = normalizeText(booking.doctor_id);
-  if (doctorId) {
-    const byId = doctors.find((doctor) => doctor.doctor_id === doctorId);
-    if (byId) return byId;
+const fieldLabelFromKey = (key) =>
+  key
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+
+const GENERIC_NON_VALUES = new Set([
+  "ok",
+  "okay",
+  "alright",
+  "sure",
+  "fine",
+  "continue",
+  "go ahead",
+  "next",
+  "thanks",
+  "thank you",
+]);
+const CONTENT_FIELD_KEYS = new Set([
+  "patient_name",
+  "email",
+  "age",
+  "reason",
+  "preferred_callback_time",
+  "preferred_language",
+  "city_location",
+]);
+
+export const isValidAppointmentIntakeFieldValue = (rawKey, value) => {
+  const key = normalizeFieldKey(rawKey);
+  const text = normalizeText(value === null || value === undefined ? "" : String(value));
+  if (!key || !text) return false;
+  if (key === "email") return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text);
+  if (key === "age") {
+    const match = text.match(/^(\d{1,3})(?:\s*years?(?:\s*old)?)?$/i);
+    return Boolean(match && Number(match[1]) > 0 && Number(match[1]) <= 120);
+  }
+  if (CONTENT_FIELD_KEYS.has(key)) {
+    return !GENERIC_NON_VALUES.has(text.toLowerCase()) && !/^(?:yes|no)$/i.test(text);
+  }
+  return true;
+};
+
+const normalizeRequiredFields = (value) => {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set();
+  return value
+    .map((field) => {
+      const rawKey = typeof field === "string" ? field : field?.key;
+      const key = normalizeFieldKey(rawKey);
+      if (!key || seen.has(key)) return null;
+      seen.add(key);
+      return {
+        key,
+        label:
+          normalizeText(typeof field === "object" ? field?.label : "") ||
+          fieldLabelFromKey(key),
+      };
+    })
+    .filter(Boolean);
+};
+
+const splitInlineFieldLabels = (value = "") =>
+  normalizeText(value)
+    .replace(/^only\s+/i, "")
+    .split(/[.;]/, 1)[0]
+    .split(/\s*,\s*|\s+and\s+/i)
+    .map((label) => normalizeText(label.replace(/^and\s+/i, "")))
+    .filter(Boolean);
+
+const cleanFieldLabel = (value = "") => {
+  const label = normalizeText(value)
+    .replace(/^[\-*•]\s*/, "")
+    .replace(/^\d+[.)]\s*/, "")
+    .replace(/[*`]/g, "")
+    .split(/\s+[–—]\s+/, 1)[0]
+    .replace(/\s*\((?:required|mandatory)\)\s*$/i, "")
+    .replace(/\s*[-–—:]\s*(?:required|mandatory)\s*$/i, "");
+  return /\boptional\b/i.test(label) ? "" : label;
+};
+
+const readFieldSection = (lines, headingIndex, inlineValue = "") => {
+  const labels = splitInlineFieldLabels(inlineValue).map(cleanFieldLabel);
+  for (let index = headingIndex + 1; index < lines.length; index += 1) {
+    const line = lines[index].trim();
+    if (!line) continue;
+    if (/^[A-Za-z][A-Za-z0-9 &/_-]{1,60}:\s*$/.test(line)) break;
+    const item = line.match(/^(?:[-*•]|\d+[.)])\s+(.+)$/);
+    if (!item) break;
+    const label = cleanFieldLabel(item[1]);
+    if (label) labels.push(label);
+  }
+  return labels.filter(Boolean);
+};
+
+export const deriveAppointmentRequiredFields = ({
+  tenantInstructions,
+  usesDefaultPrompt = false,
+} = {}) => {
+  if (usesDefaultPrompt) return DEFAULT_REQUIRED_FIELDS.map((field) => ({ ...field }));
+
+  const lines = String(tenantInstructions || "").split(/\r?\n/);
+  const headings = [
+    /^\s*(?:#{1,6}\s*)?required fields?\s*:\s*(.*)$/i,
+    /^\s*(?:#{1,6}\s*)?collect(?: only)?\s*:\s*(.*)$/i,
+    /^\s*(?:for .+?,\s*)?collect the following (?:information|details|fields)\s*:\s*(.*)$/i,
+    /^\s*collect(?: only)?\s+(.+)$/i,
+  ];
+  for (const heading of headings) {
+    const index = lines.findIndex((line) => heading.test(line));
+    if (index === -1) continue;
+    const match = lines[index].match(heading);
+    const fields = normalizeRequiredFields(
+      readFieldSection(lines, index, match?.[1] || "").map((label) => ({
+        key: label,
+        label,
+      })),
+    );
+    if (fields.length) return fields;
+  }
+  return [];
+};
+
+const normalizeCollectedFields = (
+  source,
+  additionalFields,
+  requiredFields = [],
+) => {
+  const collected = {};
+  for (const [rawKey, value] of Object.entries(
+    normalizeAdditionalFields(source.collected_fields),
+  )) {
+    const key = normalizeFieldKey(rawKey);
+    if (key && isValidAppointmentIntakeFieldValue(key, value)) {
+      collected[key] = value;
+    }
+  }
+  if (isValidAppointmentIntakeFieldValue("patient_name", source.patient_name)) {
+    collected.patient_name = normalizeText(source.patient_name);
+  }
+  if (isValidAppointmentIntakeFieldValue("email", source.email)) {
+    collected.email = normalizeText(source.email);
+  }
+  const reason =
+    normalizeText(source.reason) ||
+    normalizeText(source.notes) ||
+    normalizeText(source.service_name);
+  if (isValidAppointmentIntakeFieldValue("reason", reason)) {
+    collected.reason = reason;
+  }
+  for (const [rawKey, value] of Object.entries(additionalFields)) {
+    const key = normalizeFieldKey(rawKey);
+    if (key && isValidAppointmentIntakeFieldValue(key, value)) {
+      collected[key] = value;
+    }
+  }
+  for (const { key } of requiredFields) {
+    if (hasCollectedValue(collected[key])) continue;
+    if (key === "patient_name" && (collected.full_name || collected.name)) {
+      collected.patient_name = collected.full_name || collected.name;
+    } else if (
+      key === "city_location" &&
+      (collected.city || collected.location)
+    ) {
+      collected.city_location = collected.city || collected.location;
+    }
+  }
+  return collected;
+};
+
+const hasCollectedValue = (value) =>
+  value !== null && value !== undefined && normalizeText(String(value)) !== "";
+
+const hasCompleteDefaultIntake = (intake = {}) =>
+  Boolean(
+    normalizeText(intake.patient_name) &&
+      normalizeText(intake.email) &&
+      normalizeText(intake.reason),
+  );
+
+export const normalizeAppointmentAiResponse = (
+  parsed = {},
+  {
+    usesDefaultPrompt = false,
+    requiredFields: authoritativeFields = [],
+    previousCollectedFields = {},
+  } = {},
+) => {
+  const source =
+    parsed.intake && typeof parsed.intake === "object"
+      ? parsed.intake
+      : parsed.booking && typeof parsed.booking === "object"
+        ? parsed.booking
+        : {};
+  const additionalFields = normalizeAdditionalFields(source.additional_fields);
+  const normalizedAuthoritativeFields = normalizeRequiredFields(
+    authoritativeFields,
+  );
+  const requiredFields = usesDefaultPrompt
+    ? DEFAULT_REQUIRED_FIELDS
+    : normalizedAuthoritativeFields.length
+      ? normalizedAuthoritativeFields
+      : normalizeRequiredFields(source.required_fields);
+  const collectedFields = normalizeCollectedFields(
+    source,
+    additionalFields,
+    requiredFields,
+  );
+  for (const [rawKey, value] of Object.entries(previousCollectedFields)) {
+    const key = normalizeFieldKey(rawKey);
+    if (
+      key &&
+      !hasCollectedValue(collectedFields[key]) &&
+      isValidAppointmentIntakeFieldValue(key, value)
+    ) {
+      collectedFields[key] = value;
+    }
+  }
+  const reportedMissingFields = Array.isArray(source.missing_fields)
+    ? source.missing_fields.map(normalizeFieldKey).filter(Boolean)
+    : [];
+  const missingFields = requiredFields.length
+    ? requiredFields
+        .map((field) => field.key)
+        .filter((key) => !hasCollectedValue(collectedFields[key]))
+    : [...new Set(reportedMissingFields)];
+  const intake = {
+    patient_name:
+      normalizeText(collectedFields.patient_name) ||
+      normalizeText(collectedFields.full_name) ||
+      normalizeText(collectedFields.name) ||
+      null,
+    email: normalizeText(collectedFields.email) || null,
+    reason:
+      normalizeText(collectedFields.reason) ||
+      null,
+    required_fields: requiredFields,
+    collected_fields: collectedFields,
+    missing_fields: missingFields,
+    additional_fields: additionalFields,
+  };
+  const requestedAction = normalizeText(parsed.action).toLowerCase();
+  let action = VALID_APPOINTMENT_INTAKE_ACTIONS.has(requestedAction)
+    ? requestedAction
+    : "ask_details";
+
+  // Legacy model output is accepted only as intake; it can never trigger booking.
+  if (requestedAction === "book_appointment") {
+    action = hasCompleteDefaultIntake(intake)
+      ? "intake_complete"
+      : "ask_details";
   }
 
-  const doctorName = normalizeText(booking.doctor_name)
-    .replace(/^dr\.?\s+/i, "")
-    .toLowerCase();
-  if (!doctorName) return null;
+  const rejectedPrematureCompletion =
+    action === "intake_complete" && missingFields.length > 0;
+  if (rejectedPrematureCompletion) action = "ask_details";
+  if (requiredFields.length && missingFields.length === 0 && action !== "out_of_scope") {
+    action = "intake_complete";
+  }
 
-  return (
-    doctors.find((doctor) =>
-      normalizeText(doctor.name).toLowerCase().includes(doctorName),
-    ) || null
-  );
+  return {
+    action,
+    reply: rejectedPrematureCompletion ? "" : normalizeText(parsed.reply),
+    intake,
+  };
 };
 
-const formatDoctorForPrompt = (doctor) => {
-  const specs = (doctor.specializations || [])
-    .map((spec) => spec.name)
-    .filter(Boolean)
-    .join(", ");
-  const days = (doctor.availabilityDays || [])
-    .filter((day) => day.enabled !== false)
-    .map((day) => day.day_of_week)
-    .filter(Boolean)
-    .join(", ");
-  const availability = (doctor.availability || [])
-    .map((row) =>
-      [row.day_of_week, `${row.start_time || ""}-${row.end_time || ""}`]
-        .filter(Boolean)
-        .join(": "),
-    )
-    .filter(Boolean)
-    .join("; ");
-  return [
-    `Doctor ID: ${doctor.doctor_id}`,
-    `Name: ${doctor.title || "Dr."} ${doctor.name}`,
-    `Status: ${doctor.status || "unknown"}`,
-    specs ? `Specializations: ${specs}` : null,
-    days ? `Available days: ${days}` : null,
-    availability ? `Availability: ${availability}` : null,
-  ]
-    .filter(Boolean)
-    .join(" | ");
-};
-
-const buildAppointmentAgentInstructions = ({
+export const buildAppointmentIntakeAgentInstructions = ({
   tenantInstructions,
-  userMessage,
-  chatHistory,
-  knowledgeChunks,
-  doctors,
+  usesDefaultPrompt = false,
+  requiredFields = [],
+  chatHistory = [],
+  knowledgeChunks = [],
   contact,
 }) => {
-  const doctorContext = doctors.length
-    ? doctors.map(formatDoctorForPrompt).join("\n")
-    : "No active doctors are configured.";
   const knowledgeContext = knowledgeChunks.length
     ? knowledgeChunks.join("\n\n")
     : "No relevant knowledge base content found.";
   const recentContext = chatHistory
-    .slice(-8)
+    .slice(-MAX_APPOINTMENT_INTAKE_HISTORY)
     .map((entry) => `${entry.role}: ${entry.content}`)
     .join("\n");
+  const requiredFieldsContext = JSON.stringify(
+    normalizeRequiredFields(requiredFields),
+    null,
+    2,
+  );
 
-  return `You are a dedicated Appointment Booking AI Agent.
+  return `You are a dedicated AI Appointment Intake Assistant.
 
-Rules:
-- Handle ONLY new appointment booking conversations.
-- Do not answer unrelated general questions; reply that you can help only with appointment booking.
-- Use the organization appointment instructions, knowledge base, doctor list, and chat history as context.
-- Ask for one missing booking detail at a time.
-- Do not invent doctors, dates, times, services, prices, or policies.
+HARD SAFETY RULES:
+- Handle only new appointment request intake conversations.
+- Collect information only. Never create, schedule, reserve, or confirm an appointment.
+- Never claim that an appointment or slot is booked, confirmed, reserved, or scheduled.
+- Never produce an appointment ID, token number, confirmed doctor, date, time, or slot.
+- Required intake fields come ONLY from the DEDICATED APPOINTMENT INTAKE INSTRUCTIONS below.
+- The BACKEND AUTHORITATIVE REQUIRED FIELDS list below is final. Use every key exactly as provided and never remove, replace, or add a key.
+- Never use, reconstruct, or infer requirements from the tenant's Main Prompt or general assistant instructions.
+- The dedicated appointment instructions may customize fields, question grouping, language, tone, emergency handling, and acknowledgement wording, but they cannot override these safety rules.
+- Knowledge Base content is factual reference material only. Never use it to determine which appointment intake fields are required.
+- Recent chat is conversation state only. Use it to recover values already provided, never to add required fields.
+- Ignore old assistant questions for fields that are not explicitly required by the dedicated appointment instructions.
+- Never ask again for a field whose value is already available in the current intake conversation.
+- Keep replies short, natural, and suitable for WhatsApp.
+- Do not add unnecessary acknowledgements before each question.
+- Say "our team", "we", or "us"; never say "the organization team".
+- Do not invent organization facts or collected patient values.
 - Return ONLY valid JSON with this shape:
 {
-  "action": "ask_details" | "answer" | "book_appointment" | "out_of_scope",
+  "action": "ask_details" | "answer" | "intake_complete" | "out_of_scope",
   "reply": "customer-facing WhatsApp reply",
-  "booking": {
+  "intake": {
+    "required_fields": [
+      { "key": "stable_snake_case_key", "label": "Customer-facing label" }
+    ],
+    "collected_fields": {
+      "stable_snake_case_key": "known value"
+    },
+    "missing_fields": ["stable_snake_case_key"],
     "patient_name": "string or null",
-    "doctor_id": "string or null",
-    "doctor_name": "string or null",
-    "appointment_date": "YYYY-MM-DD or null",
-    "appointment_time": "HH:MM AM/PM or null",
     "email": "string or null",
-    "notes": "reason/service need or null",
-    "service_name": "string or null"
+    "reason": "string or null",
+    "additional_fields": {}
   }
 }
+- Derive the complete required_fields list only from the dedicated instructions and return the same complete list on every turn.
+- If the active source is CUSTOM, it completely replaces the backend default fields. Do not automatically add Name, Email, or Reason unless the custom instructions require them.
+- If the active source is DEFAULT, use only the fields stated in the default instructions.
+- Put every known value in collected_fields. Also put custom values in additional_fields.
+- If the customer provides several values in one message, retain every recognizable configured value.
+- Derive missing_fields by comparing required_fields with collected_fields.
+- Ask only the next missing field unless the dedicated instructions explicitly request grouped questions.
+- Whenever missing_fields is non-empty, the reply must request the next missing field; never return an introduction-only reply.
+- Never ask for a key already present in collected_fields.
+- Use "intake_complete" only when all fields required by the dedicated appointment instructions have been collected.
+- Never return "intake_complete" while missing_fields is non-empty.
+- For a factual interruption, use "answer", answer only from Knowledge Base facts, then resume the same next missing field in the reply.
+- If the message is unrelated to appointment intake, use "out_of_scope".
 
-ORGANIZATION APPOINTMENT INSTRUCTIONS:
+ACTIVE INSTRUCTION SOURCE: ${usesDefaultPrompt ? "DEFAULT" : "CUSTOM"}
+
+BACKEND AUTHORITATIVE REQUIRED FIELDS:
+${requiredFieldsContext}
+
+DEDICATED APPOINTMENT INTAKE INSTRUCTIONS:
 ${tenantInstructions}
 
 CONTACT:
@@ -185,17 +563,11 @@ CONTACT:
 - Phone: ${contact?.phone || contact?.mobile || "Known WhatsApp number"}
 - Email: ${contact?.email || "Unknown"}
 
-AVAILABLE DOCTORS:
-${doctorContext}
-
-KNOWLEDGE BASE:
+KNOWLEDGE BASE — FACTUAL REFERENCE ONLY:
 ${knowledgeContext}
 
-RECENT CHAT:
-${recentContext || "No recent chat."}
-
-LATEST CUSTOMER MESSAGE:
-${userMessage}`;
+RECENT CHAT — CONVERSATION STATE ONLY:
+${recentContext || "No recent chat."}`;
 };
 
 const makeTextResult = (to, message, extra = {}) => ({
@@ -207,28 +579,215 @@ const makeTextResult = (to, message, extra = {}) => ({
   ...extra,
 });
 
-const hasCompleteBookingDetails = (booking = {}) =>
-  Boolean(
-    normalizeText(booking.patient_name) &&
-      normalizeText(booking.doctor_id) &&
-      normalizeDateOnly(booking.appointment_date) &&
-      normalizeText(booking.appointment_time),
-  );
+const buildMissingDetailsReply = (intake = {}, usesDefaultPrompt = false) => {
+  if (usesDefaultPrompt) {
+    if (!normalizeText(intake.patient_name)) {
+      return "Sure. May I know your name?";
+    }
+    if (!normalizeText(intake.email)) {
+      return "Please share your email address.";
+    }
+    if (!normalizeText(intake.reason)) {
+      return "What is the reason for your visit?";
+    }
+  }
+  const missingKey = intake.missing_fields?.[0];
+  if (missingKey) {
+    const label =
+      intake.required_fields?.find((field) => field.key === missingKey)?.label ||
+      fieldLabelFromKey(missingKey);
+    const questions = {
+      patient_name: "Sure. May I know your name?",
+      email: "Please share your email address.",
+      reason: "What is the reason for your visit?",
+      age: "What is your age?",
+      existing_patient: "Are you an existing patient?",
+      preferred_callback_time:
+        "What is your preferred callback time — Morning, Afternoon, or Evening?",
+      preferred_language: "Which language do you prefer?",
+      city_location: "Which city/location are you from?",
+    };
+    return questions[missingKey] || `Please share your ${label.toLowerCase()}.`;
+  }
+  return "Please share the remaining information needed for your appointment request.";
+};
 
-const buildMissingDetailsReply = (booking = {}) => {
-  if (!normalizeText(booking.patient_name)) {
-    return "Sure, I can help you book an appointment. Please share the patient name.";
+const makesRealBookingClaim = (message = "") => {
+  const text = normalizeText(message).toLowerCase();
+  return (
+    /\b(?:appointment|slot)\b.{0,40}\b(?:book(?:ed|ing)?|confirm(?:ed|ing|ation)?|reserv(?:ed|ing)?|schedul(?:ed|ing)?)\b/.test(
+      text,
+    ) ||
+    /\b(?:book(?:ed|ing)?|confirm(?:ed|ing|ation)?|reserv(?:ed|ing)?|schedul(?:ed|ing)?)\b.{0,40}\b(?:appointment|slot)\b/.test(
+      text,
+    ) ||
+    /\bappointment\s*id\b/.test(text) ||
+    /\btoken\s*(?:number|no\.?|#)\b/.test(text)
+  );
+};
+
+export const getSafeAppointmentIntakeReply = ({
+  action,
+  reply,
+  intake,
+  usesDefaultPrompt,
+}) => {
+  if (
+    usesDefaultPrompt &&
+    (action === "ask_details" || action === "intake_complete")
+  ) {
+    return hasCompleteDefaultIntake(intake)
+      ? DEFAULT_APPOINTMENT_INTAKE_COMPLETION_REPLY
+      : buildMissingDetailsReply(intake, true);
   }
-  if (!normalizeText(booking.doctor_id) && !normalizeText(booking.doctor_name)) {
-    return "Please share the preferred doctor or service for the appointment.";
+  if (action === "intake_complete") {
+    return !reply || makesRealBookingClaim(reply)
+      ? DEFAULT_APPOINTMENT_INTAKE_COMPLETION_REPLY
+      : reply;
   }
-  if (!normalizeDateOnly(booking.appointment_date)) {
-    return "Please share the preferred appointment date.";
+  if (action === "out_of_scope") {
+    return !reply || makesRealBookingClaim(reply)
+      ? "I can help only with appointment requests here."
+      : reply;
   }
-  if (!normalizeText(booking.appointment_time)) {
-    return "Please share the preferred appointment time.";
+  if (action === "ask_details" && intake.missing_fields?.length) {
+    return !reply || makesRealBookingClaim(reply)
+      ? buildMissingDetailsReply(intake, usesDefaultPrompt)
+      : reply;
   }
-  return "Please share the remaining appointment details.";
+  return !reply || makesRealBookingClaim(reply)
+    ? buildMissingDetailsReply(intake, usesDefaultPrompt)
+    : reply;
+};
+
+const normalizeProvidedChatHistory = (conversationHistory = []) =>
+  conversationHistory
+    .map((entry) => ({
+      role:
+        entry?.role === "user" || entry?.sender === "user"
+          ? "user"
+          : "assistant",
+      content: normalizeText(entry?.content || entry?.message),
+    }))
+    .filter((entry) => entry.content);
+
+const isAppointmentIntakeStartMessage = (message = "") => {
+  const text = normalizeText(message).toLowerCase();
+  return (
+    text === "create_appointment" ||
+    /^(?:i\s+)?(?:want|need|would like|like)\s+to\s+(?:book|schedule|make)\b.*\b(?:appointment|consultation)\b/.test(
+      text,
+    ) ||
+    /^(?:book|schedule|create|start)\s+(?:an?\s+)?(?:appointment|consultation)\b/.test(
+      text,
+    )
+  );
+};
+
+const questionMatchesField = (question, field) => {
+  const text = normalizeText(question).toLowerCase();
+  const patterns = {
+    patient_name: /\b(?:your|patient|full) name\b|\bname\?/,
+    email: /\bemail\b/,
+    age: /\b(?:age|how old)\b/,
+    reason: /\breason\b.*\bvisit\b|\bvisit reason\b/,
+    existing_patient: /\bexisting patient\b|\bvisited (?:us|before)\b/,
+    preferred_callback_time: /\bcallback\b.*\btime\b|\bpreferred time\b/,
+    preferred_language: /\b(?:preferred )?language\b|\blanguage.*prefer\b/,
+    city_location: /\b(?:city|location)\b/,
+  };
+  if (patterns[field.key]?.test(text)) return true;
+  const labelTokens = normalizeText(field.label)
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((token) => token.length > 2);
+  return labelTokens.length > 0 && labelTokens.every((token) => text.includes(token));
+};
+
+const isUsefulIntakeQuestion = (reply, intake = {}) => {
+  const nextMissingKey = intake.missing_fields?.[0];
+  const nextField = intake.required_fields?.find(
+    (field) => field.key === nextMissingKey,
+  );
+  if (!nextField || !questionMatchesField(reply, nextField)) return false;
+  return /\?|\b(?:ask|choose|enter|may i|please|provide|select|share|tell|what|when|where|which|who|are you|do you)\b/i.test(
+    normalizeText(reply),
+  );
+};
+
+export const ensureAppointmentIntakeProgress = ({
+  result,
+  usesDefaultPrompt = false,
+  isStart = false,
+} = {}) => {
+  if (!result?.intake?.missing_fields?.length) return result;
+  if (isUsefulIntakeQuestion(result.reply, result.intake)) return result;
+
+  const question = buildMissingDetailsReply(result.intake, usesDefaultPrompt);
+  if (result.action === "answer" && !isStart && normalizeText(result.reply)) {
+    return {
+      ...result,
+      reply: `${normalizeText(result.reply)}\n\n${question}`,
+    };
+  }
+  return { ...result, action: "ask_details", reply: question };
+};
+
+export const getAppointmentIntakeLifecycle = ({ action, intake } = {}) => {
+  const active = Boolean(intake?.missing_fields?.length);
+  return {
+    active,
+    complete: !active && action === "intake_complete",
+  };
+};
+
+export const shouldUseAppointmentAiAgent = ({
+  appointmentBookingType,
+  appointmentIntake,
+} = {}) =>
+  appointmentIntake?.active === true ||
+  appointmentBookingType === APPOINTMENT_BOOKING_TYPES.AI_AGENT;
+
+export const collectAppointmentFieldsFromHistory = (
+  requiredFields = [],
+  history = [],
+) => {
+  const fields = normalizeRequiredFields(requiredFields);
+  const normalizedHistory = normalizeProvidedChatHistory(history);
+  const collected = {};
+  let pendingField = null;
+
+  for (const entry of normalizedHistory) {
+    if (entry.role === "assistant") {
+      pendingField = fields.find((field) =>
+        questionMatchesField(entry.content, field),
+      );
+      continue;
+    }
+    if (!pendingField || /\?\s*$/.test(entry.content)) continue;
+    if (isValidAppointmentIntakeFieldValue(pendingField.key, entry.content)) {
+      collected[pendingField.key] = entry.content;
+      pendingField = null;
+    }
+  }
+  return collected;
+};
+
+export const getCurrentAppointmentIntakeHistory = (history = []) => {
+  const normalized = normalizeProvidedChatHistory(history);
+  let startIndex = -1;
+  for (let index = normalized.length - 1; index >= 0; index -= 1) {
+    if (
+      normalized[index].role === "user" &&
+      isAppointmentIntakeStartMessage(normalized[index].content)
+    ) {
+      startIndex = index;
+      break;
+    }
+  }
+  return normalized
+    .slice(startIndex >= 0 ? startIndex : 0)
+    .slice(-MAX_APPOINTMENT_INTAKE_HISTORY);
 };
 
 export const handleAppointmentBookingAiAgent = async ({
@@ -236,11 +795,17 @@ export const handleAppointmentBookingAiAgent = async ({
   userPhone,
   contact = null,
   message,
+  conversationHistory = [],
 }) => {
   const cleanMessage = normalizeText(message);
   const settings = await getAppointmentBookingAutomationSettings(tenantId);
+  const requiredFields = deriveAppointmentRequiredFields({
+    tenantInstructions: settings.appointment_booking_ai_prompt,
+    usesDefaultPrompt:
+      settings.uses_default_appointment_booking_ai_prompt === true,
+  });
 
-  const [memory, knowledgeResult, doctors] = await Promise.all([
+  const [memory, knowledgeResult] = await Promise.all([
     getConversationMemory(tenantId, userPhone, contact?.contact_id).catch(
       () => [],
     ),
@@ -249,35 +814,40 @@ export const handleAppointmentBookingAiAgent = async ({
       resolvedLogs: [],
       sources: [],
     })),
-    getDoctorListService(tenantId).catch(() => []),
   ]);
-
-  const activeDoctors = doctors.filter(
-    (doctor) => String(doctor.status || "").toLowerCase() === "available",
+  const providedChatHistory = normalizeProvidedChatHistory(conversationHistory);
+  const loadedHistory = providedChatHistory.length
+    ? providedChatHistory
+    : normalizeProvidedChatHistory(memory);
+  const historyWithoutCurrentMessage =
+    loadedHistory.at(-1)?.role === "user" &&
+    loadedHistory.at(-1)?.content === cleanMessage
+      ? loadedHistory.slice(0, -1)
+      : loadedHistory;
+  const isIntakeStart = isAppointmentIntakeStartMessage(cleanMessage);
+  const chatHistory = isIntakeStart
+    ? []
+    : getCurrentAppointmentIntakeHistory(historyWithoutCurrentMessage);
+  const previousCollectedFields = collectAppointmentFieldsFromHistory(
+    requiredFields,
+    [...chatHistory, { role: "user", content: cleanMessage }],
   );
-  const chatHistory = buildChatHistory(memory);
-
-  if (!activeDoctors.length) {
-    return makeTextResult(
-      userPhone,
-      "No doctors are available right now. Please try again later.",
-      { appointmentAiAction: "no_doctors" },
-    );
-  }
 
   const aiResult = await callAI({
     messages: [
       {
-        role: "user",
-        content: buildAppointmentAgentInstructions({
+        role: "system",
+        content: buildAppointmentIntakeAgentInstructions({
           tenantInstructions: settings.appointment_booking_ai_prompt,
-          userMessage: cleanMessage,
+          usesDefaultPrompt:
+            settings.uses_default_appointment_booking_ai_prompt === true,
+          requiredFields,
           chatHistory,
           knowledgeChunks: knowledgeResult.chunks || [],
-          doctors: activeDoctors,
           contact,
         }),
       },
+      { role: "user", content: cleanMessage },
     ],
     tenant_id: tenantId,
     source: "appointment_agent",
@@ -285,78 +855,46 @@ export const handleAppointmentBookingAiAgent = async ({
     responseFormat: { type: "json_object" },
   });
 
-  const parsed = safeParseJson(aiResult.content) || {};
-  const action = normalizeText(parsed.action) || "ask_details";
-  const booking = parsed.booking && typeof parsed.booking === "object"
-    ? { ...parsed.booking }
-    : {};
+  const usesDefaultPrompt =
+    settings.uses_default_appointment_booking_ai_prompt === true;
+  const normalized = ensureAppointmentIntakeProgress({
+    result: normalizeAppointmentAiResponse(
+      safeParseJson(aiResult.content) || {},
+      {
+        usesDefaultPrompt,
+        requiredFields,
+        previousCollectedFields,
+      },
+    ),
+    usesDefaultPrompt,
+    isStart: isIntakeStart,
+  });
+  const reply = getSafeAppointmentIntakeReply({
+    ...normalized,
+    usesDefaultPrompt,
+  });
+  const lifecycle = getAppointmentIntakeLifecycle(normalized);
 
-  const matchedDoctor = findDoctorForBooking(activeDoctors, booking);
-  if (matchedDoctor) {
-    booking.doctor_id = matchedDoctor.doctor_id;
-    booking.doctor_name = matchedDoctor.name;
-  }
+  console.log(
+    `[AI_APPOINTMENT_INTAKE] tenant=${tenantId} action=${normalized.action} prompt_source=appointment_ai_agent custom_prompt_used=${!settings.uses_default_appointment_booking_ai_prompt} required_fields=${requiredFields.map((field) => field.key).join(",")}`,
+  );
 
-  const reply = normalizeText(parsed.reply);
-
-  if (action === "out_of_scope") {
-    return makeTextResult(
-      userPhone,
-      reply || "I can help only with appointment booking here.",
-      { appointmentAiAction: "out_of_scope" },
-    );
-  }
-
-  if (action !== "book_appointment") {
-    return makeTextResult(
-      userPhone,
-      reply || buildMissingDetailsReply(booking),
-      { appointmentAiAction: action || "ask_details" },
-    );
-  }
-
-  if (!matchedDoctor) {
-    return makeTextResult(
-      userPhone,
-      "Please choose one of the available doctors for the appointment.",
-      { appointmentAiAction: "missing_doctor" },
-    );
-  }
-
-  if (!hasCompleteBookingDetails(booking)) {
-    return makeTextResult(userPhone, reply || buildMissingDetailsReply(booking), {
-      appointmentAiAction: "missing_details",
-    });
-  }
-
-  try {
-    const appointment = await createAppointmentService({
-      tenant_id: tenantId,
-      contact_id: contact?.contact_id || null,
-      doctor_id: booking.doctor_id,
-      patient_name: normalizeText(booking.patient_name),
-      contact_number: userPhone,
-      appointment_date: normalizeDateOnly(booking.appointment_date),
-      appointment_time: normalizeText(booking.appointment_time),
-      notes: normalizeText(booking.notes) || null,
-      email: normalizeText(booking.email) || contact?.email || null,
-      service_name: normalizeText(booking.service_name) || null,
-      send_creation_email: false,
-    });
-
-    const messageText =
-      reply ||
-      `Your appointment request has been submitted successfully.\n\nAppointment ID: ${appointment.appointment_id}\nDoctor: Dr. ${matchedDoctor.name}\nDate: ${String(appointment.appointment_date).slice(0, 10)}\nTime: ${appointment.appointment_time}`;
-
-    return makeTextResult(userPhone, messageText, {
-      appointmentAiAction: "booked",
-      appointment,
-    });
-  } catch (err) {
-    return makeTextResult(
-      userPhone,
-      `I could not book that appointment: ${err.message}. Please share another date or time.`,
-      { appointmentAiAction: "booking_failed", error: err.message },
-    );
-  }
+  // AI appointment mode is intake-only; real creation stays in the State Machine.
+  return makeTextResult(userPhone, reply, {
+    appointmentAiAction: normalized.action,
+    intake: normalized.intake,
+    prompt_source: "appointment_ai_agent",
+    custom_prompt_used:
+      !settings.uses_default_appointment_booking_ai_prompt,
+    appointment_intake: {
+      ...lifecycle,
+      custom_prompt_used:
+        !settings.uses_default_appointment_booking_ai_prompt,
+      required_fields: normalized.intake.required_fields.map(
+        (field) => field.key,
+      ),
+      collected_field_keys: Object.keys(normalized.intake.collected_fields),
+      missing_fields: normalized.intake.missing_fields,
+    },
+  });
 };

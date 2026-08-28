@@ -17,6 +17,11 @@ import {
   handleAdvancedAppointmentBooking,
 } from "../AppointmentModel/Advanced_Appointment_Booking.service.js";
 import {
+  getAppointmentBookingAutomationSettings,
+  handleAppointmentBookingAiAgent,
+  shouldUseAppointmentAiAgent,
+} from "../AppointmentModel/appointmentBookingAiAgent.service.js";
+import {
   handleManageBookedAppointments,
 } from "../AppointmentModel/Manage_Booked_Appointments.service.js";
 import {
@@ -204,6 +209,11 @@ const buildPlaygroundInbound = ({
 const canonicalizeBookingOperationMessage = ({ decision, normalizedMessage }) => {
   const input = normalizeAppointmentOperationInput(normalizedMessage);
   if (input.buttonReplyId) return input.effectiveText;
+  if (
+    decision?.source === APPOINTMENT_OPERATION_SOURCES.AI_INTAKE_CONTINUATION
+  ) {
+    return input.effectiveText;
+  }
   switch (decision?.action) {
     case APPOINTMENT_OPERATION_ACTIONS.CONFIRM:
       return "confirm_booking";
@@ -218,6 +228,45 @@ const canonicalizeBookingOperationMessage = ({ decision, normalizedMessage }) =>
     default:
       return input.effectiveText || "create_appointment";
   }
+};
+
+const handleConfiguredPlaygroundBooking = async ({
+  tenantId,
+  phone,
+  contact,
+  message,
+  interactiveReplyId = null,
+  conversationHistory = [],
+  appointmentIntake = null,
+}) => {
+  const settings = await getAppointmentBookingAutomationSettings(tenantId);
+  console.log(
+    `[APPOINTMENT_ENGINE] tenant=${tenantId} type=${settings.appointment_booking_type} source=playground`,
+  );
+  if (
+    shouldUseAppointmentAiAgent({
+      appointmentBookingType: settings.appointment_booking_type,
+      appointmentIntake,
+    })
+  ) {
+    return handleAppointmentBookingAiAgent({
+      tenantId,
+      userPhone: phone,
+      contact,
+      message:
+        message === "create_appointment"
+          ? "I want to book an appointment."
+          : message,
+      conversationHistory,
+    });
+  }
+  return handleAdvancedAppointmentBooking({
+    tenantId,
+    userPhone: phone,
+    contact,
+    message,
+    interactiveReplyId,
+  });
 };
 
 const isManageCanonicalReplyId = (value = "") => {
@@ -350,10 +399,17 @@ const buildPlaygroundResult = ({
     classifierResult: routingResult?.classifierResult || null,
     sessionBefore,
     sessionAfter,
+    appointment_intake: result?.appointment_intake || null,
     rawPayloads: payloads,
     appointmentResult: result
       ? {
           event: result.event || null,
+          action: result.appointmentAiAction || null,
+          prompt_source: result.prompt_source || null,
+          custom_prompt_used:
+            typeof result.custom_prompt_used === "boolean"
+              ? result.custom_prompt_used
+              : null,
           duplicate: Boolean(result.duplicate || result.alreadyProcessed),
           handoverToNormalRouter: Boolean(result.handoverToNormalRouter),
           handoverToBooking: Boolean(result.handoverToBooking),
@@ -449,6 +505,7 @@ export const playgroundInboundService = async ({
     phone,
     contactId: contact.contact_id,
     normalizedMessage: inbound,
+    conversationHistory,
   });
 
   if (!isAppointmentOperationDecisionEnabled(routingResult.decision, routerMode)) {
@@ -562,12 +619,14 @@ export const playgroundInboundService = async ({
       decision: routingResult.decision,
       normalizedMessage: inbound,
     });
-    const bookingResult = await handleAdvancedAppointmentBooking({
+    const bookingResult = await handleConfiguredPlaygroundBooking({
       tenantId,
-      userPhone: phone,
+      phone,
       contact,
       message: bookingMessage,
       interactiveReplyId: inbound.buttonReplyId,
+      conversationHistory,
+      appointmentIntake: routingResult.aiAppointmentIntake,
     });
     if (bookingResult?.handoverToNormalRouter) {
       return handlePlaygroundAiFallback({
@@ -628,12 +687,13 @@ export const playgroundInboundService = async ({
       });
     }
     if (manageResult?.handoverToBooking) {
-      const bookingResult = await handleAdvancedAppointmentBooking({
+      const bookingResult = await handleConfiguredPlaygroundBooking({
         tenantId,
-        userPhone: phone,
+        phone,
         contact,
         message: "create_appointment",
         interactiveReplyId: "create_appointment",
+        conversationHistory,
       });
       const payloads = getAppointmentResponsePayloads(bookingResult, phone);
       const sessionAfter = await buildSessionSnapshot({

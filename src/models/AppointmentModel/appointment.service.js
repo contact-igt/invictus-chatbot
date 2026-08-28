@@ -1633,11 +1633,15 @@ const sendAppointmentNotificationEmail = async (
         { model: db.Contacts, as: "contact", attributes: ["email", "name"] },
       ],
     });
-    if (!appointment) return;
+    if (!appointment) {
+      return { sent: false, reason: "appointment_not_found" };
+    }
 
     // Check both appointment and contact for email
     const emailTo = appointment.email || appointment.contact?.email;
-    if (!emailTo) return;
+    if (!emailTo) {
+      return { sent: false, reason: "patient_email_missing" };
+    }
 
     // Fetch tenant company name for email branding
     let companyName = "WhatsNexus";
@@ -1693,11 +1697,19 @@ const sendAppointmentNotificationEmail = async (
     console.log(
       `[APPOINTMENT-EMAIL] ${type} email sent to ${emailTo} for ${appointment_id}`,
     );
+    return { sent: true };
   } catch (emailErr) {
     console.error(
       `[APPOINTMENT-EMAIL] Failed to send ${type} email for ${appointment_id}:`,
       emailErr.message,
     );
+    return {
+      sent: false,
+      reason:
+        emailErr.code === "EAUTH"
+          ? "email_authentication_failed"
+          : "email_delivery_failed",
+    };
   }
 };
 
@@ -1725,12 +1737,13 @@ export const updateAppointmentStatusService = async (
       throw new Error("Appointment not found");
     }
 
-    // Send email notification for status change (non-blocking)
-    sendAppointmentNotificationEmail(tenant_id, appointment_id, status).catch(
-      () => {},
+    const emailNotification = await sendAppointmentNotificationEmail(
+      tenant_id,
+      appointment_id,
+      status,
     );
 
-    return updatedCount;
+    return { updatedCount, emailNotification };
   } catch (err) {
     throw err;
   }
