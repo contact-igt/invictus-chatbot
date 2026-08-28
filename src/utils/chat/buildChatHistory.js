@@ -22,9 +22,28 @@ export const buildChatHistory = (memory = []) => {
   // Take only the most recent messages to avoid bloating the prompt
   const recentMemory = memory.slice(-MAX_CHAT_HISTORY);
 
-  return recentMemory.map((m) => ({
-    role: m.sender === "user" ? "user" : "assistant",
-    content: formatMessageContent(m),
-    message_at: m.created_at,
-  }));
+  return recentMemory.map((m) => {
+    let metadata = {};
+    if (m.interactive_payload) {
+      try {
+        const parsed =
+          typeof m.interactive_payload === "string"
+            ? JSON.parse(m.interactive_payload)
+            : m.interactive_payload;
+        if (parsed?.event === "appointment_ai_agent") {
+          metadata = {
+            event: parsed.event,
+            appointmentAiAction: parsed.appointmentAiAction,
+            appointment_intake: parsed.appointment_intake,
+          };
+        }
+      } catch {}
+    }
+    return {
+      role: m.sender === "user" ? "user" : "assistant",
+      content: formatMessageContent(m),
+      message_at: m.created_at,
+      ...metadata,
+    };
+  });
 };

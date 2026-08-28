@@ -45,6 +45,7 @@ export const APPOINTMENT_OPERATION_ACTIONS = {
 
 export const APPOINTMENT_OPERATION_SOURCES = {
   ACTIVE_SESSION: "active_session",
+  AI_INTAKE_CONTINUATION: "ai_intake_continuation",
   INTERACTIVE_REPLY: "interactive_reply",
   PREVIOUS_BOT_CONTEXT: "previous_bot_context",
   DETERMINISTIC_PHRASE: "deterministic_phrase",
@@ -81,6 +82,7 @@ const ROUTER_MODES = {
 
 const DETERMINISTIC_SOURCES = new Set([
   APPOINTMENT_OPERATION_SOURCES.ACTIVE_SESSION,
+  APPOINTMENT_OPERATION_SOURCES.AI_INTAKE_CONTINUATION,
   APPOINTMENT_OPERATION_SOURCES.INTERACTIVE_REPLY,
   APPOINTMENT_OPERATION_SOURCES.PREVIOUS_BOT_CONTEXT,
   APPOINTMENT_OPERATION_SOURCES.DETERMINISTIC_PHRASE,
@@ -389,16 +391,33 @@ export const detectPreviousBotContextFromText = (message = "") => {
   ) {
     return PREVIOUS_BOT_CONTEXTS.ASKED_MANAGE_ACTION;
   }
-  if (/patient name|what is the.*name|enter the.*name/.test(text)) {
+  if (
+    /patient name|what is the.*name|enter the.*name|may i know (?:your|the.*) name/.test(
+      text,
+    )
+  ) {
     return PREVIOUS_BOT_CONTEXTS.ASKED_BOOKING_NAME;
   }
   if (/email address|share your email|updated email/.test(text)) {
     return PREVIOUS_BOT_CONTEXTS.ASKED_BOOKING_EMAIL;
   }
   if (
-    /select.*services|reason for visit|reason\/service|visit from the list/.test(
+    /select.*services|reason for (?:your |the )?visit|reason\/service|visit from the list/.test(
       text,
     )
+  ) {
+    return PREVIOUS_BOT_CONTEXTS.ASKED_BOOKING_SERVICE;
+  }
+  if (
+    /how old are you|what is your age|existing patient|preferred callback time|which language do you prefer|city\/location|city or location/.test(
+      text,
+    )
+  ) {
+    return PREVIOUS_BOT_CONTEXTS.ASKED_BOOKING_SERVICE;
+  }
+  if (
+    /appointment request/.test(text) &&
+    /(?:\?|\bplease\b|\bshare\b|\bprovide\b|\btell me\b)/.test(text)
   ) {
     return PREVIOUS_BOT_CONTEXTS.ASKED_BOOKING_SERVICE;
   }
@@ -876,22 +895,81 @@ Return only JSON:
   return normalizeAiHelperDecision(JSON.parse(result.content || "{}"));
 };
 
-export const getPreviousBotContext = async ({ tenantId, phone, contactId }) => {
-  const memory = await getConversationMemory(tenantId, phone, contactId).catch(
-    () => [],
-  );
-  const chatHistory = buildChatHistory(memory);
+export const buildPreviousBotContextFromHistory = (history = []) => {
+  const chatHistory = history
+    .map((entry) => ({
+      role:
+        entry?.role === "user" || entry?.sender === "user"
+          ? "user"
+          : "assistant",
+      content: normalizeText(entry?.content || entry?.message),
+      event: entry?.event || null,
+      appointmentAiAction:
+        entry?.appointmentAiAction || entry?.appointment_ai_action || null,
+      appointment_intake: entry?.appointment_intake || null,
+    }))
+    .filter((entry) => entry.content);
   const previousBotMessage = [...chatHistory]
     .reverse()
     .find(
       (entry) => entry.role === "assistant" && normalizeText(entry.content),
     );
+  const previousAiAppointmentMessage = [...chatHistory]
+    .reverse()
+    .find(
+      (entry) =>
+        entry.role === "assistant" && entry.event === "appointment_ai_agent",
+    );
   return {
     previousBotContext: detectPreviousBotContextFromText(
       previousBotMessage?.content || "",
     ),
+    aiAppointmentIntake:
+      previousAiAppointmentMessage
+        ? {
+            active:
+              typeof previousAiAppointmentMessage.appointment_intake?.active ===
+              "boolean"
+                ? previousAiAppointmentMessage.appointment_intake.active
+                : ["ask_details", "answer"].includes(
+                    previousAiAppointmentMessage.appointmentAiAction,
+                  ),
+            complete:
+              previousAiAppointmentMessage.appointment_intake?.complete === true,
+            action: previousAiAppointmentMessage.appointmentAiAction,
+          }
+        : null,
     chatHistory,
   };
+};
+
+export const getPreviousBotContext = async ({ tenantId, phone, contactId }) => {
+  const memory = await getConversationMemory(tenantId, phone, contactId).catch(
+    () => [],
+  );
+  return buildPreviousBotContextFromHistory(buildChatHistory(memory));
+};
+
+export const resolveActiveAiIntakeContinuation = ({
+  aiAppointmentIntake = null,
+  activeManageSession = null,
+  activeBookingSession = null,
+} = {}) => {
+  if (
+    activeManageSession ||
+    activeBookingSession ||
+    aiAppointmentIntake?.active !== true
+  ) {
+    return null;
+  }
+  return makeDecision({
+    shouldHandle: true,
+    route: APPOINTMENT_OPERATION_ROUTES.BOOK_APPOINTMENT,
+    action: APPOINTMENT_OPERATION_ACTIONS.CONTINUE,
+    source: APPOINTMENT_OPERATION_SOURCES.AI_INTAKE_CONTINUATION,
+    confidence: 1,
+    reason: "Previous appointment_ai_agent response left the intake active.",
+  });
 };
 
 export const resolveAppointmentOperationDecision = ({
@@ -1031,9 +1109,14 @@ export const routeAppointmentOperation = async ({
   classifierResult = null,
   skipAiHelper = false,
   languageContext = null,
+  conversationHistory = [],
 } = {}) => {
   const input = normalizeAppointmentOperationInput(normalizedMessage);
   const normalizedManagePhone = normalizeManagePhone(phone);
+  const providedContext =
+    Array.isArray(conversationHistory) && conversationHistory.length
+      ? buildPreviousBotContextFromHistory(conversationHistory)
+      : null;
   
   const [activeManageSession, activeBookingSession, previousContextResult] =
     await Promise.all([
@@ -1048,10 +1131,12 @@ export const routeAppointmentOperation = async ({
         contactId,
         userPhone: phone,
       }).catch(() => null),
-      getPreviousBotContext({ tenantId, phone, contactId }).catch(() => ({
-        previousBotContext: PREVIOUS_BOT_CONTEXTS.NONE,
-        chatHistory: [],
-      })),
+      providedContext ||
+        getPreviousBotContext({ tenantId, phone, contactId }).catch(() => ({
+          previousBotContext: PREVIOUS_BOT_CONTEXTS.NONE,
+          aiAppointmentIntake: null,
+          chatHistory: [],
+        })),
     ]);
   const validActiveManageSession =
     activeManageSession &&
@@ -1063,12 +1148,19 @@ export const routeAppointmentOperation = async ({
       ? activeBookingSession
       : null;
 
-  let decision = resolveAppointmentOperationDecision({
-    normalizedMessage: input,
-    previousBotContext: previousContextResult.previousBotContext,
+  const aiIntakeDecision = resolveActiveAiIntakeContinuation({
+    aiAppointmentIntake: previousContextResult.aiAppointmentIntake,
     activeManageSession: validActiveManageSession,
     activeBookingSession: validActiveBookingSession,
   });
+  let decision =
+    aiIntakeDecision ||
+    resolveAppointmentOperationDecision({
+        normalizedMessage: input,
+        previousBotContext: previousContextResult.previousBotContext,
+        activeManageSession: validActiveManageSession,
+        activeBookingSession: validActiveBookingSession,
+      });
   
 
   let meaningClassifierResult = null;
@@ -1165,6 +1257,7 @@ export const routeAppointmentOperation = async ({
     classifierResult: resolvedClassifier,
     meaningClassifierResult,
     previousBotContext: previousContextResult.previousBotContext,
+    aiAppointmentIntake: previousContextResult.aiAppointmentIntake || null,
     activeBookingSession: validActiveBookingSession,
     activeManageSession: validActiveManageSession,
   };

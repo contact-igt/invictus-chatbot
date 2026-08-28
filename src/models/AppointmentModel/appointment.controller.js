@@ -107,15 +107,22 @@ export const updateStatus = async (req, res) => {
       });
     }
 
-    await AppointmentService.updateAppointmentStatusService(
+    const result = await AppointmentService.updateAppointmentStatusService(
       req.user.tenant_id,
       appointment_id,
       status,
       { allowTerminalStatuses: false },
     );
+    const emailSent = result.emailNotification?.sent === true;
     return res.status(200).json({
       success: true,
-      message: `Appointment status updated to ${status}`,
+      message: emailSent
+        ? `Appointment status updated to ${status}. Email sent to patient.`
+        : `Appointment status updated to ${status}, but the email could not be sent.`,
+      email_sent: emailSent,
+      email_failure_reason: emailSent
+        ? null
+        : result.emailNotification?.reason || "email_delivery_failed",
     });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });

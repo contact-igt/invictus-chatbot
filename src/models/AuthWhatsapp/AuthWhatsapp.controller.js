@@ -27,6 +27,7 @@ import {
   APPOINTMENT_BOOKING_TYPES,
   getAppointmentBookingAutomationSettings,
   handleAppointmentBookingAiAgent,
+  shouldUseAppointmentAiAgent,
 } from "../AppointmentModel/appointmentBookingAiAgent.service.js";
 import {
   handleManageBookedAppointments,
@@ -2003,9 +2004,14 @@ async function routeAndMaybeHandleAppointmentOperation({
   ) {
     const bookingSettings =
       await getAppointmentBookingAutomationSettings(tenant_id);
+    console.log(
+      `[APPOINTMENT_ENGINE] tenant=${tenant_id} type=${bookingSettings.appointment_booking_type}`,
+    );
     if (
-      bookingSettings.appointment_booking_type ===
-      APPOINTMENT_BOOKING_TYPES.AI_AGENT
+      shouldUseAppointmentAiAgent({
+        appointmentBookingType: bookingSettings.appointment_booking_type,
+        appointmentIntake: routingResult.aiAppointmentIntake,
+      })
     ) {
       const aiBookingResult = await handleAppointmentBookingAiAgent({
         tenantId: tenant_id,
@@ -2418,14 +2424,28 @@ async function handleAppointmentOperationDecision({
     });
     if (manageResult?.handoverToNormalRouter) return false;
     if (manageResult?.handoverToBooking) {
-      const advancedResult = await handleAdvancedAppointmentBooking({
-        tenantId: tenant_id,
-        userPhone: phone,
-        contact: contactObj,
-        message: "create_appointment",
-        interactiveReplyId: "create_appointment",
-        whatsappMessageId,
-      });
+      const bookingSettings =
+        await getAppointmentBookingAutomationSettings(tenant_id);
+      console.log(
+        `[APPOINTMENT_ENGINE] tenant=${tenant_id} type=${bookingSettings.appointment_booking_type}`,
+      );
+      const advancedResult =
+        bookingSettings.appointment_booking_type ===
+        APPOINTMENT_BOOKING_TYPES.AI_AGENT
+          ? await handleAppointmentBookingAiAgent({
+              tenantId: tenant_id,
+              userPhone: phone,
+              contact: contactObj,
+              message: "I want to book another appointment.",
+            })
+          : await handleAdvancedAppointmentBooking({
+              tenantId: tenant_id,
+              userPhone: phone,
+              contact: contactObj,
+              message: "create_appointment",
+              interactiveReplyId: "create_appointment",
+              whatsappMessageId,
+            });
       logAppointmentOperationDispatch({
         tenantId: tenant_id,
         phone,
@@ -2534,7 +2554,15 @@ async function handleAdvancedAppointmentResponse(
     const messageTypeToSave =
       payload.type === "interactive" ? "interactive" : "text";
     const interactive_payload =
-      payload.type === "interactive" ? JSON.stringify(payload) : null;
+      payload.type === "interactive"
+        ? JSON.stringify(payload)
+        : result.event === "appointment_ai_agent"
+          ? JSON.stringify({
+              event: result.event,
+              appointmentAiAction: result.appointmentAiAction,
+              appointment_intake: result.appointment_intake,
+            })
+          : null;
     const contact_id = contactsaved?.contact_id || null;
     const savedBotMsg = contact_id
       ? await createUserMessageService(
