@@ -13,6 +13,7 @@ import {
   META_TIER_CONFIG,
 } from "./whatsappAccount.service.js";
 import { missingFieldsChecker } from "../../utils/helpers/missingFields.js";
+import ServerEnvironmentConfig from "../../config/server.config.js";
 
 export const whatsappOAuthCallbackController = async (req, res) => {
   try {
@@ -91,7 +92,7 @@ export const whatsappOAuthCallbackController = async (req, res) => {
     );
 
     return res.redirect(
-      `${process.env.FRONTEND_URL}/settings/whatsapp?status=connected`,
+      `${ServerEnvironmentConfig.urls.frontend}/settings/whatsapp?status=connected`,
     );
   } catch (err) {
     return res.status(500).send({

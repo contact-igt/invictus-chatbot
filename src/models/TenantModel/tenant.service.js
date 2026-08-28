@@ -37,6 +37,8 @@ export const createTenantService = async (
       input_model: "gpt-4o-mini",
       output_model: "gpt-4o",
       openai_api_key: "",
+      appointment_booking_type: "state_machine",
+      appointment_booking_ai_prompt: "",
     };
 
     const mergedAiSettings = ai_settings

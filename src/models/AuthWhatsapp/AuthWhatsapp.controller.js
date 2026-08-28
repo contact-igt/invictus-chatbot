@@ -24,6 +24,11 @@ import {
   handleAdvancedAppointmentBooking,
 } from "../AppointmentModel/Advanced_Appointment_Booking.service.js";
 import {
+  APPOINTMENT_BOOKING_TYPES,
+  getAppointmentBookingAutomationSettings,
+  handleAppointmentBookingAiAgent,
+} from "../AppointmentModel/appointmentBookingAiAgent.service.js";
+import {
   handleManageBookedAppointments,
   hasActiveManageAppointmentSession,
 } from "../AppointmentModel/Manage_Booked_Appointments.service.js";
@@ -1991,6 +1996,44 @@ async function routeAndMaybeHandleAppointmentOperation({
     routingResult,
     io,
   });
+
+  if (
+    routingResult.decision?.route ===
+    APPOINTMENT_OPERATION_ROUTES.BOOK_APPOINTMENT
+  ) {
+    const bookingSettings =
+      await getAppointmentBookingAutomationSettings(tenant_id);
+    if (
+      bookingSettings.appointment_booking_type ===
+      APPOINTMENT_BOOKING_TYPES.AI_AGENT
+    ) {
+      const aiBookingResult = await handleAppointmentBookingAiAgent({
+        tenantId: tenant_id,
+        userPhone: phone,
+        contact: contactObj || contactsaved || null,
+        message:
+          normalizeAppointmentOperationInput(normalizedMessage).messageText,
+        whatsappMessageId,
+      });
+
+      logAppointmentOperationDispatch({
+        tenantId: tenant_id,
+        phone,
+        messageId: whatsappMessageId,
+        decision: routingResult.decision,
+        result: aiBookingResult,
+      });
+      await handleAdvancedAppointmentResponse(
+        aiBookingResult,
+        tenant_id,
+        phone,
+        contactsaved,
+        phone_number_id,
+        name,
+      );
+      return { handled: true, routingResult, routerMode };
+    }
+  }
 
   const handled = await handleAppointmentOperationDecision({
     decision: routingResult.decision,

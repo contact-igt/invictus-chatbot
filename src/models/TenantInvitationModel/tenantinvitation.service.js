@@ -5,6 +5,7 @@ import { getTemplate } from "../../utils/email/templateLoader.js";
 import { generateInviteToken } from "../../middlewares/auth/authMiddlewares.js";
 import { generateReadableIdFromLast } from "../../utils/helpers/generateReadableIdFromLast.js";
 import { sendEmail } from "../../utils/email/emailService.js";
+import ServerEnvironmentConfig from "../../config/server.config.js";
 
 export const createTenantInvitationService = async (
   invitation_id,
@@ -182,7 +183,7 @@ export const sendTenantInvitationService = async (
       invited_by,
     );
 
-    const inviteUrl = `${process.env.FRONTEND_URL}/account/activate?token=${inviteToken}`;
+    const inviteUrl = `${ServerEnvironmentConfig.urls.frontend}/account/activate?token=${inviteToken}`;
 
     const template = getTemplate("tenantInvite");
 
@@ -212,8 +213,8 @@ export const sendTenantPasswordSetSuccessEmailService = async (
   verify_token = null,
 ) => {
   try {
-    const loginUrl = `${process.env.FRONTEND_URL}/login`;
-    const webhookUrl = `${process.env.BACKEND_URL}/api/whatsapp/webhook/${tenant_id}`;
+    const loginUrl = `${ServerEnvironmentConfig.urls.frontend}/login`;
+    const webhookUrl = `${ServerEnvironmentConfig.urls.backend}/api/whatsapp/webhook/${tenant_id}`;
     const metaVerifyToken = verify_token || process.env.META_VERIFY_TOKEN;
     
     const template = getTemplate("passwordSetSuccess");
@@ -246,7 +247,7 @@ export const sendTenantUserWelcomeEmailService = async (
   role,
 ) => {
   try {
-    const loginUrl = `${process.env.FRONTEND_URL}/login`;
+    const loginUrl = `${ServerEnvironmentConfig.urls.frontend}/login`;
 
     const template = getTemplate("tenantUserWelcome");
 
