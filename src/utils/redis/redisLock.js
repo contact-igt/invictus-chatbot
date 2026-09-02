@@ -12,6 +12,15 @@ export class RedisLock {
     this.defaultTTL = options.defaultTTL || 30; // seconds
     this.retryDelay = options.retryDelay || 100; // ms
     this.maxRetries = options.maxRetries || 3;
+    // Per-environment keyspace isolation — must match campaignQueue.js. Stage and
+    // Production share one Redis; an unprefixed `lock:<key>` lets one environment
+    // block the other's dispatch on a same-named-but-unrelated resource.
+    if (typeof options.keyPrefix === "string") {
+      this.keyPrefix = options.keyPrefix;
+    } else {
+      const env = String(process.env.BULLMQ_QUEUE_PREFIX || "").trim();
+      this.keyPrefix = env ? `${env}:` : "";
+    }
   }
 
   /**
@@ -22,7 +31,7 @@ export class RedisLock {
    * @returns {Promise<{success: boolean, token?: string, release?: Function}>}
    */
   async acquire(key, ttl = this.defaultTTL, renewIntervalMs = 10000) {
-    const lockKey = `lock:${key}`;
+    const lockKey = `${this.keyPrefix}lock:${key}`;
     const token = `token:${Date.now()}:${Math.random().toString(36).substr(2, 9)}`;
 
     try {
@@ -138,7 +147,7 @@ export class RedisLock {
    * @returns {Promise<boolean>}
    */
   async isLocked(key) {
-    const lockKey = `lock:${key}`;
+    const lockKey = `${this.keyPrefix}lock:${key}`;
     try {
       const exists = await this.redis.exists(lockKey);
       return exists === 1;
@@ -156,7 +165,7 @@ export class RedisLock {
    * @returns {Promise<boolean>}
    */
   async forceRelease(key) {
-    const lockKey = `lock:${key}`;
+    const lockKey = `${this.keyPrefix}lock:${key}`;
     try {
       await this.redis.del(lockKey);
       return true;

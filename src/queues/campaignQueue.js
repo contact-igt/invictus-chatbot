@@ -9,6 +9,7 @@
  * Falls back gracefully to cron-based execution when Redis is unavailable.
  *
  * CAMPAIGN_* env knobs used by campaign queues/workers:
+ *   BULLMQ_QUEUE_PREFIX               per-env Redis keyspace ("stage"/"prod"); unset = "bull"
  *   CAMPAIGN_QUEUE_CONNECT_TIMEOUT_MS  Redis probe timeout, default 1200 ms
  *   CAMPAIGN_JOB_ATTEMPTS              send job attempts, default 3
  *   CAMPAIGN_JOB_BACKOFF_DELAY         send retry delay, default 300000 ms
@@ -58,6 +59,19 @@ const REACHABILITY_RETRY_GAP_MS = Number(
 const REINIT_INTERVAL_MS = Number(
   process.env.CAMPAIGN_QUEUE_REINIT_INTERVAL_MS || 15000,
 );
+
+// Per-environment BullMQ keyspace isolation. Stage, Production and wellinit-backend
+// all connect to the same Redis; without a distinct prefix they share the exact
+// same queue keys and job ids, so one environment's dispatch/send worker silently
+// consumes another environment's jobs (loads the campaign from the wrong DB, finds
+// nothing, ends the job — the campaign stalls). Set BULLMQ_QUEUE_PREFIX per
+// deployment (e.g. "stage", "prod"). Unset → "bull" (BullMQ default, unchanged).
+const BULL_PREFIX = (() => {
+  const env = String(process.env.BULLMQ_QUEUE_PREFIX || "").trim();
+  return env ? `bull-${env}` : "bull";
+})();
+
+export const getBullPrefix = () => BULL_PREFIX;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -412,6 +426,7 @@ export const initCampaignQueues = async () => {
 
     campaignDispatchQueue = new Queue(DISPATCH_QUEUE_NAME, {
       connection: redisConnection,
+      prefix: BULL_PREFIX,
       defaultJobOptions: {
         attempts: 1,
         removeOnComplete: { count: 5000 },
@@ -499,19 +514,21 @@ export const getCampaignQueueHealth = async () => {
       const [nextCursor, keys] = await redisConnection.scan(
         stream || "0",
         "MATCH",
-        "bull:campaignQueue-*:*",
+        `${BULL_PREFIX}:campaignQueue-*:*`,
         "COUNT",
         250,
       );
       stream = nextCursor;
 
+      const tenantKeyRe = new RegExp(`^${BULL_PREFIX}:campaignQueue-([^:]+):`);
       for (const key of keys) {
-        const match = key.match(/^bull:campaignQueue-([^:]+):/);
+        const match = key.match(tenantKeyRe);
         const tenantId = match?.[1];
         if (!tenantId || seenTenantIds.has(tenantId)) continue;
 
         const queue = new BullmqQueueCtor(getTenantQueueName(tenantId), {
           connection: redisConnection,
+          prefix: BULL_PREFIX,
         });
         try {
           const counts = await queue.getJobCounts(
@@ -567,6 +584,7 @@ export const getTenantQueue = (tenant_id) => {
   const { Queue } = requireBullmqQueue();
   const queue = new Queue(queueName, {
     connection: redisConnection,
+    prefix: BULL_PREFIX,
     defaultJobOptions: {
       attempts: jobAttempts,
       backoff: { type: "exponential", delay: jobBackoffDelay },
@@ -593,6 +611,7 @@ export const getTenantDLQ = (tenant_id) => {
   const { Queue } = requireBullmqQueue();
   const queue = new Queue(queueName, {
     connection: redisConnection,
+    prefix: BULL_PREFIX,
     defaultJobOptions: {
       attempts: 1,
       removeOnComplete: false,

@@ -10,6 +10,21 @@ import db from "../database/index.js";
 export class CampaignBillingService {
   constructor(redisClient) {
     this.redis = redisClient;
+    // Per-environment keyspace isolation — must match campaignQueue.js. Stage and
+    // Production share one Redis and tenant ids overlap (e.g. TT001 exists in
+    // both), so an unprefixed `wallet:balance:<tenant>` key is read/overwritten
+    // by the other environment, corrupting the cached balance used for
+    // reservation checks. Unset BULLMQ_QUEUE_PREFIX → "" (unchanged behaviour).
+    const env = String(process.env.BULLMQ_QUEUE_PREFIX || "").trim();
+    this.keyPrefix = env ? `${env}:` : "";
+  }
+
+  _walletKey(tenantId) {
+    return `${this.keyPrefix}wallet:balance:${tenantId}`;
+  }
+
+  _reservationKey(reservationId) {
+    return `${this.keyPrefix}reservation:${reservationId}`;
   }
 
   /**
@@ -58,7 +73,7 @@ export class CampaignBillingService {
       // Keep cache aligned with DB — always sync to the authoritative DB
       // balance before reserving. This handles both stale-high (missed
       // deduction) and stale-low (recharge happened externally) scenarios.
-      const walletKey = `wallet:balance:${tenantId}`;
+      const walletKey = this._walletKey(tenantId);
       const cachedBalanceRaw = await this.redis.get(walletKey);
       if (!cachedBalanceRaw) {
         await this.redis.set(walletKey, dbBalance.toString());
@@ -104,7 +119,7 @@ export class CampaignBillingService {
         return {1, balance - reserveAmount}
       `;
 
-      const reservationKey = `reservation:${reservationId}`;
+      const reservationKey = this._reservationKey(reservationId);
 
       const result = await this.redis.eval(
         script,
@@ -163,8 +178,8 @@ export class CampaignBillingService {
    */
   async releaseReservation(tenantId, reservationId) {
     try {
-      const reservationKey = `reservation:${reservationId}`;
-      const walletKey = `wallet:balance:${tenantId}`;
+      const reservationKey = this._reservationKey(reservationId);
+      const walletKey = this._walletKey(tenantId);
 
       // Get reserved amount from hash and delete reservation atomically
       const script = `
@@ -215,8 +230,8 @@ export class CampaignBillingService {
    */
   async confirmReservation(tenantId, reservationId, consumedAmount = null) {
     try {
-      const reservationKey = `reservation:${reservationId}`;
-      const walletKey = `wallet:balance:${tenantId}`;
+      const reservationKey = this._reservationKey(reservationId);
+      const walletKey = this._walletKey(tenantId);
 
       const hasCustomAmount =
         consumedAmount !== null &&
@@ -323,7 +338,7 @@ export class CampaignBillingService {
         return false;
       }
 
-      const walletKey = `wallet:balance:${tenantId}`;
+      const walletKey = this._walletKey(tenantId);
       await this.redis.set(walletKey, wallet.balance.toString());
 
       logger.debug(
@@ -345,7 +360,7 @@ export class CampaignBillingService {
    */
   async getCachedBalance(tenantId) {
     try {
-      const walletKey = `wallet:balance:${tenantId}`;
+      const walletKey = this._walletKey(tenantId);
       const balance = await this.redis.get(walletKey);
 
       return balance ? parseFloat(balance) : null;
@@ -421,7 +436,7 @@ export class CampaignBillingService {
         const [nextCursor, keys] = await this.redis.scan(
           cursor,
           "MATCH",
-          "reservation:*",
+          `${this.keyPrefix}reservation:*`,
           "COUNT",
           100,
         );
@@ -440,7 +455,7 @@ export class CampaignBillingService {
         const [nextCursor, keys] = await this.redis.scan(
           cursor,
           "MATCH",
-          "wallet:balance:*",
+          `${this.keyPrefix}wallet:balance:*`,
           "COUNT",
           100,
         );

@@ -3,6 +3,14 @@ import { logger } from "../utils/logger.js";
 import { getRedisConnection } from "../queues/campaignQueue.js";
 import db from "../database/index.js";
 
+// Per-environment keyspace isolation — must match campaignBillingService.js.
+// Without it this cron scans and deletes the OTHER environment's live
+// reservations (Stage + Production share one Redis).
+const KEY_PREFIX = (() => {
+  const env = String(process.env.BULLMQ_QUEUE_PREFIX || "").trim();
+  return env ? `${env}:` : "";
+})();
+
 /**
  * B-2: Reconciliation cron for orphaned Redis reservation keys.
  *
@@ -47,11 +55,11 @@ const reconcileOrphanedReservations = async () => {
     );
 
     do {
-      // Scan Redis for keys matching pattern reservation:*
+      // Scan Redis for keys matching pattern <prefix>reservation:*
       const [nextCursor, keys] = await redis.scan(
         cursor,
         "MATCH",
-        "reservation:*",
+        `${KEY_PREFIX}reservation:*`,
         "COUNT",
         batchSize,
       );

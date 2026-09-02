@@ -24,6 +24,7 @@ import {
   getRedisConnection,
   getCampaignDispatchQueue,
   getCampaignDispatchQueueName,
+  getBullPrefix,
   getTenantQueue,
   isCampaignQueueAvailable,
 } from "../queues/campaignQueue.js";
@@ -463,6 +464,7 @@ export const startCampaignDispatchWorker = () => {
 
   dispatchWorker = new Worker(dispatchQueueName, processDispatchJob, {
     connection,
+    prefix: getBullPrefix(),
     concurrency,
   });
 

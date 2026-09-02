@@ -17,6 +17,14 @@ const REDIS_CONNECT_TIMEOUT_MS = Number(
   process.env.BILLING_QUEUE_CONNECT_TIMEOUT_MS || 1200,
 );
 
+// Per-environment keyspace isolation — must match campaignQueue.js. Stage and
+// Production share one Redis; without a distinct prefix a billing job enqueued by
+// one environment can be processed by the other's worker against the wrong DB.
+const BULL_PREFIX = (() => {
+  const env = String(process.env.BULLMQ_QUEUE_PREFIX || "").trim();
+  return env ? `bull-${env}` : "bull";
+})();
+
 const parseBooleanEnv = (value, defaultValue = true) => {
   if (value === undefined || value === null || value === "") return defaultValue;
   const normalized = String(value).trim().toLowerCase();
@@ -161,6 +169,7 @@ export const initBillingQueue = async () => {
     Queue = BullModule.default || BullModule;
 
     billingQueue = new Queue("billing-processing", redisUrl, {
+      prefix: BULL_PREFIX,
       defaultJobOptions: {
         attempts: 3,
         backoff: { type: "exponential", delay: 1000 },

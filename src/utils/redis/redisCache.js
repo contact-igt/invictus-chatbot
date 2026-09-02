@@ -232,8 +232,11 @@ export class RedisCache {
 // Campaign-specific cache methods
 export class CampaignCache extends RedisCache {
   constructor(redisClient) {
+    // Per-environment keyspace isolation — must match campaignQueue.js. Stage and
+    // Production share one Redis and campaign ids overlap between them.
+    const env = String(process.env.BULLMQ_QUEUE_PREFIX || "").trim();
     super(redisClient, {
-      keyPrefix: "campaign:cache:",
+      keyPrefix: `${env ? `${env}:` : ""}campaign:cache:`,
       defaultTTL: 3600, // 1 hour
     });
   }

@@ -19,6 +19,7 @@ import { logger } from "../utils/logger.js";
 import {
   initCampaignQueues,
   getRedisConnection,
+  getBullPrefix,
   getTenantDLQ,
   getTenantQueueName,
   isCampaignQueueAvailable,
@@ -1258,6 +1259,7 @@ const createTenantSendWorker = (tenantId) => {
 
   const worker = new Worker(queueName, processSendJob, {
     connection,
+    prefix: getBullPrefix(),
     concurrency: perTenantConcurrency,
     limiter: workerLimiter,
   });
