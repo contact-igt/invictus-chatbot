@@ -33,6 +33,11 @@ import {
   getAppointmentOperationRouterMode,
   isAppointmentOperationSafetyEnabled,
 } from "../AppointmentModel/appointmentOperationRouter.service.js";
+import {
+  confirmMetaMessagingReservation,
+  releaseMetaMessagingReservation,
+  reserveMetaMessagingRecipient,
+} from "../../services/metaMessagingLimit.service.js";
 
 const httpsAgent = new https.Agent({
   family: 4,
@@ -40,6 +45,7 @@ const httpsAgent = new https.Agent({
 });
 
 const META_GRAPH_BASE_URL = "https://graph.facebook.com";
+const META_API_VERSION = process.env.META_API_VERSION || "v25.0";
 const DEFAULT_META_REQUEST_TIMEOUT_MS = 30000;
 
 const buildMetaMessagesUrl = (apiVersion, phoneNumberId) =>
@@ -192,7 +198,6 @@ export const sendWhatsAppMessage = async (tenant_id, to, message) => {
     const access_token = await getSecret(tenant_id, "whatsapp");
     if (!access_token) throw new Error("WhatsApp access token not found");
 
-    const META_API_VERSION = process.env.META_API_VERSION || "v23.0";
 
     let wamid = null;
     try {
@@ -273,17 +278,17 @@ export const sendWhatsAppMessage = async (tenant_id, to, message) => {
  */
 export const uploadWhatsAppMedia = async (tenant_id, fileBuffer, mimeType, filename) => {
   const [rows] = await db.sequelize.query(
-    `SELECT phone_number_id FROM ${tableNames.WHATSAPP_ACCOUNT}
+    `SELECT phone_number_id, waba_id, tier FROM ${tableNames.WHATSAPP_ACCOUNT}
      WHERE tenant_id = ? AND status IN ('active', 'verified') LIMIT 1`,
     { replacements: [tenant_id] },
   );
   if (!rows.length) throw new Error("No active WhatsApp account for tenant");
 
-  const { phone_number_id } = rows[0];
+  const account = rows[0];
+  const { phone_number_id } = account;
   const access_token = await getSecret(tenant_id, "whatsapp");
   if (!access_token) throw new Error("WhatsApp access token not found");
 
-  const META_API_VERSION = process.env.META_API_VERSION || "v23.0";
 
   const form = new FormData();
   form.append("file", fileBuffer, { filename, contentType: mimeType });
@@ -352,7 +357,6 @@ export const sendWhatsAppMediaMessage = async (
     const access_token = await getSecret(tenant_id, "whatsapp");
     if (!access_token) throw new Error("WhatsApp access token not found");
 
-    const META_API_VERSION = process.env.META_API_VERSION || "v23.0";
 
     // id-based send (WhatsApp Media API upload) — reliable for audio/webm
     // link-based send — works for image/video/document with public R2 URL
@@ -427,7 +431,6 @@ export const sendWhatsAppLocation = async (tenant_id, to, locationParams) => {
   const access_token = await getSecret(tenant_id, "whatsapp");
   if (!access_token) throw new Error("WhatsApp access token not found");
 
-  const META_API_VERSION = process.env.META_API_VERSION || "v23.0";
 
   const payload = {
     messaging_product: "whatsapp",
@@ -484,14 +487,15 @@ export const sendWhatsAppTemplate = async (
   sendContext = {},
 ) => {
   const [rows] = await db.sequelize.query(
-    `SELECT phone_number_id FROM ${tableNames.WHATSAPP_ACCOUNT}
+    `SELECT phone_number_id, waba_id, tier FROM ${tableNames.WHATSAPP_ACCOUNT}
      WHERE tenant_id = ? AND status IN ('active', 'verified') LIMIT 1`,
     { replacements: [tenant_id] },
   );
 
   if (!rows.length) throw new Error("No active WhatsApp account for tenant");
 
-  const { phone_number_id } = rows[0];
+  const account = rows[0];
+  const { phone_number_id } = account;
   const access_token = await getSecret(tenant_id, "whatsapp");
   if (!access_token) throw new Error("WhatsApp access token not found");
 
@@ -515,7 +519,6 @@ export const sendWhatsAppTemplate = async (
       components: components || [],
     },
   };
-  const META_API_VERSION = process.env.META_API_VERSION || "v23.0";
   const requestUrl = buildMetaMessagesUrl(META_API_VERSION, phone_number_id);
   console.log("[SEND-TEMPLATE] Meta send request", {
     campaign_id: sendContext.campaign_id || null,
@@ -526,7 +529,22 @@ export const sendWhatsAppTemplate = async (
     request_url: requestUrl,
   });
 
+  let limitReservationId = null;
   try {
+    try {
+      limitReservationId = await reserveMetaMessagingRecipient({
+        account,
+        tenantId: tenant_id,
+        recipient: to,
+        templateName,
+      });
+    } catch (limitError) {
+      if (limitError?.code === "LOCAL_META_TIER_LIMIT") throw limitError;
+      console.warn(
+        `[META-LIMIT] Preflight unavailable for tenant ${tenant_id}; Meta remains authoritative: ${limitError.message}`,
+      );
+    }
+
     const response = await axios.post(
       requestUrl,
       payload,
@@ -535,8 +553,23 @@ export const sendWhatsAppTemplate = async (
 
     const meta_message_id = response.data?.messages?.[0]?.id;
 
+    try {
+      await confirmMetaMessagingReservation(limitReservationId, meta_message_id);
+    } catch (trackingError) {
+      console.error(
+        `[META-LIMIT] Sent message ${meta_message_id || "without wamid"}, but ledger confirmation failed: ${trackingError.message}`,
+      );
+    }
+
     return { phone_number_id, meta_message_id };
   } catch (error) {
+    try {
+      await releaseMetaMessagingReservation(limitReservationId);
+    } catch (trackingError) {
+      console.warn(
+        `[META-LIMIT] Could not release reservation after failed send: ${trackingError.message}`,
+      );
+    }
     console.error("[SEND-TEMPLATE] Meta send failed", {
       campaign_id: sendContext.campaign_id || null,
       recipient_id: sendContext.recipient_id || null,
@@ -576,7 +609,6 @@ export const sendReadReceipt = async (tenant_id, phone_number_id, message_id) =>
     const access_token = await getSecret(tenant_id, "whatsapp");
     if (!access_token) return;
 
-    const META_API_VERSION = process.env.META_API_VERSION || "v23.0";
     try {
       await axios.post(
         `https://graph.facebook.com/${META_API_VERSION}/${phone_number_id}/messages`,
@@ -629,7 +661,6 @@ export const sendTypingIndicator = async (
     const access_token = await getSecret(tenant_id, "whatsapp");
     if (!access_token) return;
 
-    const META_API_VERSION = process.env.META_API_VERSION || "v23.0";
 
     try {
       await axios.post(

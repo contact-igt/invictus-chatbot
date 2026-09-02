@@ -6,6 +6,7 @@
  * further calls until the service recovers.
  */
 import { logger } from "../utils/logger.js";
+import { isNetworkSystemError } from "../utils/metaErrorClassifier.js";
 
 export class CircuitBreaker {
   constructor(protectedFunction, options = {}) {
@@ -202,6 +203,16 @@ export class MetaApiCircuitBreaker extends CircuitBreaker {
    */
   onFailure(error) {
     const errorMessage = error?.message || "";
+    const status = Number(
+      error?.meta_response_status || error?.response?.status || 0,
+    );
+    const isInfrastructureFailure =
+      isNetworkSystemError(error) || status >= 500;
+
+    if (!isInfrastructureFailure) {
+      this.failureCount++;
+      return;
+    }
 
     // Check for specific Meta API unhealthy indicators
     const isUnhealthy =
@@ -225,13 +236,19 @@ export class MetaApiCircuitBreaker extends CircuitBreaker {
 }
 
 // Campaign-specific circuit breaker instances
-let metaApiCircuitBreaker = null;
+const metaApiCircuitBreakers = new Map();
 
-export const getMetaApiCircuitBreaker = (protectedFunction) => {
-  if (!metaApiCircuitBreaker && protectedFunction) {
-    metaApiCircuitBreaker = new MetaApiCircuitBreaker(protectedFunction);
+export const getMetaApiCircuitBreaker = (protectedFunction, tenantId) => {
+  const key = String(tenantId || "default");
+  if (!metaApiCircuitBreakers.has(key) && protectedFunction) {
+    metaApiCircuitBreakers.set(
+      key,
+      new MetaApiCircuitBreaker(protectedFunction, {
+        name: `MetaAPI:${key}`,
+      }),
+    );
   }
-  return metaApiCircuitBreaker;
+  return metaApiCircuitBreakers.get(key);
 };
 
 // Utility function to wrap any async function with circuit breaker

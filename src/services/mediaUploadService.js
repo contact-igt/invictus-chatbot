@@ -7,7 +7,7 @@
 import axios from "axios";
 import FormData from "form-data";
 
-const META_GRAPH_API_VERSION = "v23.0";
+const META_GRAPH_API_VERSION = process.env.META_API_VERSION || "v25.0";
 const META_GRAPH_API_BASE = `https://graph.facebook.com/${META_GRAPH_API_VERSION}`;
 
 /**

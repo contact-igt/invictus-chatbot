@@ -31,6 +31,7 @@ import { addCampaignUsageService } from "../GalleryModel/gallery.service.js";
 import { logger } from "../../utils/logger.js";
 import { recordCampaignDiagnosticEvent } from "../../utils/campaignDiagnosticsEvents.js";
 import { getIO } from "../../middlewares/socket/socket.js";
+import { resumeLocalCapacityPausedCampaigns } from "./campaignPauseControl.service.js";
 import {
   getDeletedCampaigns,
   hardDeleteCampaign,
@@ -75,7 +76,7 @@ const CAMPAIGN_MAX_ACTIVE_HOURS = parseInt(
  * (Redis down). In the unavailable case the scheduler recovery loop will keep
  * retrying once the queue comes back.
  */
-const enqueueCampaignDispatch = async (campaign_id, tenant_id) => {
+export const enqueueCampaignDispatch = async (campaign_id, tenant_id) => {
   if (!isCampaignQueueAvailable()) {
     logger.warn(
       `[CAMPAIGN-DISPATCH] Queue unavailable — cannot dispatch campaign ${campaign_id} yet. Scheduler recovery will retry.`,
@@ -697,52 +698,6 @@ export const createCampaignService = async (tenant_id, data, created_by) => {
             "Template header requires location_params with latitude, longitude, name, and address.",
           );
         }
-      }
-    }
-
-    // 2.5 Campaign Safety: Validate against rolling 24h limit
-    const account = await db.Whatsappaccount.findOne({
-      where: { tenant_id, is_deleted: false },
-    });
-    if (!account) throw new Error("WhatsApp account not found or deactivated.");
-
-    // Tier limits are WABA-level (portfolio), shared across all phone numbers.
-    // Counted as unique users (by contact_id) per 24h, not total messages.
-    const tierLimits = {
-      TIER_NOT_SET: 250,
-      TIER_2K: 2000,
-      TIER_10K: 10000,
-      TIER_100K: 100000,
-      TIER_UNLIMITED: Infinity,
-    };
-    const limit = tierLimits[account.tier] ?? 250;
-
-    if (limit !== Infinity) {
-      const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
-      const [usedRow] = await db.sequelize.query(
-        `
-                SELECT COUNT(DISTINCT contact_id) as used
-                FROM messages
-                WHERE tenant_id = :tenant_id
-                  AND sender IN ('bot', 'admin')
-                  AND created_at >= :targetTime
-            `,
-        {
-          replacements: {
-            tenant_id,
-            targetTime: twentyFourHoursAgo.toISOString(),
-          },
-          type: db.sequelize.QueryTypes.SELECT,
-        },
-      );
-
-      const used = parseInt(usedRow?.used || 0, 10);
-      const remaining = Math.max(0, limit - used);
-
-      if (recipients.length > remaining) {
-        throw new Error(
-          `Campaign blocked: Exceeds 24h messaging limits. You have ${remaining} conversations remaining but attempted to send to ${recipients.length} users.`,
-        );
       }
     }
 
@@ -1438,6 +1393,23 @@ export const startCampaignSchedulerService = () => {
 
       for (const campaign of dueCampaigns) {
         await enqueueCampaignDispatch(campaign.campaign_id, campaign.tenant_id);
+      }
+
+      // 1b. FIX 2 — auto-resume campaigns paused for LOCAL WABA capacity whose
+      //     next_retry_at has arrived AND local capacity has actually freed.
+      //     Only pause_type = META_LOCAL_CAPACITY is touched; MANUAL / spam /
+      //     account / auth pauses are never auto-resumed here. Re-dispatch
+      //     enqueues PENDING recipients only, so sent/delivered/read/failed
+      //     recipients are never resent (FIX 4).
+      try {
+        const resumed = await resumeLocalCapacityPausedCampaigns();
+        for (const c of resumed) {
+          await enqueueCampaignDispatch(c.campaign_id, c.tenant_id);
+        }
+      } catch (resumeErr) {
+        logger.error(
+          `[CAMPAIGN-SCHEDULER] Local-capacity resume step failed: ${resumeErr.message}`,
+        );
       }
 
       // 2. Self-heal: re-dispatch active campaigns that stalled with pending

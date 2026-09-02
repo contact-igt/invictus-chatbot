@@ -71,12 +71,14 @@ export const WhatsappAccountTable = (sequelize, Sequelize) => {
         allowNull: true,
       },
 
-      // WhatsApp Business quality rating from Meta
+      // WhatsApp Business quality rating from Meta.
+      // "UNKNOWN" = Meta has not rated the number yet (too few messages) or the
+      // sync has not run — never assume GREEN without evidence.
       quality: {
-        type: Sequelize.ENUM("GREEN", "YELLOW", "RED"),
+        type: Sequelize.ENUM("GREEN", "YELLOW", "RED", "UNKNOWN"),
         allowNull: true,
-        defaultValue: "GREEN",
-        comment: "Meta WABA quality rating",
+        defaultValue: "UNKNOWN",
+        comment: "Meta WABA quality rating (UNKNOWN until synced from Meta)",
       },
 
       // Deployment region (e.g. Global, India, US)
@@ -87,12 +89,19 @@ export const WhatsappAccountTable = (sequelize, Sequelize) => {
         comment: "Deployment region label",
       },
 
-      // Messaging tier limit label (e.g. 1K MSG LIMIT, 10K MSG LIMIT)
+      // Meta WABA messaging tier constant: TIER_NOT_SET | TIER_2K | TIER_10K
+      // | TIER_100K | TIER_UNLIMITED. Matches META_TIER_CONFIG keys.
       tier: {
         type: Sequelize.STRING(50),
         allowNull: true,
-        defaultValue: "1K MSG LIMIT",
-        comment: "Meta WABA messaging tier",
+        defaultValue: "TIER_NOT_SET",
+        comment: "Meta WABA messaging tier constant (TIER_NOT_SET until synced)",
+      },
+
+      meta_info_synced_at: {
+        type: Sequelize.DATE,
+        allowNull: true,
+        comment: "Last successful quality/tier refresh from Meta",
       },
 
       last_error: {

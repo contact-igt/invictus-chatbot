@@ -74,40 +74,18 @@ import db from "../../database/index.js";
 import { tableNames } from "../../database/tableName.js";
 import axios from "axios";
 import { storeSecret, getSecret } from "../TenantSecretsModel/tenantSecrets.service.js";
+import {
+  isPersistableMetaTier,
+  resolveMetaTier,
+} from "../../utils/metaMessagingTier.js";
+
+const META_API_VERSION = process.env.META_API_VERSION || "v25.0";
 
 /**
  * Tier label map: Meta whatsapp_business_manager_messaging_limit → UI label + daily unique-user limit
  * Source of truth: WABA-level (portfolio), shared across all phone numbers.
  * Updated for Meta's 2025+ tier model.
  */
-export const META_TIER_CONFIG = {
-  TIER_NOT_SET: {
-    name: "Trial",
-    limit: 250,
-    upgradeHint: "Send 2,000 unique users in 30 days OR verify your business",
-  },
-  TIER_2K: {
-    name: "Standard",
-    limit: 2000,
-    upgradeHint: "Reach 1,000 unique users in last 7 days & maintain GREEN quality",
-  },
-  TIER_10K: {
-    name: "Growth",
-    limit: 10000,
-    upgradeHint: "Reach 5,000 unique users in last 7 days & maintain GREEN quality",
-  },
-  TIER_100K: {
-    name: "Scale",
-    limit: 100000,
-    upgradeHint: "Reach 50,000 unique users in last 7 days & maintain GREEN quality",
-  },
-  TIER_UNLIMITED: {
-    name: "Unlimited",
-    limit: Infinity,
-    upgradeHint: null,
-  },
-};
-
 /**
  * Syncs quality_rating and messaging limit tier from Meta for the tenant's phone number.
  *
@@ -127,12 +105,33 @@ export const syncWabaMetaInfoService = async (tenant_id) => {
   try {
     const account = await db.Whatsappaccount.findOne({
       where: { tenant_id, is_deleted: false },
-      attributes: ["id", "phone_number_id"],
+      attributes: [
+        "id",
+        "phone_number_id",
+        "waba_id",
+        "quality",
+        "tier",
+        "meta_info_synced_at",
+      ],
       raw: true,
     });
 
     if (!account || !account.phone_number_id) {
       throw new Error("No active WhatsApp account found for this tenant.");
+    }
+
+    const lastSync = account.meta_info_synced_at
+      ? new Date(account.meta_info_synced_at)
+      : null;
+    if (lastSync && Date.now() - lastSync.getTime() < 5 * 60 * 1000) {
+      return {
+        quality: account.quality || "UNKNOWN",
+        tier: account.tier || "TIER_NOT_SET",
+        raw_tier: account.tier || null,
+        synced_at: lastSync,
+        source: "cache",
+        ...resolveMetaTier(account.tier),
+      };
     }
 
     // Decrypt only at point of use — never log
@@ -143,7 +142,7 @@ export const syncWabaMetaInfoService = async (tenant_id) => {
 
     // 2. Call Meta Graph API — decrypt only at point of use
     const metaResponse = await axios.get(
-      `https://graph.facebook.com/v25.0/${account.phone_number_id}`,
+      `https://graph.facebook.com/${META_API_VERSION}/${account.phone_number_id}`,
       {
         params: {
           fields:
@@ -156,20 +155,45 @@ export const syncWabaMetaInfoService = async (tenant_id) => {
 
     const { quality_rating, whatsapp_business_manager_messaging_limit } = metaResponse.data;
 
-    // 3. Map Meta values to DB-friendly values
-    const qualityForDb = ["GREEN", "YELLOW", "RED"].includes(quality_rating)
+    // 3. Map Meta values to DB-friendly values.
+    // Meta returns "UNKNOWN" (or omits the field) for numbers that have not sent
+    // enough messages yet — keep that as-is instead of pretending it is GREEN.
+    const qualityForDb = ["GREEN", "YELLOW", "RED", "UNKNOWN"].includes(
+      quality_rating,
+    )
       ? quality_rating
-      : "GREEN";
+      : account.quality || "UNKNOWN";
 
     // whatsapp_business_manager_messaging_limit returns values like TIER_NOT_SET, TIER_2K, TIER_10K, etc.
-    const tierRaw = whatsapp_business_manager_messaging_limit || "TIER_NOT_SET";
-    const tierLabel = META_TIER_CONFIG[tierRaw] ? tierRaw : "TIER_NOT_SET";
-    
+    const tierRaw = whatsapp_business_manager_messaging_limit || null;
+    const tierForDb = isPersistableMetaTier(tierRaw) ? tierRaw : account.tier;
+    const syncedAt = new Date();
+
+    // 4. Persist so the dashboard and campaign-safety checks read real values,
+    //    not the column defaults. Best-effort — never block on a write failure.
+    try {
+      await db.Whatsappaccount.update(
+        {
+          quality: qualityForDb,
+          ...(tierForDb ? { tier: tierForDb } : {}),
+          meta_info_synced_at: syncedAt,
+        },
+        { where: { id: account.id } },
+      );
+    } catch (writeErr) {
+      console.error(
+        "[WABA Sync] Failed to persist quality/tier:",
+        writeErr.message,
+      );
+    }
 
     return {
       quality: qualityForDb,
-      tier: tierLabel,
+      tier: tierForDb || "TIER_NOT_SET",
       raw_tier: tierRaw,
+      synced_at: syncedAt,
+      source: "meta",
+      ...resolveMetaTier(tierForDb),
     };
   } catch (err) {
     // Non-blocking: log but don't crash — dashboard still works with DB fallback values
@@ -393,7 +417,7 @@ export const getTenantByPhoneNumberIdService = async (phone_number_id) => {
  */
 export const validateAccessTokenService = async (access_token) => {
   try {
-    const response = await axios.get("https://graph.facebook.com/v19.0/me", {
+    const response = await axios.get(`https://graph.facebook.com/${META_API_VERSION}/me`, {
       params: { access_token },
       timeout: 8000,
     });
@@ -427,7 +451,7 @@ export const validateMetaSubscriptionService = async (
 ) => {
   try {
     const response = await axios.get(
-      `https://graph.facebook.com/v19.0/${waba_id}/subscribed_apps`,
+      `https://graph.facebook.com/${META_API_VERSION}/${waba_id}/subscribed_apps`,
       {
         params: { access_token },
         timeout: 8000,
@@ -475,7 +499,7 @@ export const subscribeToWebhookFieldsService = async (
 ) => {
   try {
     const response = await axios.post(
-      `https://graph.facebook.com/v19.0/${waba_id}/subscribed_apps`,
+      `https://graph.facebook.com/${META_API_VERSION}/${waba_id}/subscribed_apps`,
       null,
       {
         params: { access_token },

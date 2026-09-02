@@ -83,6 +83,7 @@ import { SidebarSectionIndustriesTable } from "./tables/SidebarSectionIndustries
 import { SidebarSectionPlansTable } from "./tables/SidebarSectionPlansTable/index.js";
 import { SidebarSectionTenantsTable } from "./tables/SidebarSectionTenantsTable/index.js";
 import { ApiRequestLogsTable } from "./tables/ApiRequestLogsTable/index.js";
+import { MetaMessagingLimitEventTable } from "./tables/MetaMessagingLimitEventTable/index.js";
 
 const dbconfig =
   ServerEnvironmentConfig?.server?.line === "production"
@@ -236,6 +237,7 @@ db.SidebarSectionIndustries = SidebarSectionIndustriesTable(
 db.SidebarSectionPlans = SidebarSectionPlansTable(sequelize, Sequelize);
 db.SidebarSectionTenants = SidebarSectionTenantsTable(sequelize, Sequelize);
 db.ApiRequestLogs = ApiRequestLogsTable(sequelize, Sequelize);
+db.MetaMessagingLimitEvents = MetaMessagingLimitEventTable(sequelize, Sequelize);
 
 defineAssociations(db);
 

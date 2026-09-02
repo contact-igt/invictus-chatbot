@@ -8,29 +8,39 @@
 // NOTE: Auth errors (190, 200) are NOT here — they are handled by isMetaAuthConfigError
 // which pauses campaigns immediately rather than retrying uselessly.
 const RETRYABLE_META_CODES = new Set([
-  1005, // Limit exceeded (rate limiting)
-  131056, // Try later (temporary service issue)
-  100, // Unknown error (generic, can retry)
+  1,
+  2,
+  4,
+  17,
+  341,
+  80007, // WABA throughput limit
+  130429, // Cloud API throughput limit
+  131056, // Business/recipient pair rate limit
 ]);
+
+// Kept for backward compatibility with existing callers. New code should use
+// classifyMetaError().category (SPAM_RESTRICTION vs ACCOUNT_RESTRICTION differ).
+const ACCOUNT_RESTRICTION_META_CODES = new Set([
+  131031, // WABA restricted or disabled  → ACCOUNT_RESTRICTION
+  131048, // Messaging restricted to protect a healthy ecosystem → SPAM_RESTRICTION
+]);
+
+// ── Fine-grained code groups for classifyMetaError() ────────────────────────
+const SPAM_RESTRICTION_META_CODES = new Set([131048]);
+const HARD_ACCOUNT_RESTRICTION_META_CODES = new Set([131031]);
+const THROUGHPUT_META_CODES = new Set([130429, 80007]);
+const PAIR_RATE_LIMIT_META_CODES = new Set([131056]);
+const RECIPIENT_FREQUENCY_META_CODES = new Set([131049]);
 
 // Meta error codes that are PERMANENT (will never succeed, don't retry)
 const PERMANENT_META_CODES = new Set([
   131030, // Test recipient / invalid test number (never deliver)
-  131031, // Invalid recipient phone (malformed number)
-  131026, // Recipient has opted out (will never accept)
-  131027, // Phone number is blocked (will never deliver)
-  131028, // User unable to receive (account issue)
-  131070, // Account not available (account suspended)
+  131026, // Message undeliverable to this recipient
   131062, // Message template not found (config issue)
   131061, // Recipient not on WhatsApp (wrong number)
   131060, // Message rejected (invalid format)
-  131059, // Campaign suspended (admin action)
-  131058, // Rate limit exceeded for phone (permanent block)
   400, // Bad request (validation error, malformed data)
-  403, // Forbidden (missing permissions)
-  404, // Not found (resource doesn't exist)
-  500, // Internal server error (usually transient but often treated as permanent)
-  803, // Call to the API timed out (retryable under normal circumstances)
+  404, // Resource/configuration not found
 ]);
 
 // Network/system error codes that are RETRYABLE
@@ -50,9 +60,7 @@ const RETRYABLE_NETWORK_CODES = new Set([
 
 // Fallback patterns for string-based error detection when code is unavailable
 const PERMANENT_ERROR_PATTERNS = [
-  "healthy ecosystem",
   "not delivered",
-  "spam",
   "blocked",
   "recipient not on whatsapp",
   "incapable of receiving",
@@ -170,6 +178,67 @@ function isMetaAuthConfigError(err) {
   );
 }
 
+function isMetaAccountRestrictionError(err) {
+  if (!err) return false;
+  // Backward compatible: `meta_account_restriction` was set by the old local
+  // capacity error. New local-capacity errors set `meta_local_capacity`
+  // instead, so they no longer match here (they get their own resumable path).
+  if (err?.meta_account_restriction === true) return true;
+  return ACCOUNT_RESTRICTION_META_CODES.has(extractMetaErrorCode(err));
+}
+
+function isLocalMetaCapacityError(err) {
+  return (
+    err?.code === "LOCAL_META_TIER_LIMIT" || err?.meta_local_capacity === true
+  );
+}
+
+/**
+ * Single categoriser. Returns one stable category so the campaign worker and
+ * the async webhook handler can switch on the same value instead of chaining
+ * ad-hoc `isX()` checks.
+ *
+ * @returns {{ category: string, code: number|null, retryable: boolean, message: string }}
+ *   category ∈ LOCAL_CAPACITY | SPAM_RESTRICTION | ACCOUNT_RESTRICTION |
+ *              AUTH_CONFIG | THROUGHPUT | PAIR_RATE_LIMIT | RECIPIENT_FREQUENCY |
+ *              PERMANENT | TRANSIENT
+ */
+function classifyMetaError(err) {
+  const code = extractMetaErrorCode(err);
+  const message = extractErrorMessage(err);
+  const base = { code, message };
+
+  if (isLocalMetaCapacityError(err)) {
+    return { ...base, category: "LOCAL_CAPACITY", retryable: false };
+  }
+  if (isNetworkSystemError(err)) {
+    return { ...base, category: "TRANSIENT", retryable: true };
+  }
+  if (isMetaAuthConfigError(err)) {
+    return { ...base, category: "AUTH_CONFIG", retryable: false };
+  }
+  if (SPAM_RESTRICTION_META_CODES.has(code)) {
+    return { ...base, category: "SPAM_RESTRICTION", retryable: false };
+  }
+  if (HARD_ACCOUNT_RESTRICTION_META_CODES.has(code)) {
+    return { ...base, category: "ACCOUNT_RESTRICTION", retryable: false };
+  }
+  if (THROUGHPUT_META_CODES.has(code)) {
+    return { ...base, category: "THROUGHPUT", retryable: true };
+  }
+  if (PAIR_RATE_LIMIT_META_CODES.has(code)) {
+    return { ...base, category: "PAIR_RATE_LIMIT", retryable: true };
+  }
+  if (RECIPIENT_FREQUENCY_META_CODES.has(code)) {
+    return { ...base, category: "RECIPIENT_FREQUENCY", retryable: false };
+  }
+  if (isFinallyPermanent(err)) {
+    return { ...base, category: "PERMANENT", retryable: false };
+  }
+  // HTTP 5xx and anything else unrecognised → retry, never data-loss.
+  return { ...base, category: "TRANSIENT", retryable: true };
+}
+
 /**
  * Classify an error as PERMANENT or RETRYABLE
  * Prefers numeric error code classification, falls back to pattern matching
@@ -187,6 +256,9 @@ function isFinallyPermanent(err) {
 
   // Auth/config errors belong to the tenant/account setup, not a recipient.
   if (isMetaAuthConfigError(err)) return false;
+  if (isMetaAccountRestrictionError(err)) return false;
+  // Local WABA capacity — resumable, never a recipient failure.
+  if (isLocalMetaCapacityError(err)) return false;
 
   // Extract Meta error code for numeric classification
   const metaCode = extractMetaErrorCode(err);
@@ -254,9 +326,18 @@ export {
   extractMetaErrorData,
   extractErrorMessage,
   isMetaAuthConfigError,
+  isMetaAccountRestrictionError,
+  isLocalMetaCapacityError,
+  classifyMetaError,
   createStructuredError,
   formatErrorForLogging,
   PERMANENT_META_CODES,
   RETRYABLE_META_CODES,
+  ACCOUNT_RESTRICTION_META_CODES,
+  SPAM_RESTRICTION_META_CODES,
+  HARD_ACCOUNT_RESTRICTION_META_CODES,
+  THROUGHPUT_META_CODES,
+  PAIR_RATE_LIMIT_META_CODES,
+  RECIPIENT_FREQUENCY_META_CODES,
   PERMANENT_ERROR_PATTERNS,
 };

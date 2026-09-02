@@ -56,10 +56,13 @@ import {
 import {
   isNetworkSystemError,
   isMetaAuthConfigError,
+  isMetaAccountRestrictionError,
   isFinallyPermanent,
+  classifyMetaError,
   createStructuredError,
   formatErrorForLogging,
 } from "../utils/metaErrorClassifier.js";
+import { pauseCampaignsForMetaError } from "../models/WhatsappCampaignModel/campaignPauseControl.service.js";
 
 // Batch buffers per-tenant to reduce DB writes
 const TENANT_BUFFERS = new Map();
@@ -714,7 +717,10 @@ async function processSendJob(job) {
 
     // Send through Meta and capture wamid for webhook correlation.
 
-    const circuitBreaker = getMetaApiCircuitBreaker(sendWhatsAppTemplate);
+    const circuitBreaker = getMetaApiCircuitBreaker(
+      sendWhatsAppTemplate,
+      tenant_id,
+    );
 
     // B-1: Acquire per-recipient Redis lock to prevent double-sends on race/retry
     const sendLockKey = `send-lock:${recipient_id}`;
@@ -751,6 +757,17 @@ async function processSendJob(job) {
           campaign_id,
           recipient_id,
         },
+      );
+      const metaMessageId = sendResult?.meta_message_id ?? null;
+
+      await db.WhatsappCampaignRecipients.update(
+        {
+          status: "sent",
+          meta_message_id: metaMessageId,
+          error_message: null,
+          next_retry_at: null,
+        },
+        { where: { id: recipient_id, campaign_id } },
       );
 
       // ── 8. Buffer recipient status + message insert for batched DB writes ──
@@ -813,12 +830,10 @@ async function processSendJob(job) {
         campaignMediaMimeType = mimeMap[ext] || "application/octet-stream";
       }
 
-      const metaMessageId = sendResult?.meta_message_id ?? null;
-
       const messageRow = {
         tenant_id,
         contact_id: contactId || null,
-        phone_number_id: null,
+        phone_number_id: sendResult?.phone_number_id || null,
         country_code: null,
         phone: recipient.mobile_number,
         wamid: metaMessageId,
@@ -838,32 +853,11 @@ async function processSendJob(job) {
             : null,
       };
 
-      const recipientUpdate = {
-        id: recipient_id,
-        campaign_id: campaign_id,
-        status: "sent",
-        meta_message_id: metaMessageId,
-        error_message: null,
-        retry_count: null,
-        next_retry_at: null,
-      };
-
       const tId = String(tenant_id);
       const buf = getTenantBuffer(tId);
       buf.messages.push(messageRow);
 
       // B-1: Deduplication — last-write-wins per recipient_id
-      if (buf.recipientIdSet.has(recipient_id)) {
-        const prevIdx = buf.recipientUpdates.findIndex(
-          (u) => u.id === recipient_id,
-        );
-        if (prevIdx >= 0) {
-          buf.recipientUpdates.splice(prevIdx, 1);
-        }
-      }
-      buf.recipientIdSet.add(recipient_id);
-      buf.recipientUpdates.push(recipientUpdate);
-
       if (
         buf.messages.length >= DB_BATCH_SIZE ||
         buf.recipientUpdates.length >= DB_BATCH_SIZE ||
@@ -926,8 +920,47 @@ async function processSendJob(job) {
       meta: { campaign_id, tenant_id, recipient_id, phone: formattedPhone },
     });
   } catch (err) {
-    // Classify the error using numeric Meta error codes
-    const isPermErr = isFinallyPermanent(err);
+    // Classify once; the worker switches on the stable category (FIX 6 / FIX 7).
+    const classification = classifyMetaError(err);
+    const isPermErr =
+      classification.category === "PERMANENT" || isFinallyPermanent(err);
+
+    // ── Campaign-level pauses ────────────────────────────────────────────────
+    //  LOCAL_CAPACITY      → pause THIS campaign, store next_retry_at, auto-resume
+    //  SPAM_RESTRICTION    → pause all active, NO timer-based resume
+    //  ACCOUNT_RESTRICTION → pause all active, requires account recovery
+    if (
+      classification.category === "LOCAL_CAPACITY" ||
+      classification.category === "SPAM_RESTRICTION" ||
+      classification.category === "ACCOUNT_RESTRICTION"
+    ) {
+      try {
+        await pauseCampaignsForMetaError({
+          tenantId: tenant_id,
+          error: err,
+          classification,
+          // LOCAL_CAPACITY → only this campaign; restrictions → all active
+          campaignId:
+            classification.category === "LOCAL_CAPACITY" ? campaign_id : null,
+        });
+      } catch (pauseError) {
+        logger.error(
+          `[SEND-WORKER] Failed to pause after ${classification.category}: ${pauseError.message}`,
+        );
+      }
+      return; // job done; recipient stays resumable (pending / retryable)
+    }
+
+    // ── THROUGHPUT / PAIR_RATE_LIMIT — retry with backoff, do NOT pause ──────
+    if (
+      classification.category === "THROUGHPUT" ||
+      classification.category === "PAIR_RATE_LIMIT"
+    ) {
+      logger.warn(
+        `[SEND-WORKER] ${classification.category} (code=${classification.code}) recipient ${recipient_id} — retrying with backoff`,
+      );
+      throw err; // BullMQ backoff retry
+    }
 
     // Auth/config errors (expired token, wrong permissions) are tenant-level —
     // the same broken token affects ALL campaigns for this tenant. Pause every

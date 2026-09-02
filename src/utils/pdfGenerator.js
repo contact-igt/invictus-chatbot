@@ -199,7 +199,7 @@ async function generateInvoicePdf(invoiceId, tenantId) {
   doc.fontSize(10).font("Helvetica-Bold");
   doc.text("Description", 50, tableTop);
   doc.text("Period", 280, tableTop);
-  doc.text("Amount (₹)", 450, tableTop, { width: 95, align: "right" });
+  doc.text("Amount (INR)", 450, tableTop, { width: 95, align: "right" });
 
   doc
     .moveTo(50, tableTop + 15)
@@ -276,7 +276,7 @@ async function generateInvoicePdf(invoiceId, tenantId) {
   y += 10;
   doc.fontSize(12).font("Helvetica-Bold");
   doc.text("TOTAL", 350, y);
-  doc.text(`₹${invoice.total_amount || "0.00"}`, 450, y, {
+  doc.text(`INR ${invoice.total_amount || "0.00"}`, 450, y, {
     width: 95,
     align: "right",
   });
@@ -419,7 +419,7 @@ async function generateReceiptPdf(paymentId, tenantId) {
   doc.fontSize(10).font("Helvetica-Bold");
   doc.text("Description", 50, tableTop);
   doc.text("Reference ID / Method", 250, tableTop);
-  doc.text("Amount (₹)", 450, tableTop, { width: 95, align: "right" });
+  doc.text("Amount (INR)", 450, tableTop, { width: 95, align: "right" });
 
   doc
     .moveTo(50, tableTop + 15)
@@ -483,7 +483,7 @@ async function generateReceiptPdf(paymentId, tenantId) {
   y += 10;
   doc.fontSize(12).font("Helvetica-Bold");
   doc.text("TOTAL PAID", 300, y);
-  doc.text(`₹${grossAmt.toFixed(2)}`, 450, y, {
+  doc.text(`INR ${grossAmt.toFixed(2)}`, 450, y, {
     width: 95,
     align: "right",
   });
@@ -502,9 +502,9 @@ async function generateReceiptPdf(paymentId, tenantId) {
   doc.fontSize(10).font("Helvetica-Bold").text("Wallet Balance Update:", 50, y);
   y += 15;
   doc.font("Helvetica");
-  doc.text(`Balance Before: ₹${parseFloat(payment.balance_before || 0).toFixed(2)}`, 50, y);
+  doc.text(`Balance Before: INR ${parseFloat(payment.balance_before || 0).toFixed(2)}`, 50, y);
   y += 12;
-  doc.text(`Balance After: ₹${parseFloat(payment.balance_after || 0).toFixed(2)}`, 50, y);
+  doc.text(`Balance After: INR ${parseFloat(payment.balance_after || 0).toFixed(2)}`, 50, y);
   y += 30;
 
   // Status Badge

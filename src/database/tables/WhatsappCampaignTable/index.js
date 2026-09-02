@@ -80,6 +80,29 @@ export const WhatsappCampaignTable = (sequelize, Sequelize) => {
         allowNull: true,
       },
 
+      // FIX 3 — structured pause metadata. Auto-resume targets pause_type only,
+      // never the free-text paused_reason.
+      pause_type: {
+        type: Sequelize.STRING(48),
+        allowNull: true,
+        comment:
+          "META_LOCAL_CAPACITY | META_SPAM_RESTRICTION | META_ACCOUNT_RESTRICTION | META_AUTH_CONFIG | MANUAL",
+      },
+      pause_code: {
+        type: Sequelize.STRING(32),
+        allowNull: true,
+        comment: "Meta error code or LOCAL_META_TIER_LIMIT",
+      },
+      paused_at: {
+        type: Sequelize.DATE,
+        allowNull: true,
+      },
+      next_retry_at: {
+        type: Sequelize.DATE,
+        allowNull: true,
+        comment: "When the auto-resume scheduler may recheck a META_LOCAL_CAPACITY pause",
+      },
+
       scheduled_at: {
         type: Sequelize.DATE,
         allowNull: true,

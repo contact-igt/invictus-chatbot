@@ -10,10 +10,30 @@ import {
   syncWabaMetaInfoService,
   subscribeToWebhookFieldsService,
   validateMetaSubscriptionService,
-  META_TIER_CONFIG,
 } from "./whatsappAccount.service.js";
 import { missingFieldsChecker } from "../../utils/helpers/missingFields.js";
 import ServerEnvironmentConfig from "../../config/server.config.js";
+import { resolveMetaTier } from "../../utils/metaMessagingTier.js";
+
+const buildMessagingLimitResponse = (account, syncResult = null) => {
+  const tier = resolveMetaTier(syncResult?.tier || account?.tier);
+  return {
+    tier_key: tier.tierKey,
+    tier_name: tier.tierName,
+    daily_limit: tier.dailyLimit,
+    is_unlimited: tier.isUnlimited,
+    is_known: tier.isKnown,
+    upgrade_target: tier.upgradeTarget,
+    upgrade_window_days: tier.upgradeWindowDays,
+    next_tier_key: tier.nextTierKey,
+    allows_verification_path: tier.allowsVerificationPath,
+    requires_high_quality: tier.requiresHighQuality,
+    quality: syncResult?.quality || account?.quality || "UNKNOWN",
+    source: syncResult?.source || "cache",
+    synced_at: syncResult?.synced_at || account?.meta_info_synced_at || null,
+    is_estimate: true,
+  };
+};
 
 export const whatsappOAuthCallbackController = async (req, res) => {
   try {
@@ -373,14 +393,15 @@ export const getWhatsappAccountController = async (req, res) => {
       return res.status(200).send({ data: null });
     }
 
-    // Non-blocking: refresh quality & tier from Meta in background
-    syncWabaMetaInfoService(tenant_id).catch((e) =>
-      console.error("[WABA Sync] Background sync failed:", e.message),
-    );
+    const syncResult = await syncWabaMetaInfoService(tenant_id);
+    const messagingLimit = buildMessagingLimitResponse(account, syncResult);
 
     // Never expose the raw token to the frontend
     const { access_token, ...safeAccount } = account;
     safeAccount.has_access_token = !!access_token;
+    safeAccount.quality = messagingLimit.quality;
+    safeAccount.tier = messagingLimit.tier_key;
+    safeAccount.messaging_limit = messagingLimit;
 
     return res.status(200).send({ data: safeAccount });
   } catch (err) {
@@ -398,22 +419,12 @@ export const getTierLimitController = async (req, res) => {
       return res.status(200).send({ data: null });
     }
 
-    // Trigger background sync so data stays fresh without blocking the response
-    syncWabaMetaInfoService(tenant_id).catch((e) =>
-      console.error("[Tier Sync] Background sync failed:", e.message),
-    );
-
-    const tierKey = account.tier || "TIER_NOT_SET";
-    const tierConfig = META_TIER_CONFIG[tierKey] || META_TIER_CONFIG["TIER_NOT_SET"];
+    const syncResult = await syncWabaMetaInfoService(tenant_id);
+    const messagingLimit = buildMessagingLimitResponse(account, syncResult);
 
     return res.status(200).send({
       data: {
-        tier_key: tierKey,
-        tier_name: tierConfig.name,
-        // Limit is unique users per 24h across the entire WABA (portfolio-level)
-        daily_limit: tierConfig.limit === Infinity ? "Unlimited" : tierConfig.limit,
-        upgrade_hint: tierConfig.upgradeHint,
-        quality: account.quality || "GREEN",
+        ...messagingLimit,
         phone_number: account.whatsapp_number,
         waba_id: account.waba_id,
       },

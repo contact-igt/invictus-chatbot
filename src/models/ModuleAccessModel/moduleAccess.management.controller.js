@@ -112,7 +112,7 @@ export const listPlansController = async (req, res) => {
 export const createPlanController = async (req, res) => {
   try {
     const data = await createPlanService(req.body);
-    return res.status(200).json({ message: "success", data });
+    return res.status(200).json({ message: "Plan created successfully", data });
   } catch (err) {
     return handleError(res, err);
   }
@@ -122,7 +122,7 @@ export const patchPlanController = async (req, res) => {
   try {
     const { planId } = req.params;
     const data = await patchPlanService(planId, req.body);
-    return res.status(200).json({ message: "success", data });
+    return res.status(200).json({ message: "Plan updated successfully", data });
   } catch (err) {
     return handleError(res, err);
   }

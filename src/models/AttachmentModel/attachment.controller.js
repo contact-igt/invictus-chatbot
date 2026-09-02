@@ -20,7 +20,7 @@ import db from "../../database/index.js";
 import { tableNames } from "../../database/tableName.js";
 import { getSecret } from "../TenantSecretsModel/tenantSecrets.service.js";
 
-const META_API_VERSION = process.env.META_API_VERSION || "v23.0";
+const META_API_VERSION = process.env.META_API_VERSION || "v25.0";
 
 /**
  * Fetch the media URL + content-type from Meta's Graph API for a given mediaId.

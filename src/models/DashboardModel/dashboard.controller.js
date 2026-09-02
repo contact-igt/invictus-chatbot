@@ -1,5 +1,8 @@
 ﻿import { getDashboardStatsService } from "./dashboard.service.js";
 
+import { syncWabaMetaInfoService } from "../WhatsappAccountModel/whatsappAccount.service.js";
+import { resolveMetaTier } from "../../utils/metaMessagingTier.js";
+
 /** Compute "Xm / Xh waiting" from last_user_message_at. */
 const waitingTime = (date) => {
     if (!date) return "0m";
@@ -33,6 +36,7 @@ export const getDashboardController = async (req, res) => {
             return res.status(400).send({ message: "startDate must not be after endDate" });
         }
 
+        const syncResult = await syncWabaMetaInfoService(tenantId);
         const stats = await getDashboardStatsService(tenantId, startDate, endDate);
 
         // ─── Leads trend ──────────────────────────────────────────────────────
@@ -43,17 +47,7 @@ export const getDashboardController = async (req, res) => {
             ? parseFloat((((leadsCurrentCount - leadsPreviousCount) / leadsPreviousCount) * 100).toFixed(1))
             : 0;
 
-        // ─── WABA tier normalisation ──────────────────────────────────────────
-        const rawTier = stats.waba?.tier || "TIER_NOT_SET";
-        const OLD_TIER_MAP = {
-            "1K MSG LIMIT":   "TIER_2K",
-            "10K MSG LIMIT":  "TIER_10K",
-            "100K MSG LIMIT": "TIER_100K",
-            "UNLIMITED":      "TIER_UNLIMITED",
-        };
-        const normalizedTier = rawTier.startsWith("TIER_")
-            ? rawTier
-            : (OLD_TIER_MAP[rawTier] ?? "TIER_NOT_SET");
+        const tier = resolveMetaTier(syncResult?.tier || stats.waba?.tier);
 
         // ─── Live Operations section (only when isLiveMode) ───────────────────
         let liveOperations = null;
@@ -110,9 +104,23 @@ export const getDashboardController = async (req, res) => {
             wabaInfo: {
                 number:          stats.waba?.whatsapp_number || "Not Connected",
                 status:          stats.waba?.status === "active" ? "Live" : (stats.waba?.status || "Unknown"),
-                quality:         stats.waba?.quality          || "GREEN",
+                // Pass Meta's rating through as-is. Do NOT fabricate "GREEN" when it is
+                // missing/unknown — the UI shows a neutral "Not rated yet" state instead.
+                quality:         stats.waba?.quality          || "UNKNOWN",
                 region:          stats.waba?.region           || "Global",
-                tier:            normalizedTier,
+                tier:            tier.tierKey,
+                tierName:        tier.tierName,
+                dailyLimit:      tier.dailyLimit,
+                isUnlimited:     tier.isUnlimited,
+                isTierKnown:     tier.isKnown,
+                upgradeTarget:   tier.upgradeTarget,
+                upgradeWindowDays: tier.upgradeWindowDays,
+                nextTierKey:     tier.nextTierKey,
+                allowsVerificationPath: tier.allowsVerificationPath,
+                requiresHighQuality: tier.requiresHighQuality,
+                messagingLimitSource: syncResult?.source || "cache",
+                messagingLimitSyncedAt: syncResult?.synced_at || stats.waba?.meta_info_synced_at || null,
+                messagingLimitIsEstimate: true,
                 rolling24hUsed:  stats.waba?.rolling24hUsed   ?? 0,
                 sevenDayUnique:  stats.waba?.sevenDayUnique   ?? 0,
                 thirtyDayUnique: stats.waba?.thirtyDayUnique  ?? 0,

@@ -83,15 +83,15 @@ export const getDeletedSpecializations = async (tenant_id, page = 1, limit = 20)
 };
 
 export const softDeleteSpecializationController = lifecycleHandler(async (req, res) => {
-  await softDeleteSpecialization(req.params.specialization_id, req.user.tenant_id);
+  await softDeleteSpecialization(req.params.id, req.user.tenant_id);
   return res.status(200).json({ message: "Specialization moved to trash" });
 });
 export const restoreSpecializationController = lifecycleHandler(async (req, res) => {
-  const data = await restoreSpecialization(req.params.specialization_id, req.user.tenant_id);
+  const data = await restoreSpecialization(req.params.id, req.user.tenant_id);
   return res.status(200).json({ message: "Specialization restored", data });
 });
 export const hardDeleteSpecializationController = lifecycleHandler(async (req, res) => {
-  await hardDeleteSpecialization(req.params.specialization_id, req.user.tenant_id);
+  await hardDeleteSpecialization(req.params.id, req.user.tenant_id);
   return res.status(200).json({ message: "Specialization permanently deleted" });
 });
 export const getDeletedSpecializationsController = lifecycleHandler(async (req, res) => {

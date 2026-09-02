@@ -1,6 +1,7 @@
 ﻿import db from "../../database/index.js";
 import { tableNames } from "../../database/tableName.js";
 import { Sequelize, Op } from "sequelize";
+import { getMetaMessagingLimitUsage } from "../../services/metaMessagingLimit.service.js";
 
 /**
  * Resolve startDateStr / endDateStr (YYYY-MM-DD) to concrete Date bounds,
@@ -83,20 +84,12 @@ export const getDashboardStatsService = async (tenantId, startDate, endDate) => 
     const realTodayAtStart = new Date(); realTodayAtStart.setHours(0, 0, 0, 0);
     const realTodayAtEnd   = new Date(); realTodayAtEnd.setHours(23, 59, 59, 999);
 
-    // Rolling-window bounds for WABA analytics (always real-time)
-    const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    const sevenDaysAgo       = new Date(Date.now() -  7 * 24 * 60 * 60 * 1000);
-    const thirtyDaysAgo      = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-
     const pISO  = periodStart.toISOString();
     const pEISO = periodEnd.toISOString();
 
     // ─── PHASE 1: Always-run queries ──────────────────────────────────────────
     const [
       wabaInfo,
-      [rolling24hRow],
-      [sevenDayRow],
-      [thirtyDayRow],
       newLeadsCount,
       totalLeadsPrevCount,
       allTimeLeadsCount,
@@ -118,28 +111,9 @@ export const getDashboardStatsService = async (tenantId, startDate, endDate) => 
       // WABA account info
       db.Whatsappaccount.findOne({
         where: { tenant_id: tenantId, is_deleted: false },
-        attributes: ["whatsapp_number","status","is_verified","provider","quality","region","tier"],
+        attributes: ["whatsapp_number","status","is_verified","provider","quality","region","tier","waba_id","meta_info_synced_at"],
         raw: true,
       }),
-
-      // Rolling 24h WABA usage
-      db.sequelize.query(
-        `SELECT COUNT(DISTINCT contact_id) as used FROM messages
-         WHERE tenant_id = :tenantId AND sender IN ('bot','admin') AND created_at >= :t`,
-        { replacements: { tenantId, t: twentyFourHoursAgo.toISOString() }, type: db.sequelize.QueryTypes.SELECT },
-      ),
-      // Rolling 7-day unique users
-      db.sequelize.query(
-        `SELECT COUNT(DISTINCT contact_id) as unique_users FROM messages
-         WHERE tenant_id = :tenantId AND sender IN ('bot','admin') AND created_at >= :t`,
-        { replacements: { tenantId, t: sevenDaysAgo.toISOString() }, type: db.sequelize.QueryTypes.SELECT },
-      ),
-      // Rolling 30-day unique users
-      db.sequelize.query(
-        `SELECT COUNT(DISTINCT contact_id) as unique_users FROM messages
-         WHERE tenant_id = :tenantId AND sender IN ('bot','admin') AND created_at >= :t`,
-        { replacements: { tenantId, t: thirtyDaysAgo.toISOString() }, type: db.sequelize.QueryTypes.SELECT },
-      ),
 
       // Leads in selected period (totalLeads KPI)
       db.Leads.count({
@@ -252,11 +226,13 @@ export const getDashboardStatsService = async (tenantId, startDate, endDate) => 
       }),
     ]);
 
-    // Attach rolling analytics to wabaInfo object
+    // Only delivery-confirmed, business-initiated recipients outside the
+    // customer-service window qualify for Meta's portfolio limit estimate.
     if (wabaInfo) {
-      wabaInfo.rolling24hUsed  = parseInt(rolling24hRow?.used        || 0, 10);
-      wabaInfo.sevenDayUnique  = parseInt(sevenDayRow?.unique_users  || 0, 10);
-      wabaInfo.thirtyDayUnique = parseInt(thirtyDayRow?.unique_users || 0, 10);
+      Object.assign(
+        wabaInfo,
+        await getMetaMessagingLimitUsage(wabaInfo.waba_id),
+      );
     }
 
     const billingKpi    = billingKpiRows[0]    || {};

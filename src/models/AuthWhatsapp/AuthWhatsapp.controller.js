@@ -74,6 +74,16 @@ import {
 } from "../../utils/billing/walletGuard.js";
 
 import { getTenantByPhoneNumberIdService } from "../WhatsappAccountModel/whatsappAccount.service.js";
+import {
+  applyMetaDeliveryToLimitEvent,
+  metaTimestampToDate,
+} from "../../services/metaMessagingLimit.service.js";
+import {
+  isPersistableMetaTier,
+  normalizeMetaTierWebhookValue,
+} from "../../utils/metaMessagingTier.js";
+import { classifyMetaError } from "../../utils/metaErrorClassifier.js";
+import { handleAsyncMetaFailure } from "../WhatsappCampaignModel/campaignPauseControl.service.js";
 import { getIO } from "../../middlewares/socket/socket.js";
 import {
   findTenantByIdService,
@@ -260,6 +270,57 @@ export const receiveMessage = async (req, res) => {
     const field = change?.field;
     const msg = value?.messages?.[0];
     const statusUpdate = value?.statuses?.[0];
+
+    // FIX 5 — both webhooks carry a messaging-capability / tier change.
+    // `phone_number_quality_update` also carries quality_rating.
+    if (
+      field === "phone_number_quality_update" ||
+      field === "business_capability_update"
+    ) {
+      const wabaId = req.body?.entry?.[0]?.id;
+      const phoneNumberId = value?.phone_number_id || value?.metadata?.phone_number_id;
+      const rawTier =
+        value?.max_daily_conversations_per_business ??
+        value?.maxDailyConversationsPerBusiness ??
+        value?.max_daily_conversation_per_phone_numbers ??
+        value?.messaging_limit ??
+        value?.current_limit ??
+        null;
+      const tier = normalizeMetaTierWebhookValue(rawTier);
+      const quality = String(value?.quality_rating || value?.quality || "").toUpperCase();
+      const update = { meta_info_synced_at: new Date() };
+
+      // Preservation rule: only overwrite the cached tier with a recognised
+      // value. A missing / null / garbage payload leaves the last-known tier.
+      if (isPersistableMetaTier(tier)) update.tier = tier;
+      if (["GREEN", "YELLOW", "RED", "UNKNOWN"].includes(quality)) {
+        update.quality = quality;
+      }
+
+      if ((wabaId || phoneNumberId) && (update.tier || update.quality)) {
+        await db.Whatsappaccount.update(update, {
+          where: {
+            ...(wabaId ? { waba_id: wabaId } : {}),
+            ...(phoneNumberId ? { phone_number_id: phoneNumberId } : {}),
+            is_deleted: false,
+          },
+        });
+      } else if (wabaId || phoneNumberId) {
+        // nothing usable in the payload — still bump the sync marker so
+        // reconciliation knows Meta pinged us.
+        await db.Whatsappaccount.update(
+          { meta_info_synced_at: new Date() },
+          {
+            where: {
+              ...(wabaId ? { waba_id: wabaId } : {}),
+              ...(phoneNumberId ? { phone_number_id: phoneNumberId } : {}),
+              is_deleted: false,
+            },
+          },
+        );
+      }
+      return res.sendStatus(200);
+    }
 
     // 0. Handle Template Status Updates (Meta approval/rejection)
     if (field === "message_template_status_update") {
@@ -478,6 +539,56 @@ export const receiveMessage = async (req, res) => {
           `[WEBHOOK] Could not identify tenant for status update: ${messageId}. Payload:`,
           JSON.stringify(value?.metadata),
         );
+      }
+
+      // FIX 9 — prefer Meta's own webhook timestamp (Unix seconds) for delivered_at.
+      // R-3 — if the ledger row isn't correlated yet, the call durably records
+      // the event for a bounded retry (pass the payload for that retry).
+      const metaEventAt = metaTimestampToDate(statusUpdate.timestamp);
+      try {
+        await applyMetaDeliveryToLimitEvent(messageId, status, metaEventAt, {
+          payload: statusUpdate,
+        });
+      } catch (limitError) {
+        console.error(
+          `[META-LIMIT] Delivery ledger update failed for ${messageId}:`,
+          limitError.message,
+        );
+      }
+
+      // FIX 8 — a `failed` status webhook can carry a Meta error that only shows
+      // up asynchronously (POST succeeded, delivery failed later). Route it
+      // through the SAME classifier + pause control the sync worker uses.
+      if (status === "failed" && Array.isArray(statusUpdate.errors) && statusUpdate.errors.length) {
+        try {
+          let asyncCampaignId = campaignUpdatePayload?.campaign_id || null;
+          if (!asyncCampaignId) {
+            const [recRow] = await db.sequelize.query(
+              `SELECT campaign_id FROM whatsapp_campaign_recipients WHERE meta_message_id = ? LIMIT 1`,
+              { replacements: [messageId] },
+            );
+            asyncCampaignId = recRow?.[0]?.campaign_id || null;
+          }
+          if (webhook_tenant_id) {
+            await handleAsyncMetaFailure({
+              tenantId: webhook_tenant_id,
+              campaignId: asyncCampaignId,
+              metaErrors: statusUpdate.errors.map((e) => ({
+                code: e?.code ?? e?.error_code,
+                title: e?.title,
+                message: e?.message,
+                details: e?.error_data?.details || e?.details,
+                error_subcode: e?.error_subcode,
+                error_data: e?.error_data,
+              })),
+            });
+          }
+        } catch (asyncErr) {
+          console.error(
+            `[META-LIMIT] Async failed-webhook handling error for ${messageId}:`,
+            asyncErr.message,
+          );
+        }
       }
 
       await db.sequelize.transaction(async (t) => {

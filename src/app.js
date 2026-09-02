@@ -71,6 +71,8 @@ import cron from "node-cron";
 import { tableNames } from "./database/tableName.js";
 import { runHardDeleteCron } from "./utils/lifecycle/hardDeleteCron.js";
 import { runMissingMessageBillingReconciliationCron } from "./cron/reconciliationCron.js";
+import { runMetaTierReconciliationCron } from "./cron/metaTierReconciliationCron.js";
+import { retryUnmatchedStatusEvents } from "./services/metaMessagingLimit.service.js";
 import { runScheduledMessageCron } from "./cron/scheduledMessageCron.js";
 import { initBillingReconciliationCron } from "./cron/billingReconciliationCron.js"; // B-2: Orphaned reservation reconciliation
 import { cleanupExpiredSessions } from "./models/AppointmentModel/appointmentConversation.service.js";
@@ -366,6 +368,20 @@ cron.schedule(
   },
   { timezone: "Asia/Kolkata" },
 ); // Every 1 min — send pending WhatsApp follow-up / no-show messages
+
+// FIX 11 — Meta tier/quality reconciliation backstop (every 6 hours)
+cron.schedule("30 */6 * * *", () => {
+  void runMetaTierReconciliationCron().catch((err) => {
+    logger.error(`[CRON] Meta tier reconciliation failed: ${err.message}`);
+  });
+});
+
+// R-3 — retry delivery/read/failed webhooks that raced ahead of ledger correlation
+cron.schedule("* * * * *", () => {
+  void retryUnmatchedStatusEvents().catch((err) => {
+    logger.error(`[CRON] Unmatched status-event retry failed: ${err.message}`);
+  });
+});
 
 // Master lifecycle hard-delete cron — runs at 04:00 UTC daily
 // Processes ALL Tier 1 tables (campaigns, templates, knowledge, contacts, doctors, etc.)

@@ -339,7 +339,7 @@ export const getDoctorListService = async (tenant_id, search) => {
         `SELECT s.specialization_id, s.name
        FROM ${tableNames.SPECIALIZATIONS} s
        JOIN ${tableNames.DOCTOR_SPECIALIZATIONS} ds ON s.specialization_id = ds.specialization_id
-       WHERE ds.doctor_id = ?`,
+       WHERE ds.doctor_id = ? AND s.is_deleted = false`,
         { replacements: [doctor.doctor_id] },
       );
 
@@ -378,7 +378,7 @@ export const getDoctorByIdService = async (doctor_id, tenant_id) => {
       `SELECT s.specialization_id, s.name
      FROM ${tableNames.SPECIALIZATIONS} s
      JOIN ${tableNames.DOCTOR_SPECIALIZATIONS} ds ON s.specialization_id = ds.specialization_id
-     WHERE ds.doctor_id = ?`,
+     WHERE ds.doctor_id = ? AND s.is_deleted = false`,
       { replacements: [doctor_id] },
     );
 
@@ -621,7 +621,7 @@ export const getDoctorsForAIService = async (tenant_id) => {
       const [specs] = await db.sequelize.query(
         `SELECT s.name FROM ${tableNames.SPECIALIZATIONS} s
          JOIN ${tableNames.DOCTOR_SPECIALIZATIONS} ds ON s.specialization_id = ds.specialization_id
-         WHERE ds.doctor_id = ?`,
+         WHERE ds.doctor_id = ? AND s.is_deleted = false`,
         { replacements: [doc.doctor_id] },
       );
 

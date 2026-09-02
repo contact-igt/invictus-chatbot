@@ -326,7 +326,7 @@ const getWhatsAppCredentials = async (tenant_id) => {
 
 export const sendAppointmentPayload = async (tenant_id, payload) => {
   const { phone_number_id, access_token } = await getWhatsAppCredentials(tenant_id);
-  const version = process.env.META_API_VERSION || "v23.0";
+  const version = process.env.META_API_VERSION || "v25.0";
   try {
     const response = await axios.post(
       `https://graph.facebook.com/${version}/${phone_number_id}/messages`,

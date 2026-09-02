@@ -21,7 +21,7 @@ const getWhatsAppCredentials = async (tenant_id) => {
 // ─── Internal: POST any payload to the Meta messages endpoint ─────────────────
 const postToMeta = async (tenant_id, payload) => {
   const { phone_number_id, access_token } = await getWhatsAppCredentials(tenant_id);
-  const META_API_VERSION = process.env.META_API_VERSION || "v23.0";
+  const META_API_VERSION = process.env.META_API_VERSION || "v25.0";
   try {
     const response = await axios.post(
       `https://graph.facebook.com/${META_API_VERSION}/${phone_number_id}/messages`,
