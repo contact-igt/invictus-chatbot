@@ -444,6 +444,17 @@ export const startCampaignDispatchWorker = () => {
     return;
   }
 
+  if (dispatchWorker) {
+    // Replace any stale worker (e.g. bound to a connection that was torn down)
+    // so we never run two dispatch workers against the same queue.
+    try {
+      void dispatchWorker.close();
+    } catch {
+      // ignore
+    }
+    dispatchWorker = null;
+  }
+
   const connection = getRedisConnection();
   const concurrency = parseInt(
     process.env.CAMPAIGN_DISPATCH_CONCURRENCY || "10",

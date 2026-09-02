@@ -51,7 +51,10 @@ import ModuleAccessManagementRouter from "./models/ModuleAccessModel/moduleAcces
 import { checkHealthAlerts } from "./utils/billing/billingHealthMonitor.js";
 import { runDailyReconciliation } from "./utils/billing/paymentReconciler.js";
 import { initBillingQueue } from "./utils/billing/billingQueue.js";
-import { initCampaignQueues } from "./queues/campaignQueue.js";
+import {
+  initCampaignQueues,
+  ensureCampaignQueues,
+} from "./queues/campaignQueue.js";
 import {
   startCampaignDispatchWorker,
   getDispatchWorkerStatus,
@@ -310,6 +313,26 @@ initCampaignQueues()
     );
     startCampaignSchedulerService();
   });
+
+// Supervisor: if Redis drops and does not self-heal (or was never reachable at
+// boot), keep trying to bring the campaign queue + dispatch worker back so
+// campaigns don't sit PENDING until a manual redeploy.
+const campaignQueueSupervisor = setInterval(() => {
+  void ensureCampaignQueues()
+    .then((available) => {
+      if (available && !getDispatchWorkerStatus().running) {
+        startCampaignDispatchWorker();
+        void startCampaignSendWorker();
+        logger.warn(
+          "[CAMPAIGN-SUPERVISOR] Queue recovered - dispatch/send workers restarted",
+        );
+      }
+    })
+    .catch(() => {});
+}, 30000);
+if (typeof campaignQueueSupervisor.unref === "function") {
+  campaignQueueSupervisor.unref();
+}
 
 // Billing system crons
 cron.schedule("5 0 * * *", () => {

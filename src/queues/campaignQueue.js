@@ -46,6 +46,52 @@ let queueDisabling = false;
 let queueDisableLogged = false;
 let BullmqQueueCtor = null;
 let intentionalClose = false;
+let connectionIssueLogged = false;
+let reinitTimer = null;
+
+const REACHABILITY_RETRY_ATTEMPTS = Number(
+  process.env.CAMPAIGN_QUEUE_REACHABILITY_ATTEMPTS || 5,
+);
+const REACHABILITY_RETRY_GAP_MS = Number(
+  process.env.CAMPAIGN_QUEUE_REACHABILITY_GAP_MS || 3000,
+);
+const REINIT_INTERVAL_MS = Number(
+  process.env.CAMPAIGN_QUEUE_REINIT_INTERVAL_MS || 15000,
+);
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const logConnectionIssueOnce = (message) => {
+  if (connectionIssueLogged) return;
+  connectionIssueLogged = true;
+  logger.warn(message);
+};
+
+// Background retry loop used only when there is NO live Redis connection object
+// (startup could not reach Redis, or the connection permanently ended). A
+// transient drop is handled by ioredis auto-reconnect + the "ready" handler and
+// never reaches here.
+const scheduleQueueReinit = () => {
+  if (reinitTimer) return;
+  reinitTimer = setInterval(() => {
+    if (queueAvailable && redisConnection && campaignDispatchQueue) {
+      clearInterval(reinitTimer);
+      reinitTimer = null;
+      return;
+    }
+    void initCampaignQueues().catch(() => {});
+  }, REINIT_INTERVAL_MS);
+  if (typeof reinitTimer.unref === "function") reinitTimer.unref();
+};
+
+// Called by the app-level supervisor to make sure the queue is alive. Safe to
+// call repeatedly: it is a no-op when the connection is healthy or mid-reconnect.
+export const ensureCampaignQueues = async () => {
+  if (queueAvailable && redisConnection && campaignDispatchQueue) return true;
+  if (queueDisabling) return false;
+  await initCampaignQueues();
+  return queueAvailable;
+};
 
 const tenantSendQueues = new Map();
 const tenantDlqQueues = new Map();
@@ -203,8 +249,16 @@ const waitForRedisReady = async (redis) => {
 // ── Queue initialisation ──────────────────────────────────────────────────────
 
 export const initCampaignQueues = async () => {
-  if (redisConnection && queueAvailable && campaignDispatchQueue) {
-    logger.info("[CAMPAIGN-QUEUE] Already initialized - skipping re-init");
+  // A live connection object already exists (healthy, or mid auto-reconnect).
+  // Never rebuild on top of it — that would leak a second connection/queue.
+  if (redisConnection && campaignDispatchQueue && !queueDisabling) {
+    if (redisConnection.status === "ready" && !queueAvailable) {
+      queueAvailable = true;
+      connectionIssueLogged = false;
+      logger.warn(
+        "[CAMPAIGN-QUEUE] Connection already healthy - queue marked available",
+      );
+    }
     return;
   }
 
@@ -220,11 +274,20 @@ export const initCampaignQueues = async () => {
 
   const redisUrl = process.env.REDIS_URL || DEFAULT_REDIS_URL;
 
-  const reachable = await checkRedisReachability(redisUrl);
+  let reachable = await checkRedisReachability(redisUrl);
+  for (
+    let attempt = 1;
+    attempt < REACHABILITY_RETRY_ATTEMPTS && !reachable.ok;
+    attempt += 1
+  ) {
+    await sleep(REACHABILITY_RETRY_GAP_MS);
+    reachable = await checkRedisReachability(redisUrl);
+  }
   if (!reachable.ok) {
     logger.warn(
-      `[CAMPAIGN-QUEUE] Redis unreachable (${reachable.reason}) - falling back to cron-based execution`,
+      `[CAMPAIGN-QUEUE] Redis unreachable after ${REACHABILITY_RETRY_ATTEMPTS} attempt(s) (${reachable.reason}) - retrying in background, cron handles execution meanwhile`,
     );
+    scheduleQueueReinit();
     return;
   }
 
@@ -295,31 +358,56 @@ export const initCampaignQueues = async () => {
       }
     };
 
+    // Transient drops (error/close) are NOT fatal: ioredis auto-reconnects
+    // (retryStrategy runs forever, maxRetriesPerRequest=null). We only pause the
+    // queue flag; BullMQ queues/workers share this connection and resume on
+    // "ready". Tearing the connection down here (the old behaviour) killed the
+    // auto-reconnect and left campaigns stuck PENDING until a process restart.
     redisConnection.on("error", (err) => {
       if (intentionalClose || queueDisabling) return;
-      logger.warn(`[CAMPAIGN-QUEUE] Redis connection error: ${err.message}`);
-      void disableCampaignQueues(
-        "[CAMPAIGN-QUEUE] Redis connection lost - queues disabled, switching to cron fallback.",
-        err,
+      logConnectionIssueOnce(
+        `[CAMPAIGN-QUEUE] Redis connection error: ${err.message} - awaiting auto-reconnect`,
       );
+      // If the socket isn't ready, mark unavailable so enqueue callers fall back
+      // to the cron path instead of blocking on a command that can't flush.
+      if (redisConnection && redisConnection.status !== "ready" && queueAvailable) {
+        queueAvailable = false;
+      }
     });
 
-    redisConnection.on("end", (err) => {
+    redisConnection.on("close", () => {
       if (intentionalClose || queueDisabling) return;
-      logger.warn("[CAMPAIGN-QUEUE] Redis connection ended");
-      void disableCampaignQueues(
-        "[CAMPAIGN-QUEUE] Redis connection ended - queues disabled, switching to cron fallback.",
-        err,
-      );
+      if (queueAvailable) {
+        queueAvailable = false;
+        logger.warn(
+          "[CAMPAIGN-QUEUE] Redis connection closed - queue paused, awaiting reconnect",
+        );
+      }
     });
 
-    redisConnection.on("close", (err) => {
+    redisConnection.on("reconnecting", () => {
       if (intentionalClose || queueDisabling) return;
-      logger.warn("[CAMPAIGN-QUEUE] Redis connection closed");
-      void disableCampaignQueues(
-        "[CAMPAIGN-QUEUE] Redis connection closed - queues disabled, switching to cron fallback.",
-        err,
+    });
+
+    redisConnection.on("ready", () => {
+      if (intentionalClose || queueDisabling) return;
+      connectionIssueLogged = false;
+      if (!queueAvailable && campaignDispatchQueue) {
+        queueAvailable = true;
+        logger.warn("[CAMPAIGN-QUEUE] Redis reconnected - queue resumed");
+      }
+    });
+
+    // "end" fires only when ioredis has permanently given up (e.g. after an
+    // explicit disconnect). Then we do a full teardown and background re-init.
+    redisConnection.on("end", () => {
+      if (intentionalClose || queueDisabling) return;
+      logger.warn(
+        "[CAMPAIGN-QUEUE] Redis connection ended - tearing down and scheduling re-init",
       );
+      void disableCampaignQueues(
+        "[CAMPAIGN-QUEUE] Redis connection ended - queues disabled pending re-init.",
+      ).finally(scheduleQueueReinit);
     });
 
     campaignDispatchQueue = new Queue(DISPATCH_QUEUE_NAME, {
