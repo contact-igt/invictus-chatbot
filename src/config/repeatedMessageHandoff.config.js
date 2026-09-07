@@ -22,7 +22,8 @@ export const REPEATED_MESSAGE_THRESHOLD = 5;
 export const REPEATED_MESSAGE_WINDOW_MINUTES = 10;
 
 // The single handoff notice sent on the 5th message. Not an AI response.
-export const REPEATED_MESSAGE_HANDOFF_TEXT = "Our team will contact you instantly.";
+export const REPEATED_MESSAGE_HANDOFF_TEXT =
+  "Thanks for your patience. I'm connecting you with our team — someone will get back to you shortly.";
 
 // ai_pause_reason values. Only `manual` and `repeated_user_message` are
 // implemented in this task. `repeated_ai_reply` is reserved for later.

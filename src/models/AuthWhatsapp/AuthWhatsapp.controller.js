@@ -1210,6 +1210,11 @@ export const receiveMessage = async (req, res) => {
           ),
         );
       }
+      // Mark the customer's message read (blue tick) so they can see it landed
+      // and a human will follow up — the AI read-receipt path is skipped below.
+      if (messageId) {
+        sendReadReceipt(tenant_id, phone_number_id, messageId).catch(() => {});
+      }
       // Durable pause — skip ALL reactive AI automation. The inbound message is
       // already persisted and displayed. Elapsed time, different messages and
       // further repeats never auto-resume AI; only an explicit staff Resume does.

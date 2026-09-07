@@ -16,7 +16,7 @@ import {
 test("constants match the product spec", () => {
   assert.equal(REPEATED_MESSAGE_THRESHOLD, 5);
   assert.equal(REPEATED_MESSAGE_WINDOW_MINUTES, 10);
-  assert.equal(REPEATED_MESSAGE_HANDOFF_TEXT, "Our team will contact you instantly.");
+  assert.match(REPEATED_MESSAGE_HANDOFF_TEXT, /connecting you with our team/i);
 });
 
 // Test 5 — case / spacing normalization
