@@ -118,9 +118,9 @@ export async function processInboundRepeatedMessage({
     }
 
     const hash = hashRepeatedMessage(normalizeRepeatedMessage(text));
-    const now = new Date();
-    // Window check is done DB-side (TIMESTAMPDIFF) to avoid any JS/MySQL
-    // timezone mismatch on the stored DATETIME.
+    // All timestamps use MySQL NOW() (never a JS Date) so the stored value and
+    // the TIMESTAMPDIFF window check share one clock — avoids the Sequelize
+    // `timezone` vs server-timezone mismatch.
     const withinWindow =
       c.gap_seconds != null &&
       Number(c.gap_seconds) <= REPEATED_MESSAGE_WINDOW_MINUTES * 60;
@@ -137,9 +137,9 @@ export async function processInboundRepeatedMessage({
     if (count < REPEATED_MESSAGE_THRESHOLD) {
       await db.sequelize.query(
         `UPDATE ${tableNames.CONTACTS}
-            SET repeat_message_hash = ?, repeat_message_count = ?, repeat_last_received_at = ?
+            SET repeat_message_hash = ?, repeat_message_count = ?, repeat_last_received_at = NOW()
           WHERE id = ?`,
-        { replacements: [hash, count, now, c.id], transaction: t },
+        { replacements: [hash, count, c.id], transaction: t },
       );
       return { enabled: true, paused: false, justPaused: false, epoch, count };
     }
@@ -150,20 +150,18 @@ export async function processInboundRepeatedMessage({
       `UPDATE ${tableNames.CONTACTS}
           SET is_ai_silenced = true,
               ai_pause_reason = ?,
-              ai_paused_at = ?,
+              ai_paused_at = NOW(),
               ai_reply_epoch = ?,
               repeat_message_hash = ?,
               repeat_message_count = ?,
-              repeat_last_received_at = ?
+              repeat_last_received_at = NOW()
         WHERE id = ?`,
       {
         replacements: [
           AI_PAUSE_REASONS.REPEATED_USER_MESSAGE,
-          now,
           newEpoch,
           hash,
           count,
-          now,
           c.id,
         ],
         transaction: t,
