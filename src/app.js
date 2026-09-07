@@ -77,6 +77,7 @@ import { runMissingMessageBillingReconciliationCron } from "./cron/reconciliatio
 import { runMetaTierReconciliationCron } from "./cron/metaTierReconciliationCron.js";
 import { retryUnmatchedStatusEvents } from "./services/metaMessagingLimit.service.js";
 import { runScheduledMessageCron } from "./cron/scheduledMessageCron.js";
+import { recoverPendingHandoffEvents } from "./services/aiHandoffOutbox.service.js";
 import { initBillingReconciliationCron } from "./cron/billingReconciliationCron.js"; // B-2: Orphaned reservation reconciliation
 import { cleanupExpiredSessions } from "./models/AppointmentModel/appointmentConversation.service.js";
 import { expireAdvancedAppointmentSessions } from "./models/AppointmentModel/Advanced_Appointment_Booking.service.js";
@@ -391,6 +392,17 @@ cron.schedule(
   },
   { timezone: "Asia/Kolkata" },
 ); // Every 1 min — send pending WhatsApp follow-up / no-show messages
+
+// Repeated-message AI handoff: durable notice recovery (every 1 min + at boot).
+// No-op unless there are pending/failed handoff events.
+cron.schedule("* * * * *", () => {
+  void recoverPendingHandoffEvents().catch((err) => {
+    logger.error(`[CRON] Handoff notice recovery failed: ${err.message}`);
+  });
+});
+setTimeout(() => {
+  void recoverPendingHandoffEvents().catch(() => {});
+}, 15000);
 
 // FIX 11 — Meta tier/quality reconciliation backstop (every 6 hours)
 cron.schedule("30 */6 * * *", () => {

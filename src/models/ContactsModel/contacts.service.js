@@ -607,9 +607,45 @@ export const toggleSilenceAiService = async (
   tenant_id,
   is_ai_silenced,
 ) => {
-  const Query = `UPDATE ${tableNames.CONTACTS} SET is_ai_silenced = ? WHERE contact_id = ? AND tenant_id = ?`;
-  const [result] = await db.sequelize.query(Query, {
-    replacements: [is_ai_silenced, contact_id, tenant_id],
-  });
-  return result;
+  const wantSilenced =
+    is_ai_silenced === true || is_ai_silenced === "true" || is_ai_silenced === 1;
+
+  // Resume path: clear silence + pause metadata, reset the repetition streak,
+  // bump the AI epoch, and cancel stale unsent handoff notices — all atomic.
+  if (!wantSilenced) {
+    try {
+      const { resumeAiForContact } = await import(
+        "../../services/repeatedMessageGuard.service.js"
+      );
+      const { epoch } = await resumeAiForContact(tenant_id, contact_id);
+      return { epoch, is_ai_silenced: false };
+    } catch (err) {
+      // Pre-migration / feature-flag-off fallback — behave exactly as before.
+      console.error(
+        "[REPEAT-GUARD] resumeAiForContact failed, falling back:",
+        err.message,
+      );
+      const [result] = await db.sequelize.query(
+        `UPDATE ${tableNames.CONTACTS} SET is_ai_silenced = false WHERE contact_id = ? AND tenant_id = ?`,
+        { replacements: [contact_id, tenant_id] },
+      );
+      return result;
+    }
+  }
+
+  // Manual pause path.
+  const [result] = await db.sequelize.query(
+    `UPDATE ${tableNames.CONTACTS} SET is_ai_silenced = true WHERE contact_id = ? AND tenant_id = ?`,
+    { replacements: [contact_id, tenant_id] },
+  );
+  let epoch = null;
+  try {
+    const { markManualPause } = await import(
+      "../../services/repeatedMessageGuard.service.js"
+    );
+    ({ epoch } = await markManualPause(tenant_id, contact_id));
+  } catch (err) {
+    console.error("[REPEAT-GUARD] markManualPause failed:", err.message);
+  }
+  return { ...(result || {}), epoch, is_ai_silenced: true };
 };

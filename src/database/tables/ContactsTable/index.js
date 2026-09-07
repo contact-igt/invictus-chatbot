@@ -72,6 +72,35 @@ export const ContactsTable = (sequelize, Sequelize) => {
         defaultValue: false,
       },
 
+      // ── Repeated User Message → AI Handoff (additive; feature-flag gated) ──
+      repeat_message_hash: {
+        type: Sequelize.STRING(64),
+        allowNull: true,
+      },
+      repeat_message_count: {
+        type: Sequelize.INTEGER,
+        allowNull: false,
+        defaultValue: 0,
+      },
+      repeat_last_received_at: {
+        type: Sequelize.DATE,
+        allowNull: true,
+      },
+      ai_pause_reason: {
+        type: Sequelize.STRING(48),
+        allowNull: true,
+        comment: "manual | repeated_user_message | repeated_ai_reply (NULL = legacy manual silence)",
+      },
+      ai_paused_at: {
+        type: Sequelize.DATE,
+        allowNull: true,
+      },
+      ai_reply_epoch: {
+        type: Sequelize.INTEGER,
+        allowNull: false,
+        defaultValue: 0,
+      },
+
       last_message_at: {
         type: Sequelize.DATE,
         allowNull: true,

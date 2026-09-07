@@ -81,4 +81,5 @@ export const tableNames = {
   SIDEBAR_SECTION_TENANTS: "sidebar_section_tenants",
   API_REQUEST_LOGS: "api_request_logs",
   META_MESSAGING_LIMIT_EVENTS: "meta_messaging_limit_events",
+  AI_HANDOFF_EVENTS: "ai_handoff_events",
 };

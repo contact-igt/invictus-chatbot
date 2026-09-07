@@ -84,6 +84,7 @@ import { SidebarSectionPlansTable } from "./tables/SidebarSectionPlansTable/inde
 import { SidebarSectionTenantsTable } from "./tables/SidebarSectionTenantsTable/index.js";
 import { ApiRequestLogsTable } from "./tables/ApiRequestLogsTable/index.js";
 import { MetaMessagingLimitEventTable } from "./tables/MetaMessagingLimitEventTable/index.js";
+import { AiHandoffEventsTable } from "./tables/AiHandoffEventsTable/index.js";
 
 const dbconfig =
   ServerEnvironmentConfig?.server?.line === "production"
@@ -238,6 +239,7 @@ db.SidebarSectionPlans = SidebarSectionPlansTable(sequelize, Sequelize);
 db.SidebarSectionTenants = SidebarSectionTenantsTable(sequelize, Sequelize);
 db.ApiRequestLogs = ApiRequestLogsTable(sequelize, Sequelize);
 db.MetaMessagingLimitEvents = MetaMessagingLimitEventTable(sequelize, Sequelize);
+db.AiHandoffEvents = AiHandoffEventsTable(sequelize, Sequelize);
 
 defineAssociations(db);
 

@@ -357,10 +357,30 @@ export const toggleSilenceAiController = async (req, res) => {
   const { is_ai_silenced } = req.body;
 
   try {
-    await toggleSilenceAiService(contact_id, tenant_id, is_ai_silenced);
+    const outcome = await toggleSilenceAiService(
+      contact_id,
+      tenant_id,
+      is_ai_silenced,
+    );
 
-    // Attempting to emit socket event if possible here, but usually socket is handled in messages/webhook
-    // We will just do a fast update. Frontend handles it optimism.
+    // Broadcast durable AI pause state so every connected dashboard updates.
+    try {
+      const { getIO } = await import("../../middlewares/socket/socket.js");
+      getIO()
+        ?.to(`tenant-${tenant_id}`)
+        .emit("contact-ai-state-updated", {
+          contactId: contact_id,
+          isAiSilenced: outcome?.is_ai_silenced ?? Boolean(is_ai_silenced),
+          pauseReason: outcome?.is_ai_silenced ? "manual" : null,
+          pausedAt: outcome?.is_ai_silenced ? new Date() : null,
+          aiReplyEpoch: outcome?.epoch ?? null,
+        });
+    } catch (emitErr) {
+      console.error(
+        "[CONTACT-AI-STATE] socket emit failed:",
+        emitErr.message,
+      );
+    }
 
     return res
       .status(200)

@@ -113,6 +113,11 @@ import {
   updateLiveChatTimestampService,
 } from "../LiveChatModel/livechat.service.js";
 import { markMediaAsApprovedService } from "../GalleryModel/gallery.service.js";
+import {
+  processInboundRepeatedMessage,
+  shouldDiscardAutomatedReply,
+} from "../../services/repeatedMessageGuard.service.js";
+import { dispatchHandoffForPause } from "../../services/aiHandoffOutbox.service.js";
 
 const FIXED_MISSING_INFO_FALLBACK = MISSING_INFO_FALLBACK_REPLY;
 
@@ -1153,6 +1158,64 @@ export const receiveMessage = async (req, res) => {
       contact_id: contactsaved?.contact_id,
     });
 
+    // 9.5 Repeated User Message → AI Handoff guard (feature-flag gated; no-op
+    // when disabled). Runs on the accepted, de-duplicated inbound message
+    // AFTER persistence and BEFORE the long AI lock / pending queue.
+    let repeatGuard = {
+      enabled: false,
+      paused: false,
+      justPaused: false,
+      epoch: 0,
+    };
+    try {
+      repeatGuard = await processInboundRepeatedMessage({
+        tenant_id,
+        contact_id: contactsaved?.contact_id,
+        messageType: type,
+        text,
+        triggerMessageId: messageId || null,
+      });
+    } catch (guardErr) {
+      console.error(
+        "[REPEAT-GUARD] processInboundRepeatedMessage failed:",
+        guardErr.message,
+      );
+    }
+    console.log(
+      `[REPEAT-GUARD] result for ${phone} type=${type}:`,
+      JSON.stringify(repeatGuard),
+    );
+    const aiReplyStartEpoch = repeatGuard.epoch;
+
+    if (repeatGuard.enabled && repeatGuard.paused) {
+      if (repeatGuard.justPaused) {
+        try {
+          io.to(`tenant-${tenant_id}`).emit("contact-ai-state-updated", {
+            contactId: contactsaved?.contact_id,
+            isAiSilenced: true,
+            pauseReason: "repeated_user_message",
+            pausedAt: new Date(),
+            aiReplyEpoch: repeatGuard.epoch,
+          });
+        } catch (emitErr) {
+          console.error("[REPEAT-GUARD] state emit failed:", emitErr.message);
+        }
+        setImmediate(() =>
+          dispatchHandoffForPause(
+            tenant_id,
+            contactsaved?.contact_id,
+            repeatGuard.epoch,
+          ).catch((e) =>
+            console.error("[HANDOFF-OUTBOX] dispatch failed:", e.message),
+          ),
+        );
+      }
+      // Durable pause — skip ALL reactive AI automation. The inbound message is
+      // already persisted and displayed. Elapsed time, different messages and
+      // further repeats never auto-resume AI; only an explicit staff Resume does.
+      return res.sendStatus(200);
+    }
+
     // 10. AI Processing (Background) — Atomic lock + message queue
     const lockAcquired = await tryAcquireLock(
       tenant_id,
@@ -1193,6 +1256,21 @@ export const receiveMessage = async (req, res) => {
         if (contactsaved?.is_ai_silenced) {
           console.log(
             `[WEBHOOK] AI is silenced for specific contact: ${phone}`,
+          );
+          return;
+        }
+
+        // Fresh durable eligibility re-check (repeated-message handoff / epoch
+        // fence). No-op when the feature flag is disabled.
+        if (
+          await shouldDiscardAutomatedReply(
+            tenant_id,
+            contactsaved?.contact_id,
+            aiReplyStartEpoch,
+          )
+        ) {
+          console.log(
+            `[REPEAT-GUARD] Reactive AI skipped for ${phone} (paused or epoch changed)`,
           );
           return;
         }
@@ -1289,6 +1367,22 @@ export const receiveMessage = async (req, res) => {
 
           const visionReply = visionResult?.message;
           if (!visionReply) return;
+
+          if (
+            await shouldDiscardAutomatedReply(
+              tenant_id,
+              contactsaved?.contact_id,
+              aiReplyStartEpoch,
+            )
+          ) {
+            console.log(
+              `[REPEAT-GUARD] Discarding stale vision reply before send for ${phone}`,
+            );
+            getIO()
+              .to(`tenant-${tenant_id}`)
+              .emit("ai-typing", { tenant_id, phone, status: false });
+            return;
+          }
 
           let visionWamid = null;
           try {
@@ -1528,6 +1622,21 @@ export const receiveMessage = async (req, res) => {
         // Send to WhatsApp FIRST — before saving the bot message.
         // This ensures that if the access token is invalid we do NOT create a
         // ghost message in the live-chat or trigger any downstream billing.
+        if (
+          await shouldDiscardAutomatedReply(
+            tenant_id,
+            contactsaved?.contact_id,
+            aiReplyStartEpoch,
+          )
+        ) {
+          console.log(
+            `[REPEAT-GUARD] Discarding stale AI reply before send for ${phone}`,
+          );
+          getIO()
+            .to(`tenant-${tenant_id}`)
+            .emit("ai-typing", { tenant_id, phone, status: false });
+          return;
+        }
         let botMsgResponse = null;
         try {
           botMsgResponse = await sendWhatsAppMessage(
@@ -1675,7 +1784,17 @@ export const receiveMessage = async (req, res) => {
 
         // Process queued message if any (user sent more messages while AI was processing)
         const pending = consumePendingMessage(tenant_id, phone);
-        if (pending) {
+        if (
+          pending &&
+          (await shouldDiscardAutomatedReply(
+            tenant_id,
+            pending.contact_id || contactsaved?.contact_id,
+          ))
+        ) {
+          console.log(
+            `[REPEAT-GUARD] Dropping queued reactive AI for ${phone} (paused) — not replayed`,
+          );
+        } else if (pending) {
           console.log(`[WEBHOOK] Processing queued message for ${phone}`);
           const reLock = await tryAcquireLock(
             tenant_id,
@@ -1862,7 +1981,17 @@ export const receiveMessage = async (req, res) => {
                   tagPayloadToExecute: queuedTagPayloadToExecute,
                 } = resolveAiReplyEnvelope(aiResult, pending.text);
 
-                if (messageToSend) {
+                if (
+                  messageToSend &&
+                  (await shouldDiscardAutomatedReply(
+                    tenant_id,
+                    pending.contact_id || contactsaved?.contact_id,
+                  ))
+                ) {
+                  console.log(
+                    `[REPEAT-GUARD] Discarding stale queued AI reply before send for ${phone}`,
+                  );
+                } else if (messageToSend) {
                   // Send to WhatsApp FIRST — abort if token error
                   let botMsgResponse = null;
                   try {
@@ -2632,6 +2761,17 @@ async function handleAdvancedAppointmentResponse(
   name = null,
 ) {
   if (!result) return;
+  if (await shouldDiscardAutomatedReply(tenant_id, contactsaved?.contact_id)) {
+    try {
+      getIO()
+        .to(`tenant-${tenant_id}`)
+        .emit("ai-typing", { tenant_id, phone, status: false });
+    } catch {}
+    console.log(
+      `[REPEAT-GUARD] Discarding stale advanced appointment response for ${phone}`,
+    );
+    return;
+  }
   if (result.suppressResponse || result.duplicate || result.alreadyProcessed) {
     try {
       const io = getIO();
@@ -2776,6 +2916,18 @@ async function handleAppointmentResponse( // NEW
 ) {
   // NEW
   if (!result) return; // NEW
+
+  if (await shouldDiscardAutomatedReply(tenant_id, contactsaved?.contact_id)) {
+    try {
+      getIO()
+        .to(`tenant-${tenant_id}`)
+        .emit("ai-typing", { tenant_id, phone, status: false });
+    } catch {}
+    console.log(
+      `[REPEAT-GUARD] Discarding stale appointment response for ${phone}`,
+    );
+    return;
+  }
 
   // Determine the plain-text version to save to the messages DB
   const textToSave = result.message || "Appointment action processed."; // NEW
