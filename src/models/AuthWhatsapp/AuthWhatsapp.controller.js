@@ -1210,9 +1210,10 @@ export const receiveMessage = async (req, res) => {
           ),
         );
       }
-      // Mark the customer's message read (blue tick) so they can see it landed
-      // and a human will follow up — the AI read-receipt path is skipped below.
-      if (messageId) {
+      // Mark ONLY the message that triggered the handoff as read (blue tick) so
+      // the customer sees it registered. Later messages while paused stay
+      // "delivered" for a human agent to actually read.
+      if (repeatGuard.justPaused && messageId) {
         sendReadReceipt(tenant_id, phone_number_id, messageId).catch(() => {});
       }
       // Durable pause — skip ALL reactive AI automation. The inbound message is
