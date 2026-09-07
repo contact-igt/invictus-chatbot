@@ -78,6 +78,17 @@ const run = async () => {
         webhook_path: `/api/whatsapp/webhook/${t.tenant_id}`,
       });
     }
+  } else if (cmd === "msgs") {
+    const [dbn] = await db.sequelize.query("SELECT DATABASE() AS db, NOW() AS db_now");
+    console.log("DB:", dbn[0].db, "| DB now:", dbn[0].db_now);
+    const [rows] = await db.sequelize.query(
+      `SELECT id, sender, message_type, LEFT(message,40) AS message, wamid, created_at
+         FROM messages
+        WHERE contact_id IN (SELECT contact_id FROM contacts WHERE phone LIKE ?)
+        ORDER BY id DESC LIMIT 15`,
+      { replacements: [like] },
+    );
+    console.log(rows);
   } else if (cmd === "recent") {
     const [dbn] = await db.sequelize.query("SELECT DATABASE() AS db");
     console.log("connected DB:", dbn[0].db);
