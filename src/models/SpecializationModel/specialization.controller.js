@@ -1,6 +1,7 @@
 import { missingFieldsChecker } from "../../utils/helpers/missingFields.js";
 import {
     createSpecializationService,
+    findSpecializationByNameAnyStateService,
     getAllSpecializationsService,
     getSpecializationByIdService,
     updateSpecializationService,
@@ -23,6 +24,29 @@ export const createSpecializationController = async (req, res) => {
     }
 
     try {
+        // Check any state (active or soft-deleted) so a trashed specialization
+        // gives a "restore from trash" message instead of a generic conflict.
+        const existingRow = await findSpecializationByNameAnyStateService(
+            tenant_id,
+            name,
+        );
+
+        if (existingRow) {
+            if (existingRow.is_deleted) {
+                return res.status(409).send({
+                    message:
+                        "A specialization with this name is in Trash. Restore it from Trash instead of adding it again.",
+                    code: "SPECIALIZATION_IN_TRASH",
+                    specialization_id: existingRow.specialization_id,
+                });
+            }
+            return res.status(409).send({
+                message: "This specialization already exists",
+                code: "SPECIALIZATION_EXISTS",
+                specialization_id: existingRow.specialization_id,
+            });
+        }
+
         const result = await createSpecializationService(tenant_id, name, description);
         return res.status(201).send({
             message: "success",

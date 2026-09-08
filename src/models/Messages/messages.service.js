@@ -170,17 +170,21 @@ export const getChatByPhoneService = async (phone, tenant_id) => {
       replacements = [suffix, tenant_id];
     }
 
+    // Fetch the most recent 500 messages (newest first), then return them in
+    // ascending order. Ordering ASC + LIMIT would silently drop the newest
+    // messages (e.g. a just-sent campaign/template message) once a conversation
+    // exceeds 500 rows.
     const Query = `
     SELECT id, contact_id, sender, sender_id, message, message_type, interactive_payload, media_url, media_mime_type, media_filename, seen, status, wamid, created_at
     FROM ${tableNames?.MESSAGES}
     WHERE ${whereClause} AND is_deleted = false
-    ORDER BY created_at ASC
+    ORDER BY created_at DESC
     LIMIT 500
   `;
     const [result] = await db.sequelize.query(Query, {
       replacements: replacements,
     });
-    return result;
+    return Array.isArray(result) ? result.reverse() : result;
   } catch (err) {
     throw err;
   }

@@ -179,6 +179,32 @@ export const getOrCreateContactService = async (
   }
 };
 
+/**
+ * Look up a contact by phone in ANY state (active or soft-deleted) WITHOUT the
+ * auto-restore side effect that getContactByPhoneAndTenantIdService has.
+ * Prefers an active row when both exist.
+ * @returns {Promise<{ contact_id: string, is_deleted: 0|1 } | null>}
+ */
+export const findContactByPhoneAnyStateService = async (
+  tenant_id,
+  phoneInput,
+  countryCodeInput = null,
+) => {
+  let phone = phoneInput ? phoneInput.toString().replace(/\D/g, "") : "";
+  if (phone.length > 10) phone = phone.slice(-10);
+  if (!phone) return null;
+
+  const [rows] = await db.sequelize.query(
+    `SELECT contact_id, is_deleted
+       FROM ${tableNames.CONTACTS}
+      WHERE tenant_id = ? AND phone LIKE ?
+      ORDER BY is_deleted ASC
+      LIMIT 1`,
+    { replacements: [tenant_id, `%${phone}`] },
+  );
+  return rows[0] || null;
+};
+
 export const getContactByPhoneAndTenantIdService = async (
   tenant_id,
   phoneInput,

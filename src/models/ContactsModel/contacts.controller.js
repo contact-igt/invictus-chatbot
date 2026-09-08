@@ -7,6 +7,7 @@ import {
   getAllContactsService,
   getContactByIdAndTenantIdService,
   getContactByPhoneAndTenantIdService,
+  findContactByPhoneAnyStateService,
   updateContactService,
   getDeletedContactListService,
   restoreContactService,
@@ -51,6 +52,18 @@ export const createContactController = async (req, res) => {
     });
   }
 
+  if (!name || !name.toString().trim()) {
+    return res.status(400).json({ message: "Name is required" });
+  }
+
+  if (!email || !email.toString().trim()) {
+    return res.status(400).json({ message: "Email is required" });
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.toString().trim())) {
+    return res.status(400).json({ message: "Invalid email format" });
+  }
+  email = email.toString().trim();
+
   // Clean phone
   phone = phone.toString().replace(/\D/g, "");
 
@@ -75,15 +88,28 @@ export const createContactController = async (req, res) => {
     : `+${country_code.toString().replace(/\D/g, "")}`;
 
   try {
-    const existingContact = await getContactByPhoneAndTenantIdService(
+    // Check for an existing contact in ANY state — do NOT use
+    // getContactByPhoneAndTenantIdService here: it silently auto-restores a
+    // trashed contact as a side effect.
+    const existingContact = await findContactByPhoneAnyStateService(
       tenant_id,
       phone,
       country_code,
     );
 
     if (existingContact) {
+      if (existingContact.is_deleted) {
+        return res.status(409).send({
+          message:
+            "This number already exists as a deleted contact. Open Trash and restore it to keep its chat history.",
+          code: "CONTACT_IN_TRASH",
+          contact_id: existingContact.contact_id,
+        });
+      }
       return res.status(409).send({
-        message: "This contact already exists",
+        message: "A contact with this phone number already exists.",
+        code: "CONTACT_EXISTS",
+        contact_id: existingContact.contact_id,
       });
     }
 

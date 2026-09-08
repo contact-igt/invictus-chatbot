@@ -1108,7 +1108,9 @@ export const receiveMessage = async (req, res) => {
     }
 
     // 9. Lead Source Attribution
-    let lead_source = "none";
+    // A lead created from an inbound WhatsApp message is WhatsApp-sourced unless
+    // an ad/post referral says otherwise.
+    let lead_source = "whatsapp";
     if (msg.referral) {
       const referral = msg.referral;
       if (referral.source_type === "ad") {

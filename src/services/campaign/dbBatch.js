@@ -3,6 +3,7 @@
 import db from "../../database/index.js";
 import { tableNames } from "../../database/tableName.js";
 import { logger } from "../../utils/logger.js";
+import { getIO } from "../../middlewares/socket/socket.js";
 
 export const batchInsertMessages = async (messages) => {
   if (!messages || messages.length === 0) return 0;
@@ -75,6 +76,39 @@ export const batchInsertMessages = async (messages) => {
         `[DB-BATCH] INSERT IGNORE skipped ${droppedRows}/${messages.length} message row(s). sample_keys=${JSON.stringify(skippedKeys)}`,
       );
     }
+
+    // Best-effort live update so an already-open conversation shows the
+    // campaign/template message without a manual refresh. The campaign send
+    // worker persists these rows but never emitted `new-message`.
+    try {
+      const io = getIO();
+      if (io) {
+        for (const m of messages) {
+          if (!m.tenant_id || !m.phone) continue;
+          io.to(`tenant-${m.tenant_id}`).emit("new-message", {
+            tenant_id: m.tenant_id,
+            phone: m.phone,
+            contact_id: m.contact_id || null,
+            phone_number_id: m.phone_number_id || null,
+            wamid: m.wamid || null,
+            name: m.name || "System",
+            message: m.message || "",
+            sender: m.sender || "admin",
+            message_type: m.message_type || "text",
+            media_url: m.media_url || null,
+            media_mime_type: m.media_mime_type || null,
+            media_filename: m.media_filename || null,
+            template_name: m.template_name || null,
+            interactive_payload: m.interactive_payload || null,
+            status: m.status || "sent",
+            created_at: new Date(),
+          });
+        }
+      }
+    } catch (emitErr) {
+      logger.warn(`[DB-BATCH] new-message emit failed: ${emitErr.message}`);
+    }
+
     return affectedRows;
   } catch (err) {
     logger.error(`[DB-BATCH] batchInsertMessages failed: ${err.message}`);

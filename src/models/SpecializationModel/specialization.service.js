@@ -37,6 +37,29 @@ export const createSpecializationService = async (
   }
 };
 
+/**
+ * Find a specialization by name (case-insensitive) in ANY state — active or
+ * soft-deleted — scoped to the tenant. Used by the create controller to give a
+ * distinct "in trash" message.
+ */
+export const findSpecializationByNameAnyStateService = async (tenant_id, name) => {
+  const trimmed = String(name || "").trim();
+  if (!trimmed) return null;
+  const rows = await db.Specializations.findAll({
+    where: db.sequelize.and(
+      { tenant_id },
+      db.sequelize.where(
+        db.sequelize.fn("LOWER", db.sequelize.col("name")),
+        trimmed.toLowerCase(),
+      ),
+    ),
+    paranoid: false,
+    order: [["is_deleted", "ASC"]], // prefer an active row
+    limit: 1,
+  });
+  return rows[0] || null;
+};
+
 // ─── Find or Create (Auto-create on the fly) ───
 export const findOrCreateSpecializationService = async (tenant_id, name) => {
   try {
